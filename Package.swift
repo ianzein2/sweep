@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "anti-spy",
+    name: "sweep",
     platforms: [.macOS(.v13)],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     ],
     targets: [
         .executableTarget(
-            name: "anti-spy",
+            name: "sweep",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],

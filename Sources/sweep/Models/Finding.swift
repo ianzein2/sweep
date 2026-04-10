@@ -22,6 +22,7 @@ enum FindingCategory: String, Codable {
     case networkActivity = "Network Activity"
     case kernelExtension = "Kernel Extension"
     case systemIntegrity = "System Integrity"
+    case hardening = "Hardening"
 }
 
 struct Finding: Codable {

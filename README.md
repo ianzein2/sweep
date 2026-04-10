@@ -1,6 +1,6 @@
 # sweep
 
-A macOS command-line tool that detects spyware, keyloggers, and surveillance software. Runs 12 security scans and cross-correlates findings to surface threats that individual checks would miss.
+A macOS command-line tool that detects spyware, keyloggers, and surveillance software. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## What it checks
 
@@ -18,6 +18,7 @@ A macOS command-line tool that detects spyware, keyloggers, and surveillance sof
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — dylib injection, root CA certificates, DNS hijacking, hidden files, DYLD environment abuse |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
@@ -40,18 +41,41 @@ The binary will be at `.build/release/sweep`.
 sudo .build/release/sweep
 
 # Run a specific scanner
-sudo .build/release/sweep --only deep
+sudo .build/release/sweep --only hardening
+
+# Auto-fix safe issues (enable firewall, remove orphaned plists, etc.)
+sudo .build/release/sweep --fix
+
+# Preview what --fix would do without changing anything
+sudo .build/release/sweep --dry-run
+
+# Save a baseline for future comparison
+sudo .build/release/sweep --save-baseline
+
+# Compare current scan against saved baseline
+sudo .build/release/sweep --diff
 
 # JSON output (for piping to other tools)
 sudo .build/release/sweep --json
-
-# Verbose mode
-sudo .build/release/sweep --verbose
 ```
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+
+## Security score
+
+Every scan produces a score from 0-100 (grade A-F). HIGH findings deduct 15 points, MEDIUM deducts 5, LOW deducts 1. The score gives you a quick read on your Mac's overall security posture.
+
+## Baseline & diff
+
+Save a scan as a baseline, then compare future scans against it to see what changed:
+
+```bash
+sudo sweep --save-baseline    # saves to ~/.sweep/baseline.json
+# ... time passes ...
+sudo sweep --diff              # shows new, resolved, and unchanged findings
+```
 
 ## Understanding results
 

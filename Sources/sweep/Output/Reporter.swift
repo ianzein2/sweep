@@ -95,7 +95,7 @@ final class Reporter {
         guard !jsonMode else { return }
         let line = String(repeating: "=", count: 60)
         print(color(line, .bold))
-        print(color("  ANTI-SPY SCAN REPORT", .bold))
+        print(color("  SWEEP SCAN REPORT", .bold))
         print(color("  \(formattedDate())", .dim))
         print(color("  macOS \(ProcessInfo.processInfo.operatingSystemVersionString)", .dim))
         printPrivilegeLevel()
@@ -154,9 +154,53 @@ final class Reporter {
         }
     }
 
-    func printSummary(_ results: [ScanResult]) {
+    func printScore(_ score: SecurityScore) {
+        guard !jsonMode else { return }
+
+        let line = String(repeating: "=", count: 60)
+        print(color(line, .bold))
+        print(color("  SECURITY SCORE", .bold))
+        print(color(line, .bold))
+
+        // Visual bar (25 chars wide)
+        let barWidth = 25
+        let filled = Int(Double(score.total) / 100.0 * Double(barWidth))
+        let empty = barWidth - filled
+        let barColor: ANSIColor = score.total >= 80 ? .green : score.total >= 60 ? .yellow : .red
+        let bar = color(String(repeating: "█", count: filled), barColor) +
+                  color(String(repeating: "░", count: empty), .dim)
+        print()
+        print("       \(bar)  \(score.total)/100  [\(score.grade)]")
+        print()
+
+        // Top deductions (up to 5)
+        if !score.deductions.isEmpty {
+            print(color("  Deductions:", .dim))
+            // Deduplicate by title, summing points
+            var seen: [String: (points: Int, severity: Severity)] = [:]
+            for d in score.deductions {
+                if let existing = seen[d.title] {
+                    seen[d.title] = (existing.points + d.points, d.severity)
+                } else {
+                    seen[d.title] = (d.points, d.severity)
+                }
+            }
+            let sorted = seen.sorted { $0.value.points > $1.value.points }
+            for entry in sorted.prefix(5) {
+                let tag = color("-\(entry.value.points)", severityColor(entry.value.severity))
+                print("    \(tag)  \(entry.key)")
+            }
+            if sorted.count > 5 {
+                let remaining = sorted.dropFirst(5).reduce(0) { $0 + $1.value.points }
+                print(color("    -\(remaining)  ... and \(sorted.count - 5) more", .dim))
+            }
+            print()
+        }
+    }
+
+    func printSummary(_ results: [ScanResult], score: SecurityScore? = nil) {
         if jsonMode {
-            printJSON(results)
+            printJSON(results, score: score)
             return
         }
 
@@ -203,8 +247,89 @@ final class Reporter {
         print(color(line, .bold))
     }
 
-    private func printJSON(_ results: [ScanResult]) {
-        let output: [String: Any] = [
+    func printDiff(_ diff: BaselineDiff, baselineDate: Date) {
+        guard !jsonMode else { return }
+
+        let line = String(repeating: "=", count: 60)
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        print(color(line, .bold))
+        print(color("  CHANGES SINCE BASELINE", .bold))
+        print(color("  Baseline from: \(fmt.string(from: baselineDate))", .dim))
+        print(color(line, .bold))
+
+        if diff.newFindings.isEmpty && diff.resolvedFindings.isEmpty {
+            print(color("  No changes detected.", .green))
+        } else {
+            if !diff.newFindings.isEmpty {
+                print(color("  [+] \(diff.newFindings.count) NEW finding(s):", .red))
+                for f in diff.newFindings.sorted(by: { $0.severity > $1.severity }) {
+                    print(color("      [\(f.severity.rawValue)] \(f.title)", severityColor(f.severity)))
+                }
+                print()
+            }
+            if !diff.resolvedFindings.isEmpty {
+                print(color("  [-] \(diff.resolvedFindings.count) RESOLVED finding(s):", .green))
+                for f in diff.resolvedFindings {
+                    print(color("      \(f.title)", .dim))
+                }
+                print()
+            }
+        }
+        print(color("  [=] \(diff.unchangedCount) unchanged", .dim))
+        print(color(line, .bold))
+        print()
+    }
+
+    func printBaselineSaved(_ path: String) {
+        guard !jsonMode else { return }
+        print(color("  Baseline saved to \(path)", .green))
+        print()
+    }
+
+    func printRemediation(_ results: [RemediationResult]) {
+        guard !jsonMode else { return }
+        guard !results.isEmpty else { return }
+
+        let line = String(repeating: "=", count: 60)
+        print(color(line, .bold))
+        print(color("  REMEDIATION", .bold))
+        print(color(line, .bold))
+
+        var fixedCount = 0, skippedCount = 0, dryCount = 0, failedCount = 0
+
+        for result in results {
+            switch result {
+            case .fixed(let title, _):
+                print(color("  [FIXED]", .green), " \(title)")
+                fixedCount += 1
+            case .skipped(let title, let reason):
+                print(color("  [SKIP]", .dim), "  \(title) — \(reason)")
+                skippedCount += 1
+            case .dryRun(let title, let detail):
+                print(color("  [DRY]", .cyan), "   \(title)")
+                print(color("          \(detail)", .dim))
+                dryCount += 1
+            case .failed(let title, let error):
+                print(color("  [FAIL]", .red), "  \(title) — \(error)")
+                failedCount += 1
+            }
+        }
+
+        print()
+        var summary: [String] = []
+        if fixedCount > 0 { summary.append("\(fixedCount) fixed") }
+        if skippedCount > 0 { summary.append("\(skippedCount) skipped") }
+        if dryCount > 0 { summary.append("\(dryCount) dry-run") }
+        if failedCount > 0 { summary.append("\(failedCount) failed") }
+        print("  \(summary.joined(separator: ", "))")
+        print(color(line, .bold))
+        print()
+    }
+
+    private func printJSON(_ results: [ScanResult], score: SecurityScore? = nil) {
+        var output: [String: Any] = [
             "date": formattedDate(),
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "isRoot": getuid() == 0,
@@ -227,6 +352,14 @@ final class Reporter {
                 ] as [String: Any]
             }
         ]
+
+        if let score = score {
+            output["score"] = [
+                "total": score.total,
+                "grade": score.grade,
+                "deductions": score.deductions.map { ["points": $0.points, "title": $0.title] as [String: Any] }
+            ] as [String: Any]
+        }
 
         if let data = try? JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys]),
            let json = String(data: data, encoding: .utf8) {
