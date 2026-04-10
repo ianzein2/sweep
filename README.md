@@ -85,16 +85,13 @@ Findings are rated by severity:
 - **MEDIUM** — suspicious but could be legitimate. Verify the software is expected.
 - **LOW** — informational. Orphaned files, known security tools, minor anomalies.
 
-## What it does NOT do
+## Scope
 
-This is a health check, not an antivirus. Be aware of its limits:
+sweep is a point-in-time security audit — it tells you what's wrong *right now*, not a resident antivirus.
 
-- **No real-time protection** — it scans the current state, it doesn't block anything
-- **No signature updates** — the spyware database is built-in and static
-- **Won't catch state-level threats** — firmware implants, zero-day exploits, and kernel rootkits are beyond its scope
-- **Not a replacement** for tools like [Objective-See](https://objective-see.org) (KnockKnock, LuLu, BlockBlock) or commercial endpoint security
-
-Think of it as a quick second opinion on your Mac's security posture.
+- **Snapshot, not shield** — scans current state but doesn't block or monitor in real-time
+- **Built-in signatures** — the spyware database ships with the binary, no update feed
+- **Complements, not replaces** — pairs well with real-time tools like [LuLu](https://objective-see.org/products/lulu.html) (firewall) and [BlockBlock](https://objective-see.org/products/blockblock.html) (persistence monitor)
 
 ## Exit codes
 
