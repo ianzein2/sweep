@@ -1,4 +1,4 @@
-# anti-spy
+# sweep
 
 A macOS command-line tool that detects spyware, keyloggers, and surveillance software. Runs 12 security scans and cross-correlates findings to surface threats that individual checks would miss.
 
@@ -26,27 +26,27 @@ After all scanners run, the **Threat Correlator** cross-references findings to e
 Requires **macOS 13+** and **Swift 5.9+**.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/anti-spy.git
-cd anti-spy
+git clone https://github.com/ianzein2/sweep.git
+cd sweep
 swift build -c release
 ```
 
-The binary will be at `.build/release/anti-spy`.
+The binary will be at `.build/release/sweep`.
 
 ## Usage
 
 ```bash
 # Full scan (recommended — run as root for complete results)
-sudo .build/release/anti-spy
+sudo .build/release/sweep
 
 # Run a specific scanner
-sudo .build/release/anti-spy --only deep
+sudo .build/release/sweep --only deep
 
 # JSON output (for piping to other tools)
-sudo .build/release/anti-spy --json
+sudo .build/release/sweep --json
 
 # Verbose mode
-sudo .build/release/anti-spy --verbose
+sudo .build/release/sweep --verbose
 ```
 
 ### Available scanners
