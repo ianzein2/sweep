@@ -9,38 +9,30 @@ import Darwin
 final class DeepScanner: Scanner {
     let name = "Deep Inspection Scan"
 
-    private let trustedDylibPrefixes = [
-        "/System/", "/usr/lib/", "/Library/Apple/",
-        "/Applications/", "/Library/Frameworks/",
-        "/opt/homebrew/", "/Library/Developer/",
-    ]
-
     func scan(progress: Spinner? = nil) -> ScanResult {
         let start = Date()
         var findings: [Finding] = []
         var errors: [String] = []
 
-        // 1. Check for injected dylibs in running processes
-        progress?.update("scanning for injected libraries")
-        scanDylibInjection(findings: &findings, errors: &errors)
+        // Dylib injection is now handled by ProcessScanner (full enumeration)
 
-        // 2. Check for suspicious root CA certificates
+        // 1. Check for suspicious root CA certificates
         progress?.update("checking root certificates")
         scanRootCertificates(findings: &findings, errors: &errors)
 
-        // 3. Check DNS configuration
+        // 2. Check DNS configuration
         progress?.update("checking DNS configuration")
         scanDNSConfiguration(findings: &findings, errors: &errors)
 
-        // 4. Check for hidden extended attributes
+        // 3. Check for hidden extended attributes
         progress?.update("scanning for hidden files")
         scanHiddenAttributes(findings: &findings, errors: &errors)
 
-        // 5. Check for root-owned files in user home
+        // 4. Check for root-owned files in user home
         progress?.update("checking file ownership anomalies")
         scanOwnershipAnomalies(findings: &findings, errors: &errors)
 
-        // 6. Check for suspicious environment variables in processes
+        // 5. Check for suspicious environment variables in processes
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
@@ -50,95 +42,6 @@ final class DeepScanner: Scanner {
             errors: errors,
             duration: Date().timeIntervalSince(start)
         )
-    }
-
-    // MARK: - Dylib Injection Detection
-
-    private func scanDylibInjection(findings: inout [Finding], errors: inout [String]) {
-        // Get list of running processes
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-        var bufferSize = 0
-        guard sysctl(&mib, UInt32(mib.count), nil, &bufferSize, nil, 0) == 0 else { return }
-
-        let entryCount = bufferSize / MemoryLayout<kinfo_proc>.stride
-        let buffer = UnsafeMutablePointer<kinfo_proc>.allocate(capacity: entryCount)
-        defer { buffer.deallocate() }
-        guard sysctl(&mib, UInt32(mib.count), buffer, &bufferSize, nil, 0) == 0 else { return }
-
-        let actualCount = bufferSize / MemoryLayout<kinfo_proc>.stride
-        let myPid = ProcessInfo.processInfo.processIdentifier
-        var checked = 0
-
-        for i in 0..<actualCount {
-            let proc = buffer[i]
-            let pid = proc.kp_proc.p_pid
-            if pid <= 1 || pid == myPid { continue }
-
-            guard let procPath = ShellRunner.processPath(for: pid) else { continue }
-
-            // Only inspect non-Apple processes — checking all would be too slow
-            // But DO check Apple processes in user-writable locations
-            let isSystemProc = procPath.hasPrefix("/System/") || procPath.hasPrefix("/usr/")
-            if isSystemProc { continue }
-
-            // Use vmmap to list loaded libraries (sample up to 20 non-system processes)
-            checked += 1
-            if checked > 20 { break }
-
-            let result = ShellRunner.run("/usr/bin/vmmap", arguments: ["-summary", "\(pid)"], timeout: 5)
-            guard result.success else { continue }
-
-            // Look for dylibs loaded from unusual locations
-            let lines = result.stdout.split(separator: "\n")
-            for line in lines {
-                let lineStr = String(line)
-                // vmmap shows mapped files — look for .dylib entries
-                guard lineStr.contains(".dylib") || lineStr.contains("__TEXT") else { continue }
-
-                // Extract path from the line
-                if let pathStart = lineStr.range(of: "/") {
-                    let libPath = String(lineStr[pathStart.lowerBound...]).trimmingCharacters(in: .whitespaces)
-
-                    // Skip trusted locations
-                    if trustedDylibPrefixes.contains(where: { libPath.hasPrefix($0) }) { continue }
-                    if libPath.isEmpty || !libPath.contains(".dylib") { continue }
-
-                    let procName = URL(fileURLWithPath: procPath).lastPathComponent
-
-                    // Dylib from hidden directory
-                    if libPath.contains("/.") {
-                        findings.append(Finding(
-                            severity: .high, category: .suspiciousProcess,
-                            title: "Hidden dylib injected into process",
-                            detail: "Process: \(procName) (PID \(pid)), Library: \(libPath)",
-                            path: libPath,
-                            remediation: "This is a strong indicator of code injection — investigate the dylib and the process"
-                        ))
-                    }
-                    // Dylib from temp directory
-                    else if libPath.hasPrefix("/tmp/") || libPath.hasPrefix("/private/tmp/") || libPath.hasPrefix("/var/tmp/") {
-                        findings.append(Finding(
-                            severity: .high, category: .suspiciousProcess,
-                            title: "Dylib loaded from temp directory",
-                            detail: "Process: \(procName) (PID \(pid)), Library: \(libPath)",
-                            path: libPath,
-                            remediation: "Libraries in temp directories are highly suspicious — likely injected"
-                        ))
-                    }
-                    // Dylib from user home (unusual)
-                    else if libPath.hasPrefix(ShellRunner.realUserHome) &&
-                            !libPath.contains("/Library/Frameworks/") {
-                        findings.append(Finding(
-                            severity: .medium, category: .suspiciousProcess,
-                            title: "Dylib loaded from user directory",
-                            detail: "Process: \(procName) (PID \(pid)), Library: \(libPath)",
-                            path: libPath,
-                            remediation: "Verify this library is expected"
-                        ))
-                    }
-                }
-            }
-        }
     }
 
     // MARK: - Root CA Certificate Scanning

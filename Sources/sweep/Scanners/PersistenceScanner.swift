@@ -53,6 +53,18 @@ final class PersistenceScanner: Scanner {
         progress?.update("checking /usr/local for unsigned binaries")
         scanUsrLocalBinaries(findings: &findings, errors: &errors)
 
+        progress?.update("checking shell config files")
+        scanShellConfigs(findings: &findings, errors: &errors)
+
+        progress?.update("checking cron jobs")
+        scanCronJobs(findings: &findings, errors: &errors)
+
+        progress?.update("checking login/logout hooks")
+        scanLoginHooks(findings: &findings, errors: &errors)
+
+        progress?.update("checking periodic scripts")
+        scanPeriodicScripts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -300,6 +312,183 @@ final class PersistenceScanner: Scanner {
                         detail: "File: \(file) — not installed by Homebrew",
                         path: filePath,
                         remediation: "Verify this binary is legitimate"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Shell Config Files
+
+    private func scanShellConfigs(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let shellConfigs = [
+            "\(home)/.zshrc", "\(home)/.zprofile", "\(home)/.zshenv",
+            "\(home)/.bashrc", "\(home)/.bash_profile", "\(home)/.profile",
+        ]
+
+        let suspiciousPatterns: [(pattern: String, description: String)] = [
+            ("curl.*|.*sh", "downloads and executes remote script"),
+            ("wget.*|.*sh", "downloads and executes remote script"),
+            ("curl.*|.*bash", "downloads and executes remote script"),
+            ("eval.*$(curl", "evaluates remote code"),
+            ("eval.*$(wget", "evaluates remote code"),
+            ("base64.*--decode", "decodes hidden payload"),
+            ("base64.*-d", "decodes hidden payload"),
+            ("python.*-c.*import", "runs inline Python (may be obfuscated)"),
+            ("/tmp/", "references temp directory"),
+            ("/.hidden", "references hidden directory"),
+        ]
+
+        for configPath in shellConfigs {
+            guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: configPath).lastPathComponent
+            let lines = content.components(separatedBy: "\n")
+
+            for (lineNum, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                // Skip comments and empty lines
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                for pattern in suspiciousPatterns {
+                    if trimmed.lowercased().contains(pattern.pattern.lowercased()) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Suspicious command in \(fileName)",
+                            detail: "Line \(lineNum + 1): \(pattern.description) — \(String(trimmed.prefix(100)))",
+                            path: configPath,
+                            remediation: "Review: open \(configPath) and inspect line \(lineNum + 1)"
+                        ))
+                        break // one finding per line is enough
+                    }
+                }
+            }
+
+            // Also check for spyware signatures in content
+            let contentLC = content.lowercased()
+            for sig in SpywareSignature.known {
+                for name in sig.processNames {
+                    if contentLC.contains(name.lowercased()) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware reference in \(fileName): \(sig.name)",
+                            detail: "Shell config contains reference to '\(name)'",
+                            path: configPath,
+                            remediation: "Remove the malicious lines from \(configPath)"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Cron Jobs
+
+    private func scanCronJobs(findings: inout [Finding], errors: inout [String]) {
+        // Check current user's crontab
+        let userCron = ShellRunner.run("/usr/bin/crontab", arguments: ["-l"], timeout: 5)
+        if userCron.success && !userCron.stdout.isEmpty &&
+           !userCron.stdout.contains("no crontab") {
+            let lines = userCron.stdout.components(separatedBy: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !$0.hasPrefix("#") }
+
+            if !lines.isEmpty {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "User cron jobs found (\(lines.count) entries)",
+                    detail: "First entry: \(String(lines.first!.prefix(80)))",
+                    path: nil,
+                    remediation: "Review with: crontab -l"
+                ))
+            }
+        }
+
+        // Check system cron directories
+        let cronDirs = ["/etc/cron.d", "/var/at/tabs"]
+        let fm = FileManager.default
+        for dir in cronDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for file in contents {
+                // Skip known system files
+                if file == ".localized" || file == "root" { continue }
+                let filePath = "\(dir)/\(file)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "System cron job found",
+                    detail: "File: \(file) in \(dir)",
+                    path: filePath,
+                    remediation: "Review contents: cat \"\(filePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Login/Logout Hooks
+
+    private func scanLoginHooks(findings: inout [Finding], errors: inout [String]) {
+        // Try reading via defaults
+        let loginHook = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.loginwindow", "LoginHook"
+        ], timeout: 5)
+
+        if loginHook.success {
+            let hook = loginHook.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !hook.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login hook detected (deprecated persistence)",
+                    detail: "Script runs every time a user logs in: \(hook)",
+                    path: hook,
+                    remediation: "Remove: sudo defaults delete com.apple.loginwindow LoginHook"
+                ))
+            }
+        }
+
+        let logoutHook = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.loginwindow", "LogoutHook"
+        ], timeout: 5)
+
+        if logoutHook.success {
+            let hook = logoutHook.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !hook.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Logout hook detected (deprecated persistence)",
+                    detail: "Script runs every time a user logs out: \(hook)",
+                    path: hook,
+                    remediation: "Remove: sudo defaults delete com.apple.loginwindow LogoutHook"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Periodic Scripts
+
+    private func scanPeriodicScripts(findings: inout [Finding], errors: inout [String]) {
+        let periodicDirs = ["/etc/periodic/daily", "/etc/periodic/weekly", "/etc/periodic/monthly"]
+        let fm = FileManager.default
+
+        for dir in periodicDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            let period = URL(fileURLWithPath: dir).lastPathComponent
+
+            for file in contents {
+                let filePath = "\(dir)/\(file)"
+                // Apple's default periodic scripts are numbered (100.clean-logs, 500.daily, etc.)
+                // Non-numbered or unusually named scripts are suspicious
+                let isAppleDefault = file.first?.isNumber == true
+
+                if !isAppleDefault {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Custom \(period) periodic script",
+                        detail: "File: \(file) — runs automatically via periodic(8)",
+                        path: filePath,
+                        remediation: "Review contents: cat \"\(filePath)\""
                     ))
                 }
             }

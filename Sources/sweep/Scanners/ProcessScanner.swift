@@ -128,6 +128,14 @@ final class ProcessScanner: Scanner {
             }
         }
 
+        // Dylib enumeration for all non-system processes
+        progress?.update("scanning loaded libraries")
+        scanLoadedDylibs(processes: processes, findings: &findings)
+
+        // Check for orphaned child processes (parent is launchd but not a daemon)
+        progress?.update("checking process hierarchy")
+        scanProcessHierarchy(processes: processes, findings: &findings)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -136,8 +144,113 @@ final class ProcessScanner: Scanner {
         )
     }
 
+    private let suspiciousDylibPrefixes = [
+        "/tmp/", "/private/tmp/", "/var/tmp/",
+    ]
+
+    private func scanLoadedDylibs(processes: [ProcessEntry], findings: inout [Finding]) {
+        let myPid = ProcessInfo.processInfo.processIdentifier
+        let home = ShellRunner.realUserHome
+
+        // Check all non-system, non-Apple processes
+        for proc in processes {
+            if proc.pid <= 1 || proc.pid == myPid { continue }
+            guard let path = proc.path else { continue }
+
+            // Only inspect non-system processes
+            if path.hasPrefix("/System/") || path.hasPrefix("/usr/") ||
+               path.hasPrefix("/bin/") || path.hasPrefix("/sbin/") { continue }
+
+            // Use vmmap to get loaded libraries
+            let result = ShellRunner.run("/usr/bin/vmmap", arguments: ["\(proc.pid)"], timeout: 5)
+            guard result.success else { continue }
+
+            let lines = result.stdout.split(separator: "\n")
+            for line in lines {
+                let lineStr = String(line)
+                guard lineStr.contains(".dylib") else { continue }
+
+                // Extract path
+                if let pathStart = lineStr.range(of: "/") {
+                    let libPath = String(lineStr[pathStart.lowerBound...]).trimmingCharacters(in: .whitespaces)
+                    guard libPath.contains(".dylib") else { continue }
+
+                    // Check for dylibs from hidden directories
+                    if libPath.contains("/.") {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousProcess,
+                            title: "Hidden dylib loaded into \(proc.name)",
+                            detail: "PID \(proc.pid), Library: \(libPath)",
+                            path: libPath,
+                            remediation: "Hidden libraries are a strong indicator of code injection"
+                        ))
+                    }
+                    // Dylibs from temp directories
+                    else if suspiciousDylibPrefixes.contains(where: { libPath.hasPrefix($0) }) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousProcess,
+                            title: "Dylib loaded from temp directory into \(proc.name)",
+                            detail: "PID \(proc.pid), Library: \(libPath)",
+                            path: libPath,
+                            remediation: "Libraries in temp directories are highly suspicious"
+                        ))
+                    }
+                    // Dylibs from user home (unusual unless frameworks)
+                    else if libPath.hasPrefix(home) &&
+                            !libPath.contains("/Library/Frameworks/") &&
+                            !libPath.contains("/Applications/") &&
+                            !libPath.contains("/.cargo/") &&
+                            !libPath.contains("/.rustup/") {
+                        findings.append(Finding(
+                            severity: .medium, category: .suspiciousProcess,
+                            title: "Dylib loaded from user directory into \(proc.name)",
+                            detail: "PID \(proc.pid), Library: \(libPath)",
+                            path: libPath,
+                            remediation: "Verify this library is expected"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    private func scanProcessHierarchy(processes: [ProcessEntry], findings: inout [Finding]) {
+        let myPid = ProcessInfo.processInfo.processIdentifier
+
+        for proc in processes {
+            if proc.pid <= 1 || proc.pid == myPid { continue }
+            guard let path = proc.path else { continue }
+
+            // Skip system processes
+            if path.hasPrefix("/System/") || path.hasPrefix("/usr/") ||
+               path.hasPrefix("/bin/") || path.hasPrefix("/sbin/") { continue }
+            if whitelistedProcessNames.contains(proc.name) { continue }
+
+            // Orphan detection: parent doesn't exist (was killed) but child persists
+            // Parent PID 1 = adopted by launchd, which is normal for daemons
+            // But if it's not from a standard daemon path and ppid is 1, it could be suspicious
+            if proc.ppid == 1 && proc.uid != 0 {
+                // User-owned process adopted by launchd from non-standard path
+                let isTrusted = trustedPathPrefixes.contains { path.hasPrefix($0) }
+                if !isTrusted {
+                    let sigInfo = checkCodeSignature(path: path)
+                    if !sigInfo.isSigned {
+                        findings.append(Finding(
+                            severity: .medium, category: .suspiciousProcess,
+                            title: "Unsigned orphan process running as daemon",
+                            detail: "Name: \(proc.name), PID: \(proc.pid), Parent: launchd (adopted)",
+                            path: path,
+                            remediation: "This unsigned process is running without a parent — investigate its origin"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     private struct ProcessEntry {
         let pid: Int32
+        let ppid: Int32
         let name: String
         let path: String?
         let uid: UInt32
@@ -179,8 +292,9 @@ final class ProcessScanner: Scanner {
             let path = pathLen > 0 ? String(cString: pathBuffer) : nil
 
             let uid = proc.kp_eproc.e_ucred.cr_uid
+            let ppid = proc.kp_eproc.e_ppid
 
-            results.append(ProcessEntry(pid: pid, name: procName, path: path, uid: uid))
+            results.append(ProcessEntry(pid: pid, ppid: ppid, name: procName, path: path, uid: uid))
         }
 
         return results
