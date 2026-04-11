@@ -8,15 +8,23 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
     ],
     targets: [
-        .executableTarget(
-            name: "sweep",
-            dependencies: [
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ],
+        .target(
+            name: "SweepCore",
             linkerSettings: [
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("Security"),
             ]
+        ),
+        .executableTarget(
+            name: "sweep",
+            dependencies: [
+                "SweepCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+        .executableTarget(
+            name: "SweepApp",
+            dependencies: ["SweepCore"]
         ),
     ]
 )

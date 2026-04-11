@@ -1,4 +1,5 @@
 import Foundation
+import SweepCore
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -13,7 +14,7 @@ enum ANSIColor: String {
     case reset = "\u{001B}[0m"
 }
 
-final class Spinner {
+final class Spinner: ScanProgress {
     private let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
     private var frameIndex = 0
     private var timer: DispatchSourceTimer?

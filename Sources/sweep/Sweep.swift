@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SweepCore
 
 @main
 struct Sweep: ParsableCommand {
@@ -36,7 +37,7 @@ struct Sweep: ParsableCommand {
         let reporter = Reporter(jsonMode: json, verbose: verbose)
         reporter.printHeader()
 
-        var scanners: [Scanner] = []
+        var scanners: [SweepCore.Scanner] = []
 
         if only == nil || only == "process" {
             scanners.append(ProcessScanner())
@@ -96,7 +97,7 @@ struct Sweep: ParsableCommand {
         } else {
             // Parallel mode: run all scanners concurrently
             let resultSlots = UnsafeMutableBufferPointer<ScanResult?>.allocate(capacity: totalScanners)
-            resultSlots.initialize(repeating: nil)
+            resultSlots.initialize(repeating: nil as ScanResult?)
             defer { resultSlots.deallocate() }
 
             let spinner = Spinner(label: "Scanning", step: 0, total: totalScanners, isTTY: reporter.isTTY)

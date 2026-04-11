@@ -1,6 +1,60 @@
 # sweep
 
-A macOS command-line tool that detects spyware, keyloggers, and surveillance software. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+
+## Install
+
+Requires **macOS 13+** and **Swift 5.9+**.
+
+```bash
+git clone https://github.com/ianzein2/sweep.git
+cd sweep
+```
+
+### macOS app
+
+```bash
+make app                    # builds to build/Sweep.app
+sudo make install-app       # copies to /Applications
+```
+
+Double-click **Sweep.app** to launch. Click **Scan** for a user-level scan, or **Scan as Admin** for a full scan with the native macOS password prompt.
+
+### Command-line
+
+```bash
+make build                  # builds CLI binary
+sudo make install           # installs to /usr/local/bin
+```
+
+## Usage (CLI)
+
+```bash
+# Full scan (run as root for complete results)
+sudo sweep
+
+# Run a specific scanner
+sudo sweep --only hardening
+
+# Auto-fix safe issues (enable firewall, remove orphaned plists, etc.)
+sudo sweep --fix
+
+# Preview what --fix would do without changing anything
+sudo sweep --dry-run
+
+# Save a baseline for future comparison
+sudo sweep --save-baseline
+
+# Compare current scan against saved baseline
+sudo sweep --diff
+
+# JSON output (for piping to other tools)
+sudo sweep --json
+```
+
+### Available scanners
+
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
 
 ## What it checks
 
@@ -21,47 +75,6 @@ A macOS command-line tool that detects spyware, keyloggers, and surveillance sof
 | **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
-
-## Install
-
-Requires **macOS 13+** and **Swift 5.9+**.
-
-```bash
-git clone https://github.com/ianzein2/sweep.git
-cd sweep
-swift build -c release
-```
-
-The binary will be at `.build/release/sweep`.
-
-## Usage
-
-```bash
-# Full scan (recommended — run as root for complete results)
-sudo .build/release/sweep
-
-# Run a specific scanner
-sudo .build/release/sweep --only hardening
-
-# Auto-fix safe issues (enable firewall, remove orphaned plists, etc.)
-sudo .build/release/sweep --fix
-
-# Preview what --fix would do without changing anything
-sudo .build/release/sweep --dry-run
-
-# Save a baseline for future comparison
-sudo .build/release/sweep --save-baseline
-
-# Compare current scan against saved baseline
-sudo .build/release/sweep --diff
-
-# JSON output (for piping to other tools)
-sudo .build/release/sweep --json
-```
-
-### Available scanners
-
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
 
 ## Security score
 
