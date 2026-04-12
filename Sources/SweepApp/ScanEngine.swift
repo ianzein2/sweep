@@ -97,8 +97,40 @@ final class ScanEngine: ObservableObject {
         }
     }
 
+    /// Find the sweep CLI binary
+    private func findCLIBinary() -> String? {
+        // 1. Installed location
+        if FileManager.default.fileExists(atPath: "/usr/local/bin/sweep") {
+            return "/usr/local/bin/sweep"
+        }
+        // 2. Relative to app bundle (e.g. build/ directory)
+        let appPath = CommandLine.arguments[0]
+        if let appDir = URL(string: appPath)?.deletingLastPathComponent() {
+            // build/Sweep.app/Contents/MacOS/ -> build/../../.build/release/sweep
+            let relative = appDir
+                .appendingPathComponent("../../../../.build/release/sweep")
+                .standardized.path
+            if FileManager.default.fileExists(atPath: relative) {
+                return relative
+            }
+        }
+        // 3. Common dev location
+        let devPath = FileManager.default.currentDirectoryPath + "/.build/release/sweep"
+        if FileManager.default.fileExists(atPath: devPath) {
+            return devPath
+        }
+        return nil
+    }
+
     func scanAsAdmin() {
         guard !isScanning else { return }
+
+        guard let cliBinary = findCLIBinary() else {
+            // No CLI binary found — fall back to regular scan
+            startScan()
+            return
+        }
+
         isScanning = true
         progress = 0
         results = []
@@ -106,21 +138,18 @@ final class ScanEngine: ObservableObject {
         currentScanner = "Requesting admin privileges..."
 
         Task.detached { [weak self] in
-            let binaryPath = CommandLine.arguments[0]
-            // Run CLI with --json, parse output
-            let script = "\(binaryPath.replacingOccurrences(of: "SweepApp", with: "sweep")) --json"
-            let escaped = script.replacingOccurrences(of: "\\", with: "\\\\")
+            let escaped = cliBinary.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
 
             let result = ShellRunner.run("/usr/bin/osascript", arguments: [
-                "-e", "do shell script \"\(escaped)\" with administrator privileges"
+                "-e", "do shell script \"\(escaped) --json\" with administrator privileges"
             ], timeout: 120)
 
             await MainActor.run { [weak self] in
                 if result.success, let data = result.stdout.data(using: .utf8) {
                     self?.parseJSONResults(data)
                 } else {
-                    // Fallback: run without root
+                    // Admin cancelled or failed — reset state
                     self?.isScanning = false
                     self?.currentScanner = ""
                 }
