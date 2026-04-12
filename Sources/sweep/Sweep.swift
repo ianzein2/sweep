@@ -182,9 +182,7 @@ struct Sweep: ParsableCommand {
 
         // Remediation
         if fix || dryRun {
-            if !fix && !dryRun {
-                // no-op
-            } else if getuid() != 0 && fix {
+            if getuid() != 0 && fix {
                 if !json { print("  --fix requires root. Run with sudo.") }
             } else {
                 let allFindings = results.flatMap { $0.findings }

@@ -18,8 +18,8 @@ struct ScannerResultView: View {
                 .padding(.vertical, 2)
             }
 
-            ForEach(result.findings.sorted(by: { $0.severity > $1.severity }),
-                    id: \.title) { finding in
+            ForEach(Array(result.findings.sorted(by: { $0.severity > $1.severity }).enumerated()),
+                    id: \.offset) { _, finding in
                 FindingRow(finding: finding)
             }
 

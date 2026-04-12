@@ -2,7 +2,13 @@
 
 A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
-## Install
+## Download
+
+Grab the latest `.dmg` from [**Releases**](https://github.com/ianzein2/sweep/releases), open it, and drag **Sweep.app** to your Applications folder. No terminal required.
+
+> **First launch:** macOS will warn the app is from an "unidentified developer" since it's not notarized. Right-click the app and select **Open**, then click **Open** in the dialog to bypass the warning. You only need to do this once.
+
+## Build from source
 
 Requires **macOS 13+** and **Swift 5.9+**.
 
@@ -16,6 +22,7 @@ cd sweep
 ```bash
 make app                    # builds to build/Sweep.app
 sudo make install-app       # copies to /Applications
+make dmg                    # creates build/Sweep.dmg for distribution
 ```
 
 Double-click **Sweep.app** to launch. Click **Scan** for a user-level scan, or **Scan as Admin** for a full scan with the native macOS password prompt.
@@ -35,6 +42,9 @@ sudo sweep
 
 # Run a specific scanner
 sudo sweep --only hardening
+
+# Verbose output (show per-scanner details)
+sudo sweep --verbose
 
 # Auto-fix safe issues (enable firewall, remove orphaned plists, etc.)
 sudo sweep --fix
@@ -97,6 +107,14 @@ Findings are rated by severity:
 - **HIGH** — strong indicator of spyware or system compromise. Investigate immediately.
 - **MEDIUM** — suspicious but could be legitimate. Verify the software is expected.
 - **LOW** — informational. Orphaned files, known security tools, minor anomalies.
+
+## Troubleshooting
+
+**Scan hangs or takes too long** — Some scanners (particularly Process) inspect every running process, which can be slow on busy systems. The app has a 60-second timeout and will show partial results if a scanner hangs.
+
+**"Scan as Admin" shows a password prompt** — This is macOS asking you to authorize elevated scanning. Entering your password lets sweep inspect protected system areas (TCC database, kernel extensions, etc.) that aren't readable as a regular user.
+
+**Results differ between user and admin scans** — Expected. Many system files are only readable as root. Run `sudo sweep` or use **Scan as Admin** in the app for the most complete results.
 
 ## Scope
 
