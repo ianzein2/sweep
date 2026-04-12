@@ -17,12 +17,18 @@ struct ContentView: View {
             if engine.isScanning {
                 VStack(spacing: 4) {
                     ProgressView(value: engine.progress, total: 1.0)
-                    Text(engine.currentScanner)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    HStack {
+                        Text(engine.currentScanner)
+                        Spacer()
+                        Text("\(engine.completedCount)/\(engine.totalCount) scanners")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 8)
+
+                Spacer()
             }
 
             // Results or empty state
@@ -48,11 +54,7 @@ struct ContentView: View {
 
     private var headerView: some View {
         HStack {
-            if let score = engine.score {
-                ScoreView(score: score)
-            } else {
-                ScoreView(score: nil)
-            }
+            ScoreView(score: engine.score)
 
             Spacer()
 
@@ -75,14 +77,16 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
 
-                if engine.isRoot {
-                    Text("Running as root")
-                        .font(.caption)
-                        .foregroundColor(.green)
-                } else {
-                    Text("Running as user — use Scan as Admin for full results")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                if !engine.isScanning {
+                    if engine.isRoot {
+                        Text("Running as root")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    } else {
+                        Text("Running as user — use Scan as Admin for full results")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
         }

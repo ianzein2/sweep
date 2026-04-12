@@ -8,6 +8,8 @@ final class ScanEngine: ObservableObject {
     @Published var isScanning = false
     @Published var progress: Double = 0
     @Published var currentScanner: String = ""
+    @Published var completedCount: Int = 0
+    @Published var totalCount: Int = 13
     @Published var scanDate: Date?
 
     let isRoot = getuid() == 0
@@ -16,6 +18,7 @@ final class ScanEngine: ObservableObject {
         guard !isScanning else { return }
         isScanning = true
         progress = 0
+        completedCount = 0
         results = []
         score = nil
         currentScanner = "Starting..."
@@ -37,11 +40,9 @@ final class ScanEngine: ObservableObject {
         ]
 
         let total = scanners.count
+        totalCount = total
 
-        // Run scanners on background thread
         Task.detached { [weak self] in
-            var scanResults: [ScanResult] = []
-
             let resultSlots = UnsafeMutableBufferPointer<ScanResult?>.allocate(capacity: total)
             resultSlots.initialize(repeating: nil as ScanResult?)
             defer { resultSlots.deallocate() }
@@ -59,21 +60,39 @@ final class ScanEngine: ObservableObject {
                     lock.lock()
                     completed += 1
                     let pct = Double(completed) / Double(total)
+                    let count = completed
                     let name = scanner.name
                     lock.unlock()
                     Task { @MainActor [weak self] in
                         self?.progress = pct
-                        self?.currentScanner = name
+                        self?.completedCount = count
+                        self?.currentScanner = "\(name) done (\(count)/\(total))"
                     }
                     group.leave()
                 }
             }
 
-            group.wait()
+            // Timeout after 60 seconds — don't hang forever
+            let waitResult = group.wait(timeout: .now() + 60)
 
+            var scanResults: [ScanResult] = []
             for i in 0..<total {
                 if let result = resultSlots[i] {
                     scanResults.append(result)
+                }
+            }
+
+            if waitResult == .timedOut {
+                // Some scanners hung — still show what we have
+                let timedOut = total - scanResults.count
+                if timedOut > 0 {
+                    let errorResult = ScanResult(
+                        scannerName: "Timeout",
+                        findings: [],
+                        errors: ["\(timedOut) scanner(s) timed out after 60s"],
+                        duration: 60
+                    )
+                    scanResults.append(errorResult)
                 }
             }
 
@@ -93,31 +112,35 @@ final class ScanEngine: ObservableObject {
                 self?.scanDate = Date()
                 self?.isScanning = false
                 self?.currentScanner = ""
+                self?.progress = 1.0
+                self?.completedCount = scanResults.count
             }
         }
     }
 
     /// Find the sweep CLI binary
     private func findCLIBinary() -> String? {
+        let fm = FileManager.default
         // 1. Installed location
-        if FileManager.default.fileExists(atPath: "/usr/local/bin/sweep") {
+        if fm.fileExists(atPath: "/usr/local/bin/sweep") {
             return "/usr/local/bin/sweep"
         }
-        // 2. Relative to app bundle (e.g. build/ directory)
-        let appPath = CommandLine.arguments[0]
-        if let appDir = URL(string: appPath)?.deletingLastPathComponent() {
-            // build/Sweep.app/Contents/MacOS/ -> build/../../.build/release/sweep
-            let relative = appDir
-                .appendingPathComponent("../../../../.build/release/sweep")
-                .standardized.path
-            if FileManager.default.fileExists(atPath: relative) {
-                return relative
-            }
+        // 2. Next to the .app bundle (build/Sweep.app -> build/../.build/release/sweep)
+        let appPath = URL(fileURLWithPath: CommandLine.arguments[0])
+        // Go from build/Sweep.app/Contents/MacOS/Sweep up to project root
+        let projectRoot = appPath
+            .deletingLastPathComponent()  // MacOS/
+            .deletingLastPathComponent()  // Contents/
+            .deletingLastPathComponent()  // Sweep.app/
+            .deletingLastPathComponent()  // build/
+        let relative = projectRoot.appendingPathComponent(".build/release/sweep").path
+        if fm.fileExists(atPath: relative) {
+            return relative
         }
-        // 3. Common dev location
-        let devPath = FileManager.default.currentDirectoryPath + "/.build/release/sweep"
-        if FileManager.default.fileExists(atPath: devPath) {
-            return devPath
+        // 3. Current working directory
+        let cwd = fm.currentDirectoryPath + "/.build/release/sweep"
+        if fm.fileExists(atPath: cwd) {
+            return cwd
         }
         return nil
     }
@@ -141,15 +164,21 @@ final class ScanEngine: ObservableObject {
             let escaped = cliBinary.replacingOccurrences(of: "\\", with: "\\\\")
                 .replacingOccurrences(of: "\"", with: "\\\"")
 
+            await MainActor.run { [weak self] in
+                self?.currentScanner = "Scanning as admin..."
+                self?.progress = 0.1
+            }
+
             let result = ShellRunner.run("/usr/bin/osascript", arguments: [
                 "-e", "do shell script \"\(escaped) --json\" with administrator privileges"
             ], timeout: 120)
 
             await MainActor.run { [weak self] in
-                if result.success, let data = result.stdout.data(using: .utf8) {
+                // CLI exits with code 1 for HIGH findings — that's valid, still parse JSON
+                let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !stdout.isEmpty, let data = stdout.data(using: .utf8) {
                     self?.parseJSONResults(data)
                 } else {
-                    // Admin cancelled or failed — reset state
                     self?.isScanning = false
                     self?.currentScanner = ""
                 }

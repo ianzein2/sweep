@@ -19,11 +19,17 @@ struct ScoreView: View {
                     .rotationEffect(.degrees(-90))
 
                 VStack(spacing: 0) {
-                    Text("\(score?.total ?? 0)")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
-                    Text("/100")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
+                    if let score = score {
+                        Text("\(score.total)")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                        Text("/100")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("—")
+                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
