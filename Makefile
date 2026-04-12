@@ -29,6 +29,17 @@ install-app: app
 	cp -R build/Sweep.app /Applications/Sweep.app
 	@echo "Installed to /Applications/Sweep.app"
 
+# DMG for distribution
+dmg: app
+	@echo "Creating DMG..."
+	@rm -f build/Sweep.dmg
+	@mkdir -p build/dmg
+	@cp -R build/Sweep.app build/dmg/
+	@ln -sf /Applications build/dmg/Applications
+	@hdiutil create -volname "Sweep" -srcfolder build/dmg -ov -format UDZO build/Sweep.dmg
+	@rm -rf build/dmg
+	@echo "Created: build/Sweep.dmg"
+
 clean:
 	swift package clean
 	rm -rf build/

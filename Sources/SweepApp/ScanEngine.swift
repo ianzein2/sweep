@@ -43,21 +43,18 @@ final class ScanEngine: ObservableObject {
         totalCount = total
 
         Task.detached { [weak self] in
-            let resultSlots = UnsafeMutableBufferPointer<ScanResult?>.allocate(capacity: total)
-            resultSlots.initialize(repeating: nil as ScanResult?)
-            defer { resultSlots.deallocate() }
-
+            var scanResults: [ScanResult] = []
             var completed = 0
             let lock = NSLock()
             let group = DispatchGroup()
             let queue = DispatchQueue(label: "sweep.scanners", attributes: .concurrent)
 
-            for (index, scanner) in scanners.enumerated() {
+            for (_, scanner) in scanners.enumerated() {
                 group.enter()
                 queue.async {
                     let result = scanner.scan(progress: nil)
-                    resultSlots[index] = result
                     lock.lock()
+                    scanResults.append(result)
                     completed += 1
                     let pct = Double(completed) / Double(total)
                     let count = completed
@@ -75,16 +72,15 @@ final class ScanEngine: ObservableObject {
             // Timeout after 60 seconds — don't hang forever
             let waitResult = group.wait(timeout: .now() + 60)
 
-            var scanResults: [ScanResult] = []
-            for i in 0..<total {
-                if let result = resultSlots[i] {
-                    scanResults.append(result)
-                }
-            }
+            lock.lock()
+            let collectedResults = scanResults
+            lock.unlock()
+
+            var finalResults = collectedResults
 
             if waitResult == .timedOut {
                 // Some scanners hung — still show what we have
-                let timedOut = total - scanResults.count
+                let timedOut = total - finalResults.count
                 if timedOut > 0 {
                     let errorResult = ScanResult(
                         scannerName: "Timeout",
@@ -92,28 +88,28 @@ final class ScanEngine: ObservableObject {
                         errors: ["\(timedOut) scanner(s) timed out after 60s"],
                         duration: 60
                     )
-                    scanResults.append(errorResult)
+                    finalResults.append(errorResult)
                 }
             }
 
             // Threat correlation
-            if scanResults.count > 1 {
-                let correlated = ThreatCorrelator.correlate(scanResults)
+            if finalResults.count > 1 {
+                let correlated = ThreatCorrelator.correlate(finalResults)
                 if !correlated.findings.isEmpty {
-                    scanResults.append(correlated)
+                    finalResults.append(correlated)
                 }
             }
 
-            let score = SecurityScore.calculate(from: scanResults)
+            let score = SecurityScore.calculate(from: finalResults)
 
             await MainActor.run { [weak self] in
-                self?.results = scanResults
+                self?.results = finalResults
                 self?.score = score
                 self?.scanDate = Date()
                 self?.isScanning = false
                 self?.currentScanner = ""
                 self?.progress = 1.0
-                self?.completedCount = scanResults.count
+                self?.completedCount = finalResults.count
             }
         }
     }

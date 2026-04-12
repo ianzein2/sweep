@@ -104,6 +104,10 @@ struct ContentView: View {
                 .font(.title3)
                 .foregroundColor(.secondary)
             Spacer()
+            Text("Sweep \(Self.appVersion)")
+                .font(.caption2)
+                .foregroundColor(.secondary.opacity(0.6))
+                .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity)
     }
@@ -145,4 +149,10 @@ struct ContentView: View {
                 .foregroundColor(.secondary)
         }
     }
+
+    // MARK: - Version (shown in empty state footer)
+    private static let appVersion: String = {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        return "v\(v)"
+    }()
 }
