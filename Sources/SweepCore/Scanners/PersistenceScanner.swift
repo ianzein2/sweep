@@ -149,11 +149,17 @@ public final class PersistenceScanner: Scanner {
         if !isTrustedPath && execExists {
             let isSigned = checkIsSigned(path: execPath)
             if !isSigned && runAtLoad {
-                // Check if plist predates SIP (2015-10-01)
+                // Check if plist predates SIP (2015-10-01). Missing or
+                // unreadable modification date is treated as post-SIP.
                 let sipDate = Date(timeIntervalSince1970: 1443657600)
                 let plistAttrs = try? FileManager.default.attributesOfItem(atPath: path)
                 let plistModDate = plistAttrs?[.modificationDate] as? Date
-                let isPreSIP = plistModDate != nil && plistModDate! < sipDate
+                var isPreSIP = false
+                var modDateSuffix = ""
+                if let modDate = plistModDate, modDate < sipDate {
+                    isPreSIP = true
+                    modDateSuffix = ", Plist from \(modDate)"
+                }
 
                 findings.append(Finding(
                     severity: isPreSIP ? .high : .medium,
@@ -161,7 +167,7 @@ public final class PersistenceScanner: Scanner {
                     title: isPreSIP
                         ? "Pre-SIP unsigned persistence (high risk)"
                         : "Unsigned executable set to run at login",
-                    detail: "Label: \(label), Dir: \(dirLabel)" + (isPreSIP ? ", Plist from \(plistModDate!)" : ""),
+                    detail: "Label: \(label), Dir: \(dirLabel)" + modDateSuffix,
                     path: path,
                     remediation: "Verify this LaunchAgent is legitimate: \(execPath)"
                 ))

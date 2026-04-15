@@ -516,7 +516,9 @@ public final class PermissionScanner: Scanner {
     private func queryTCC(dbPath: String, errors: inout [String], label: String) -> [TCCGrant] {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
 
-        let tempPath = "/tmp/anti-spy-tcc-\(UUID().uuidString).db"
+        // Copy to a user-private tmp dir (mode 0700) rather than /tmp, so other
+        // users on a shared system can't read TCC data before cleanup.
+        let tempPath = ShellRunner.secureTempPath(prefix: "sweep-tcc", suffix: ".db")
         let copyResult = ShellRunner.run("/bin/cp", arguments: [dbPath, tempPath])
         let queryPath = copyResult.success ? tempPath : dbPath
         defer { try? FileManager.default.removeItem(atPath: tempPath) }

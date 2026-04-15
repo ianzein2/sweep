@@ -122,7 +122,12 @@ public final class NetworkScanner: Scanner {
                 if let colonRange = remote.range(of: ":", options: .backwards) {
                     let portStr = remote[colonRange.upperBound...].replacingOccurrences(of: " ", with: "")
                         .replacingOccurrences(of: "(ESTABLISHED)", with: "")
-                    remotePort = Int(portStr)
+                    // Reject malformed or out-of-range ports so we don't compare
+                    // garbage against our suspicious-port set (which would either
+                    // miss detections or produce spurious ones).
+                    if let port = Int(portStr), (1...65535).contains(port) {
+                        remotePort = port
+                    }
                 }
             }
 
@@ -205,7 +210,7 @@ public final class NetworkScanner: Scanner {
                     let portPart = connStr[colonRange.upperBound...]
                         .replacingOccurrences(of: " ", with: "")
                         .replacingOccurrences(of: "(LISTEN)", with: "")
-                    if let port = Int(portPart), port > 0 {
+                    if let port = Int(portPart), (1...65535).contains(port) {
                         let commonPorts: Set<Int> = [22, 80, 443, 3000, 3001, 4200, 5000, 5173, 5432,
                                                      8000, 8080, 8081, 9090, 27017, 6379, 11211]
                         if !commonPorts.contains(port) && suspiciousPorts.contains(port) {

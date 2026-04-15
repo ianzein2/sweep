@@ -63,11 +63,26 @@ public enum ShellRunner {
     }
 
     /// Returns the real user's home directory, even when running under sudo.
+    ///
+    /// `SUDO_USER` is read from the environment and is only trusted if it passes
+    /// a strict allowlist (POSIX username chars: alphanumerics, `_`, `-`). This
+    /// prevents path traversal (e.g. `../../etc`) or shell metacharacters if the
+    /// variable is maliciously set.
     public static var realUserHome: String {
-        if let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"] {
+        if let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"],
+           isValidUsername(sudoUser) {
             return "/Users/\(sudoUser)"
         }
         return NSHomeDirectory()
+    }
+
+    /// Validates a string against a conservative username allowlist.
+    /// Mirrors the portable POSIX username character set (`[a-zA-Z0-9_-]`).
+    private static func isValidUsername(_ name: String) -> Bool {
+        guard !name.isEmpty, name.count <= 32 else { return false }
+        return name.allSatisfy { c in
+            c.isASCII && (c.isLetter || c.isNumber || c == "_" || c == "-")
+        }
     }
 
     /// Get process path by PID using proc_pidpath
@@ -76,5 +91,15 @@ public enum ShellRunner {
         let len = proc_pidpath(pid, &pathBuffer, UInt32(MAXPATHLEN))
         guard len > 0 else { return nil }
         return String(cString: pathBuffer)
+    }
+
+    /// Creates an unpredictable, user-private temporary file path.
+    ///
+    /// Uses `FileManager.temporaryDirectory` (per-user `$TMPDIR`, which is mode
+    /// 0700 on macOS) rather than the world-writable `/tmp`, avoiding symlink
+    /// races and information disclosure on shared systems.
+    public static func secureTempPath(prefix: String = "sweep", suffix: String = "") -> String {
+        let name = "\(prefix)-\(UUID().uuidString)\(suffix)"
+        return FileManager.default.temporaryDirectory.appendingPathComponent(name).path
     }
 }

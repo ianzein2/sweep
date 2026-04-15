@@ -136,7 +136,9 @@ public final class SystemIntegrityScanner: Scanner {
         ]
 
         for tccPath in tccPaths {
-            let tempPath = "/tmp/anti-spy-si-tcc-\(UUID().uuidString).db"
+            // Private per-user tmp (mode 0700) instead of /tmp — TCC contents
+            // are sensitive and shouldn't be readable by other local users.
+            let tempPath = ShellRunner.secureTempPath(prefix: "sweep-si-tcc", suffix: ".db")
             let copyResult = ShellRunner.run("/bin/cp", arguments: [tccPath, tempPath])
             let queryPath = copyResult.success ? tempPath : tccPath
             defer { try? FileManager.default.removeItem(atPath: tempPath) }

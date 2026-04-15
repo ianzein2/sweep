@@ -102,12 +102,14 @@ public struct Remediator {
         }
 
         // Orphaned plists (Tier A — safe, the executable doesn't exist)
-        if title.contains("references missing executable"), let path = finding.path {
+        if title.contains("references missing executable"),
+           let path = finding.path,
+           let safePath = validatedLaunchdPlistPath(path) {
             return RemediationAction(
                 title: "Remove orphaned plist",
-                description: "rm \(path)",
+                description: "rm \(safePath)",
                 executable: "/bin/rm",
-                arguments: [path],
+                arguments: [safePath],
                 safe: true
             )
         }
@@ -139,5 +141,46 @@ public struct Remediator {
         guard getuid() == 0 else { return false }
         let result = ShellRunner.run(action.executable, arguments: action.arguments, timeout: 10)
         return result.success
+    }
+
+    /// Accepts only launchd plist paths inside the well-known LaunchAgents /
+    /// LaunchDaemons directories, with a `.plist` suffix and no path traversal
+    /// components. This is defense-in-depth in case a scanner ever produces a
+    /// tainted `finding.path` — we never want to hand an arbitrary path to `rm`.
+    private func validatedLaunchdPlistPath(_ rawPath: String) -> String? {
+        // Canonicalize symlinks and relative segments. `standardizedFileURL`
+        // resolves `..`/`.` without hitting the filesystem; the symlink resolve
+        // happens only if the file exists.
+        let url = URL(fileURLWithPath: rawPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let normalized = url.path
+
+        // Must be a plist
+        guard normalized.hasSuffix(".plist") else { return nil }
+
+        // Reject any lingering traversal tokens
+        if normalized.contains("/../") || normalized.hasSuffix("/..") {
+            return nil
+        }
+
+        let userHome = ShellRunner.realUserHome
+        let allowedPrefixes = [
+            "\(userHome)/Library/LaunchAgents/",
+            "/Library/LaunchAgents/",
+            "/Library/LaunchDaemons/",
+            "/System/Library/LaunchAgents/",
+            "/System/Library/LaunchDaemons/",
+        ]
+
+        guard allowedPrefixes.contains(where: { normalized.hasPrefix($0) }) else {
+            return nil
+        }
+
+        // The file name must not itself contain path separators or be empty
+        let filename = (normalized as NSString).lastPathComponent
+        guard !filename.isEmpty, !filename.contains("/") else { return nil }
+
+        return normalized
     }
 }
