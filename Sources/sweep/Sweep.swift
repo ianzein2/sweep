@@ -96,15 +96,14 @@ struct Sweep: ParsableCommand {
             }
         } else {
             // Parallel mode: run all scanners concurrently
-            let resultSlots = UnsafeMutableBufferPointer<ScanResult?>.allocate(capacity: totalScanners)
-            resultSlots.initialize(repeating: nil as ScanResult?)
-            defer { resultSlots.deallocate() }
+            // Use a lock-protected array instead of UnsafeMutableBufferPointer
+            var resultSlots = [ScanResult?](repeating: nil, count: totalScanners)
+            let slotsLock = NSLock()
 
             let spinner = Spinner(label: "Scanning", step: 0, total: totalScanners, isTTY: reporter.isTTY)
             if !json { spinner.start() }
 
             var completedCount = 0
-            let countLock = NSLock()
             let group = DispatchGroup()
             let queue = DispatchQueue(label: "sweep.scanners", attributes: .concurrent)
 
@@ -112,11 +111,11 @@ struct Sweep: ParsableCommand {
                 group.enter()
                 queue.async {
                     let result = scanner.scan(progress: nil)
+                    slotsLock.lock()
                     resultSlots[index] = result
-                    countLock.lock()
                     completedCount += 1
                     spinner.update("completed \(completedCount)/\(totalScanners)")
-                    countLock.unlock()
+                    slotsLock.unlock()
                     group.leave()
                 }
             }

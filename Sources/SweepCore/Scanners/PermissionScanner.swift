@@ -516,10 +516,21 @@ public final class PermissionScanner: Scanner {
     private func queryTCC(dbPath: String, errors: inout [String], label: String) -> [TCCGrant] {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
 
-        let tempPath = "/tmp/anti-spy-tcc-\(UUID().uuidString).db"
-        let copyResult = ShellRunner.run("/bin/cp", arguments: [dbPath, tempPath])
+        // Create temp file securely: use a unique path, reject pre-existing files/symlinks
+        let tempDir = NSTemporaryDirectory()
+        let tempPath = "\(tempDir)sweep-tcc-\(UUID().uuidString).db"
+        let fm = FileManager.default
+        // Ensure no pre-existing file or symlink at the temp path
+        if fm.fileExists(atPath: tempPath) {
+            try? fm.removeItem(atPath: tempPath)
+        }
+        let copyResult = ShellRunner.run("/bin/cp", arguments: ["-n", dbPath, tempPath])
         let queryPath = copyResult.success ? tempPath : dbPath
-        defer { try? FileManager.default.removeItem(atPath: tempPath) }
+        defer { try? fm.removeItem(atPath: tempPath) }
+        // Set restrictive permissions on the temp copy
+        if copyResult.success {
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempPath)
+        }
 
         var grants: [TCCGrant] = []
 

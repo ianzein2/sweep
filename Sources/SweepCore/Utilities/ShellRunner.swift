@@ -33,21 +33,38 @@ public enum ShellRunner {
             return ShellResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
         }
 
-        // Use DispatchSemaphore instead of busy-wait
+        // Read stdout and stderr concurrently BEFORE waiting for termination.
+        // Reading after wait causes deadlocks when pipe buffers fill (~64KB)
+        // because the child blocks on write while we block on termination.
+        var outData = Data()
+        var errData = Data()
+        let readGroup = DispatchGroup()
+
+        readGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            readGroup.leave()
+        }
+        readGroup.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            readGroup.leave()
+        }
+
         let semaphore = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in semaphore.signal() }
         let waitResult = semaphore.wait(timeout: .now() + timeout)
 
         if waitResult == .timedOut {
             process.terminate()
-            // Give it 1s to exit gracefully, then force kill
             Thread.sleep(forTimeInterval: 1.0)
             if process.isRunning { process.interrupt() }
+            // Drain remaining pipe data to avoid leaking file descriptors
+            readGroup.wait()
             return ShellResult(exitCode: -2, stdout: "", stderr: "Process timed out")
         }
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        readGroup.wait()
 
         return ShellResult(
             exitCode: process.terminationStatus,
@@ -65,7 +82,19 @@ public enum ShellRunner {
     /// Returns the real user's home directory, even when running under sudo.
     public static var realUserHome: String {
         if let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"] {
-            return "/Users/\(sudoUser)"
+            // Sanitize: SUDO_USER must be a simple username (alphanumeric, hyphen, underscore, period).
+            // Reject anything that could cause path traversal (e.g. "../../etc").
+            let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
+            let isValid = !sudoUser.isEmpty &&
+                          sudoUser.unicodeScalars.allSatisfy({ allowed.contains($0) }) &&
+                          !sudoUser.contains("..")
+            if isValid {
+                let home = "/Users/\(sudoUser)"
+                // Double-check the resolved path is actually under /Users/
+                if FileManager.default.fileExists(atPath: home) {
+                    return home
+                }
+            }
         }
         return NSHomeDirectory()
     }

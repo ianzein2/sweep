@@ -136,10 +136,18 @@ public final class SystemIntegrityScanner: Scanner {
         ]
 
         for tccPath in tccPaths {
-            let tempPath = "/tmp/anti-spy-si-tcc-\(UUID().uuidString).db"
-            let copyResult = ShellRunner.run("/bin/cp", arguments: [tccPath, tempPath])
+            let tempDir = NSTemporaryDirectory()
+            let tempPath = "\(tempDir)sweep-si-tcc-\(UUID().uuidString).db"
+            let fm = FileManager.default
+            if fm.fileExists(atPath: tempPath) {
+                try? fm.removeItem(atPath: tempPath)
+            }
+            let copyResult = ShellRunner.run("/bin/cp", arguments: ["-n", tccPath, tempPath])
             let queryPath = copyResult.success ? tempPath : tccPath
-            defer { try? FileManager.default.removeItem(atPath: tempPath) }
+            defer { try? fm.removeItem(atPath: tempPath) }
+            if copyResult.success {
+                try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tempPath)
+            }
 
             let query = "SELECT client FROM access WHERE service = 'kTCCServiceSystemPolicyAllFiles' AND auth_value = 2;"
             let result = ShellRunner.run("/usr/bin/sqlite3", arguments: ["-separator", "|", queryPath, query])

@@ -141,11 +141,43 @@ final class ScanEngine: ObservableObject {
         return nil
     }
 
+    /// Escapes a string for use inside an AppleScript `do shell script "..."` command.
+    /// Must handle all shell metacharacters: \, ", $, `, !, \n, etc.
+    private func shellEscapeForAppleScript(_ path: String) -> String {
+        // Use single quotes inside the shell command to prevent shell interpretation,
+        // and escape any single quotes within the path. Then wrap in double quotes
+        // for AppleScript string literal.
+        // Strategy: AppleScript sees "...", shell sees '...' inside that.
+        // We escape for AppleScript's double-quoted string first, then ensure
+        // the shell doesn't interpret anything.
+        var escaped = ""
+        for char in path {
+            switch char {
+            case "\\": escaped += "\\\\"
+            case "\"": escaped += "\\\""
+            case "$":  escaped += "\\$"      // prevent variable expansion
+            case "`":  escaped += "\\`"      // prevent command substitution
+            case "!":  escaped += "\\!"      // prevent history expansion
+            case "\n": escaped += " "        // newlines -> space (shouldn't appear in paths)
+            default:   escaped.append(char)
+            }
+        }
+        return escaped
+    }
+
     func scanAsAdmin() {
         guard !isScanning else { return }
 
         guard let cliBinary = findCLIBinary() else {
             // No CLI binary found — fall back to regular scan
+            startScan()
+            return
+        }
+
+        // Validate the CLI binary path contains only expected characters
+        // to prevent command injection through crafted filesystem paths
+        let pathChars = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/-_."))
+        guard cliBinary.unicodeScalars.allSatisfy({ pathChars.contains($0) }) else {
             startScan()
             return
         }
@@ -157,8 +189,7 @@ final class ScanEngine: ObservableObject {
         currentScanner = "Requesting admin privileges..."
 
         Task.detached { [weak self] in
-            let escaped = cliBinary.replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
+            let escaped = self?.shellEscapeForAppleScript(cliBinary) ?? cliBinary
 
             await MainActor.run { [weak self] in
                 self?.currentScanner = "Scanning as admin..."

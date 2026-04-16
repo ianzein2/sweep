@@ -103,6 +103,36 @@ public struct Remediator {
 
         // Orphaned plists (Tier A — safe, the executable doesn't exist)
         if title.contains("references missing executable"), let path = finding.path {
+            // Validate the path is actually a plist in an expected LaunchAgent/Daemon directory
+            // to prevent arbitrary file deletion via symlinks or crafted findings.
+            let allowedDirs = [
+                "/Library/LaunchAgents/",
+                "/Library/LaunchDaemons/",
+            ]
+            let home = ShellRunner.realUserHome
+            let userLaunchAgents = "\(home)/Library/LaunchAgents/"
+
+            let isInAllowedDir = allowedDirs.contains(where: { path.hasPrefix($0) }) ||
+                                 path.hasPrefix(userLaunchAgents)
+            let isPlist = path.hasSuffix(".plist")
+
+            // Reject symlinks — resolve the real path and verify it's still in an allowed dir
+            let resolvedPath = (try? FileManager.default.destinationOfSymbolicLink(atPath: path)) ?? path
+            let resolvedIsAllowed = allowedDirs.contains(where: { resolvedPath.hasPrefix($0) }) ||
+                                    resolvedPath.hasPrefix(userLaunchAgents)
+            let isSymlink = resolvedPath != path
+
+            guard isInAllowedDir && isPlist && !isSymlink && resolvedIsAllowed else {
+                // Path is suspicious — don't auto-delete, require manual confirmation
+                return RemediationAction(
+                    title: "Remove orphaned plist (manual review required)",
+                    description: "Path is outside expected directories or is a symlink: \(path)",
+                    executable: "/bin/rm",
+                    arguments: [path],
+                    safe: false
+                )
+            }
+
             return RemediationAction(
                 title: "Remove orphaned plist",
                 description: "rm \(path)",

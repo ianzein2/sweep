@@ -20,15 +20,38 @@ public struct BaselineReport: Codable {
 
     public func save(to path: String) throws {
         let dir = URL(fileURLWithPath: path).deletingLastPathComponent().path
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+
+        // Set restrictive permissions on the directory (owner-only)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
+
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
         try data.write(to: URL(fileURLWithPath: path))
+
+        // Set restrictive permissions on the baseline file (owner read/write only)
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
     }
 
     public static func load(from path: String) throws -> BaselineReport {
+        let fm = FileManager.default
+
+        // Verify the baseline file isn't a symlink (could point to attacker-controlled data)
+        let attrs = try fm.attributesOfItem(atPath: path)
+        if attrs[.type] as? FileAttributeType == .typeSymbolicLink {
+            throw NSError(domain: "Sweep", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Baseline file is a symlink — refusing to load (possible tampering)"])
+        }
+
+        // Warn if file is world-writable (could have been tampered with)
+        if let perms = attrs[.posixPermissions] as? Int, perms & 0o002 != 0 {
+            throw NSError(domain: "Sweep", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Baseline file is world-writable — refusing to load (possible tampering)"])
+        }
+
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
