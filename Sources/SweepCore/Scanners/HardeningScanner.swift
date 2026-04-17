@@ -40,6 +40,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking password hints")
         checkPasswordHints(findings: &findings, errors: &errors)
 
+        progress?.update("checking password-after-sleep")
+        checkPasswordAfterSleep(findings: &findings, errors: &errors)
+
+        progress?.update("checking Internet Sharing")
+        checkInternetSharing(findings: &findings, errors: &errors)
+
+        progress?.update("checking printer / media / content sharing")
+        checkExtraSharingServices(findings: &findings, errors: &errors)
+
+        progress?.update("checking Lockdown Mode")
+        checkLockdownMode(findings: &findings, errors: &errors)
+
+        progress?.update("checking Rapid Security Response")
+        checkRapidSecurityResponse(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -290,6 +305,167 @@ public final class HardeningScanner: Scanner {
                     detail: "After \(retries) failed attempt(s), login screen shows password hint",
                     path: nil,
                     remediation: "Disable: sudo defaults write /Library/Preferences/com.apple.loginwindow RetriesUntilHint -int 0"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Password Required After Sleep / Screensaver
+
+    private func checkPasswordAfterSleep(findings: inout [Finding], errors: inout [String]) {
+        // The askForPassword and askForPasswordDelay settings control whether a password
+        // is required when the Mac wakes from sleep or screensaver — a critical lock-screen control.
+        let askResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.screensaver", "askForPassword"
+        ], timeout: 5)
+
+        if askResult.success {
+            let value = askResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "No password required after sleep or screen saver",
+                    detail: "Anyone who wakes the Mac can access your session without a password",
+                    path: nil,
+                    remediation: "Enable: System Settings > Lock Screen > Require password after screen saver begins"
+                ))
+                return
+            }
+        }
+
+        // Delay: 0 = immediate; values above 60s are risky. Touch ID/Apple Watch users may keep this short intentionally.
+        let delayResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.screensaver", "askForPasswordDelay"
+        ], timeout: 5)
+        if delayResult.success,
+           let seconds = Int(delayResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)),
+           seconds > 60 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Password grace period after sleep is long (\(seconds)s)",
+                detail: "Mac waits \(seconds) seconds after sleep/screensaver before requiring a password",
+                path: nil,
+                remediation: "Reduce to Immediately or 5 seconds: System Settings > Lock Screen"
+            ))
+        }
+    }
+
+    // MARK: - Internet Sharing
+
+    private func checkInternetSharing(findings: inout [Finding], errors: inout [String]) {
+        // Internet Sharing turns the Mac into a router/hotspot — a high-risk sharing service.
+        // Driven by /Library/Preferences/SystemConfiguration/com.apple.nat.plist
+        let natPlist = "/Library/Preferences/SystemConfiguration/com.apple.nat.plist"
+        guard let data = FileManager.default.contents(atPath: natPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let nat = plist["NAT"] as? [String: Any] else { return }
+
+        let enabled = (nat["Enabled"] as? Int ?? 0) == 1 ||
+                      (nat["Enabled"] as? Bool ?? false)
+        if enabled {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Internet Sharing is enabled",
+                detail: "Mac is sharing its internet connection — other devices can route through this machine",
+                path: natPlist,
+                remediation: "Disable: System Settings > General > Sharing > Internet Sharing"
+            ))
+        }
+    }
+
+    // MARK: - Additional Sharing Services
+
+    private func checkExtraSharingServices(findings: inout [Finding], errors: inout [String]) {
+        // Listing launchctl once and reusing the output is faster than repeated spawns.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let launchList = launchctl.success ? launchctl.stdout : ""
+
+        let extras: [(label: String, name: String, detail: String, severity: Severity)] = [
+            ("com.apple.AssetCacheLocatorService",
+             "Content Caching",
+             "Content Caching shares Apple software updates/iCloud data to LAN devices",
+             .medium),
+            ("com.apple.amp.mediasharingd",
+             "Media Sharing",
+             "Music/Photos libraries are being shared with nearby devices or Home Sharing",
+             .low),
+            ("com.apple.printtool.daemon",
+             "Printer Sharing",
+             "Printer Sharing is active — printers attached to this Mac are network-accessible",
+             .medium),
+            ("org.cups.cupsd",
+             "CUPS print service",
+             "CUPS is running — printer sharing may be exposed on the network",
+             .low),
+        ]
+
+        for service in extras where launchList.contains(service.label) {
+            findings.append(Finding(
+                severity: service.severity, category: .hardening,
+                title: "\(service.name) is active",
+                detail: service.detail,
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > Sharing"
+            ))
+        }
+
+        // Bluetooth Sharing is controlled by a preference, not launchd service name
+        let btShareResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "PANServices"
+        ], timeout: 5)
+        if btShareResult.success &&
+           btShareResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Bluetooth Sharing (PAN) is enabled",
+                detail: "Personal Area Network via Bluetooth is active — nearby devices may route through this Mac",
+                path: nil,
+                remediation: "Disable: System Settings > General > Sharing > Bluetooth Sharing"
+            ))
+        }
+    }
+
+    // MARK: - Lockdown Mode
+
+    private func checkLockdownMode(findings: inout [Finding], errors: inout [String]) {
+        // Lockdown Mode is an opt-in hardening feature for users at high risk of targeted
+        // attacks (journalists, activists, executives). We don't penalize its absence — most users
+        // don't need it — but we surface its state as informational.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.security.LockdownMode", "LDMGlobalEnabled"
+        ], timeout: 5)
+
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Lockdown Mode is enabled",
+                    detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
+                    path: nil,
+                    remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Rapid Security Response
+
+    private func checkRapidSecurityResponse(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura+ supports Rapid Security Responses (RSRs) — out-of-band patches for
+        // actively exploited bugs. If automatic install is disabled, the Mac may miss emergency fixes.
+        let rsrInstall = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "CriticalUpdateInstall"
+        ], timeout: 5)
+        if rsrInstall.success {
+            let value = rsrInstall.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Automatic install of security responses is disabled",
+                    detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
+                    path: nil,
+                    remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
         }

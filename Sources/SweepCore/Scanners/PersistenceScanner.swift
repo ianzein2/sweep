@@ -66,6 +66,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking periodic scripts")
         scanPeriodicScripts(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH authorized_keys")
+        scanSSHAuthorizedKeys(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudoers drop-ins")
+        scanSudoers(findings: &findings, errors: &errors)
+
+        progress?.update("checking PAM configuration")
+        scanPAMConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking emond rules")
+        scanEmondRules(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -493,6 +505,176 @@ public final class PersistenceScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - SSH authorized_keys
+
+    private func scanSSHAuthorizedKeys(findings: inout [Finding], errors: inout [String]) {
+        // Attacker-added keys in ~/.ssh/authorized_keys allow persistent remote access
+        // without a password, bypassing every other login control.
+        let home = ShellRunner.realUserHome
+        let keyFiles = [
+            "\(home)/.ssh/authorized_keys",
+            "\(home)/.ssh/authorized_keys2",
+            "/var/root/.ssh/authorized_keys",
+            "/var/root/.ssh/authorized_keys2",
+        ]
+
+        for keyFile in keyFiles {
+            guard FileManager.default.fileExists(atPath: keyFile),
+                  let content = try? String(contentsOfFile: keyFile, encoding: .utf8) else { continue }
+
+            // Each non-comment, non-blank line is one authorized key. Report every key so the
+            // user can review what has remote SSH access to their Mac.
+            let keyLines = content.split(separator: "\n").filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+            }
+            if keyLines.isEmpty { continue }
+
+            // Extract the comment field of each key (last whitespace-delimited token) for context
+            let comments = keyLines.compactMap { line -> String? in
+                let parts = line.split(separator: " ", omittingEmptySubsequences: true)
+                return parts.count >= 3 ? String(parts.last!) : nil
+            }
+            let commentList = comments.prefix(3).joined(separator: ", ")
+
+            // Flag risky options inline with the key (forced command is a classic reverse-shell pattern)
+            let hasForcedCommand = keyLines.contains { $0.contains("command=") }
+
+            let severity: Severity = hasForcedCommand ? .high : .medium
+            findings.append(Finding(
+                severity: severity, category: .persistence,
+                title: "SSH authorized key present (\(keyLines.count) key\(keyLines.count == 1 ? "" : "s"))",
+                detail: "File: \(keyFile)\(commentList.isEmpty ? "" : ", comments: \(commentList)")\(hasForcedCommand ? " — contains command= forcing" : "")",
+                path: keyFile,
+                remediation: "Review each key — remove anything you don't recognize: nano \(keyFile)"
+            ))
+        }
+    }
+
+    // MARK: - Sudoers
+
+    private func scanSudoers(findings: inout [Finding], errors: inout [String]) {
+        // NOPASSWD: ALL in /etc/sudoers.d is a common privilege-escalation backdoor.
+        // We inspect both the main sudoers file and any drop-ins.
+        let sudoersPaths = ["/etc/sudoers"]
+        var allPaths = sudoersPaths
+
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                allPaths.append("/etc/sudoers.d/\(entry)")
+            }
+        }
+
+        for path in allPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            let lines = content.split(separator: "\n")
+            for (idx, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                // NOPASSWD lines grant passwordless root — always flag for review.
+                if trimmed.uppercased().contains("NOPASSWD") {
+                    // The default admin group already allows sudo with a password; NOPASSWD removes that gate.
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Passwordless sudo entry in \(URL(fileURLWithPath: path).lastPathComponent)",
+                        detail: "Line \(idx + 1): \(String(trimmed.prefix(120)))",
+                        path: path,
+                        remediation: "Inspect and remove if not expected: sudo visudo -f \(path)"
+                    ))
+                }
+            }
+        }
+
+        // A sudoers.d drop-in owned by a non-root user is a privilege-escalation indicator.
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") {
+                let entryPath = "/etc/sudoers.d/\(entry)"
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: entryPath),
+                   let ownerId = attrs[.ownerAccountID] as? Int, ownerId != 0 {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "sudoers.d entry not owned by root",
+                        detail: "\(entry) is owned by UID \(ownerId) — a non-root writable sudoers file is a privilege escalation risk",
+                        path: entryPath,
+                        remediation: "Inspect, then reset ownership: sudo chown root:wheel \(entryPath)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - PAM configuration
+
+    private func scanPAMConfig(findings: inout [Finding], errors: inout [String]) {
+        // PAM modules under /etc/pam.d/ gate login, sudo, and screensaver unlocks. Rogue modules
+        // (pam_permit.so with auth sufficient, for example) can bypass authentication entirely.
+        let pamFiles = ["/etc/pam.d/sudo", "/etc/pam.d/login", "/etc/pam.d/authorization",
+                        "/etc/pam.d/screensaver", "/etc/pam.d/su"]
+
+        let suspiciousPatterns: [(pattern: String, reason: String)] = [
+            ("pam_permit.so", "pam_permit.so grants access unconditionally"),
+            ("pam_deny.so", "pam_deny.so anywhere other than final fallback can signal tampering"),
+            ("pam_tid.so", "pam_tid.so enables Touch ID for this action"),  // benign but noteworthy
+        ]
+
+        // Baseline: the stock contents of these files on macOS are small (~10 lines). Flag unusual growth too.
+        for file in pamFiles {
+            guard let content = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
+
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                for (pattern, reason) in suspiciousPatterns {
+                    if trimmed.contains(pattern) {
+                        // Touch ID (pam_tid.so) is often manually added by users for convenience — low severity.
+                        let isTouchID = pattern == "pam_tid.so"
+                        if trimmed.contains("auth") && trimmed.contains("sufficient") && trimmed.contains(pattern) && !isTouchID {
+                            findings.append(Finding(
+                                severity: .high, category: .persistence,
+                                title: "Suspicious PAM rule in \(URL(fileURLWithPath: file).lastPathComponent)",
+                                detail: "Rule: \(trimmed) — \(reason)",
+                                path: file,
+                                remediation: "Review and restore the stock PAM file if this was not intentionally added"
+                            ))
+                        } else if isTouchID {
+                            findings.append(Finding(
+                                severity: .low, category: .hardening,
+                                title: "Touch ID enabled for \(URL(fileURLWithPath: file).lastPathComponent)",
+                                detail: "pam_tid.so is configured — this is convenience, not spyware, but verify the edit is yours",
+                                path: file,
+                                remediation: "No action needed if you added this intentionally"
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - emond rules
+
+    private func scanEmondRules(findings: inout [Finding], errors: inout [String]) {
+        // emond (Event Monitor Daemon) is a legacy, deprecated persistence mechanism still available
+        // on macOS. The rules directory is empty by default; any file here runs actions in response
+        // to system events and is a strong spyware indicator.
+        let rulesDir = "/etc/emond.d/rules"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: rulesDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") && entry != "SampleRules.plist" {
+            let path = "\(rulesDir)/\(entry)"
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "emond rule installed (deprecated persistence)",
+                detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
+                path: path,
+                remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
         }
     }
 

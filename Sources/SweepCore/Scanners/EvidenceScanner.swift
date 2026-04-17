@@ -55,6 +55,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking exfiltration paths")
         scanForExfiltration(home: home, findings: &findings, errors: &errors)
 
+        // 6. Check for crypto wallet / browser credential theft — the signature payload
+        //    of AMOS-family infostealers (2023-2025).
+        progress?.update("checking crypto wallet / credential theft")
+        scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -419,6 +424,131 @@ public final class EvidenceScanner: Scanner {
                     path: url.path,
                     remediation: "May be staged exfiltration data — inspect contents"
                 ))
+            }
+        }
+    }
+
+    // MARK: - Credential / Crypto Wallet Theft
+
+    /// Filenames/paths that modern macOS infostealers (AMOS, Banshee, Poseidon, Realst, etc.)
+    /// explicitly target. Finding copies of these files staged in /tmp or hidden directories
+    /// is strong evidence of an active stealer campaign on the machine.
+    private let walletFingerprints: [(label: String, marker: String)] = [
+        ("MetaMask", "nkbihfbeogaeaoehlefnkodbefgpgknn"),   // Chromium extension dir
+        ("Phantom",  "bfnaelmomeimhlpmgjnjophhpkkoljpa"),
+        ("Coinbase Wallet", "hnfanknocfeofbddgcijnmhnfnkdnaad"),
+        ("Ronin",    "fnjhmkhhmkbjkkabndcnnogagogbneec"),
+        ("TronLink", "ibnejdfjmmkpcnlpebklmnkoeoihofec"),
+        ("Exodus",   "Exodus"),
+        ("Electrum", ".electrum"),
+        ("Atomic Wallet", "Atomic"),
+        ("Ledger Live", "Ledger Live"),
+        ("Trezor Suite", "@trezor"),
+        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+    ]
+
+    /// Browser credential stores AMOS-family stealers copy.
+    private let browserCredStoreNames: Set<String> = [
+        "Login Data", "Web Data", "Cookies", "Local State",
+        "key4.db", "logins.json", "cookies.sqlite",  // Firefox
+        "Keychains", "login.keychain-db",            // macOS keychain copies
+    ]
+
+    private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let searchRoots = ["/tmp", "/private/tmp", "/var/tmp",
+                           "\(home)/Library/Application Support",
+                           "\(home)/.local",
+                           "\(home)/.config"]
+
+        // Allowed locations where these files SHOULD appear. Anything outside is suspect.
+        let legitRoots: [String] = [
+            "\(home)/Library/Application Support/Google/Chrome",
+            "\(home)/Library/Application Support/BraveSoftware",
+            "\(home)/Library/Application Support/Microsoft Edge",
+            "\(home)/Library/Application Support/Chromium",
+            "\(home)/Library/Application Support/Arc",
+            "\(home)/Library/Application Support/Firefox",
+            "\(home)/Library/Application Support/com.operasoftware.Opera",
+            "\(home)/Library/Keychains",
+            "/Library/Keychains",
+        ]
+
+        for root in searchRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 5 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let filePath = url.path
+
+                // A copy of a browser credential store outside of its legitimate browser directory
+                // is high-confidence stealer evidence.
+                let filename = url.lastPathComponent
+                if browserCredStoreNames.contains(filename) {
+                    let inLegitPath = legitRoots.contains(where: { filePath.hasPrefix($0) })
+                    if !inLegitPath {
+                        // Only flag if the file is non-trivially sized (real credential stores are at least a few KB)
+                        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                        if size > 512 {
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "Browser credential store copied to non-browser location",
+                                detail: "File \"\(filename)\" at \(filePath) — infostealers (AMOS, Banshee, Poseidon) copy these files before uploading them",
+                                path: filePath,
+                                remediation: "Rotate browser-saved passwords and investigate the process that created this file"
+                            ))
+                        }
+                    }
+                }
+
+                // Crypto wallet references staged outside of the wallet's real location
+                for fingerprint in walletFingerprints {
+                    if filename.contains(fingerprint.marker) || filePath.contains("/\(fingerprint.marker)/") {
+                        // A wallet extension dir inside /tmp or a hidden dir = staged for theft.
+                        let isStaging = filePath.hasPrefix("/tmp") || filePath.hasPrefix("/private/tmp") ||
+                                        filePath.hasPrefix("/var/tmp") ||
+                                        filePath.split(separator: "/").contains(where: {
+                                            let s = String($0)
+                                            return s.hasPrefix(".") && s != ".local" && s != ".config"
+                                        })
+                        if isStaging {
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "Crypto wallet files staged in unusual location",
+                                detail: "\(fingerprint.label) data found at \(filePath) — stealers stage wallet data here before exfiltration",
+                                path: filePath,
+                                remediation: "Move funds to a new wallet and investigate the process that placed this file"
+                            ))
+                            break
+                        }
+                    }
+                }
+            }
+        }
+
+        // Watch for active invocations of `security dump-keychain` — a stealer hallmark.
+        // Looking at currently-running processes is cheaper than parsing log history.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        if psResult.success {
+            for line in psResult.stdout.split(separator: "\n") {
+                let lineStr = String(line)
+                if lineStr.contains("security") && lineStr.contains("dump-keychain") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Process dumping the macOS keychain",
+                        detail: "Active: \(String(lineStr.prefix(160)))",
+                        path: nil,
+                        remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
             }
         }
     }
