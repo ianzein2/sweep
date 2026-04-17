@@ -33,21 +33,37 @@ public enum ShellRunner {
             return ShellResult(exitCode: -1, stdout: "", stderr: error.localizedDescription)
         }
 
-        // Use DispatchSemaphore instead of busy-wait
+        // Read pipe data concurrently to avoid deadlock when pipe buffer fills
+        var outData = Data()
+        var errData = Data()
+        let dataQueue = DispatchQueue(label: "sweep.shellrunner.pipe")
+        let readGroup = DispatchGroup()
+
+        readGroup.enter()
+        DispatchQueue.global().async {
+            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            dataQueue.sync { outData = data }
+            readGroup.leave()
+        }
+        readGroup.enter()
+        DispatchQueue.global().async {
+            let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+            dataQueue.sync { errData = data }
+            readGroup.leave()
+        }
+
         let semaphore = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in semaphore.signal() }
         let waitResult = semaphore.wait(timeout: .now() + timeout)
 
         if waitResult == .timedOut {
             process.terminate()
-            // Give it 1s to exit gracefully, then force kill
             Thread.sleep(forTimeInterval: 1.0)
             if process.isRunning { process.interrupt() }
             return ShellResult(exitCode: -2, stdout: "", stderr: "Process timed out")
         }
 
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        readGroup.wait()
 
         return ShellResult(
             exitCode: process.terminationStatus,
@@ -64,8 +80,15 @@ public enum ShellRunner {
 
     /// Returns the real user's home directory, even when running under sudo.
     public static var realUserHome: String {
-        if let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"] {
-            return "/Users/\(sudoUser)"
+        if let sudoUser = ProcessInfo.processInfo.environment["SUDO_USER"],
+           !sudoUser.isEmpty,
+           !sudoUser.contains("/"),
+           !sudoUser.contains(".."),
+           !sudoUser.contains("\0") {
+            let homePath = "/Users/\(sudoUser)"
+            if FileManager.default.fileExists(atPath: homePath) {
+                return homePath
+            }
         }
         return NSHomeDirectory()
     }

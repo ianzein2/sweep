@@ -174,9 +174,8 @@ public final class DeepScanner: Scanner {
             }
         }
 
-        // Check if DNS-over-HTTPS proxy is running (could be legitimate or malicious)
-        let dohResult = ShellRunner.run("/bin/sh", arguments: [
-            "-c", "lsof -i :853 -n -P 2>/dev/null | head -5"
+        let dohResult = ShellRunner.run("/usr/sbin/lsof", arguments: [
+            "-i", ":853", "-n", "-P", "-w"
         ], timeout: 5)
         if dohResult.success && !dohResult.stdout.isEmpty && !dohResult.stdout.contains("COMMAND") {
             // Something is listening on DNS-over-TLS port

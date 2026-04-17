@@ -135,9 +135,22 @@ public struct Remediator {
         return nil
     }
 
+    private static let allowedExecutablePrefixes = [
+        "/usr/", "/bin/", "/sbin/", "/Library/",
+        "/System/", "/usr/libexec/",
+    ]
+
     private func execute(_ action: RemediationAction) -> Bool {
         guard getuid() == 0 else { return false }
-        let result = ShellRunner.run(action.executable, arguments: action.arguments, timeout: 10)
+
+        let execPath = action.executable
+        guard execPath.hasPrefix("/"),
+              Remediator.allowedExecutablePrefixes.contains(where: { execPath.hasPrefix($0) }),
+              FileManager.default.isExecutableFile(atPath: execPath) else {
+            return false
+        }
+
+        let result = ShellRunner.run(execPath, arguments: action.arguments, timeout: 10)
         return result.success
     }
 }

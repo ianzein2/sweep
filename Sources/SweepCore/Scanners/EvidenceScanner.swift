@@ -66,26 +66,38 @@ public final class EvidenceScanner: Scanner {
     // MARK: - Open File Handles (what's being written RIGHT NOW)
 
     private func scanOpenFileHandles(findings: inout [Finding], errors: inout [String]) {
-        // Find processes writing to image or log files in hidden/unusual locations
-        // lsof +D is too slow. Use lsof with write mode filter.
-        let result = ShellRunner.run("/bin/sh", arguments: [
-            "-c",
-            """
-            lsof -w +c 0 2>/dev/null | awk '$4 ~ /[0-9]+w/ || $4 ~ /[0-9]+u/' | \
-            grep -iE '\\.(png|jpg|jpeg|log|txt|dat|db|sqlite|bmp|tiff|mp4|mov)$' | \
-            grep -v '/dev/' | grep -v '/System/' | grep -v 'com.apple.' | \
-            head -50
-            """
+        let result = ShellRunner.run("/usr/sbin/lsof", arguments: [
+            "-w", "+c", "0"
         ], timeout: 20)
 
         guard result.success && !result.stdout.isEmpty else { return }
 
+        let targetExtensions: Set<String> = [
+            "png", "jpg", "jpeg", "log", "txt", "dat", "db", "sqlite", "bmp", "tiff", "mp4", "mov"
+        ]
+
         let lines = result.stdout.split(separator: "\n")
+        var matchCount = 0
         for line in lines {
-            let parts = String(line).split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true)
+            if matchCount >= 50 { break }
+            let lineStr = String(line)
+
+            // Filter for write/read-write file descriptors
+            let parts = lineStr.split(separator: " ", maxSplits: 8, omittingEmptySubsequences: true)
             guard parts.count >= 9 else { continue }
-            let processName = String(parts[0])
+            let fdField = String(parts[3])
+            guard fdField.hasSuffix("w") || fdField.hasSuffix("u") else { continue }
+
             let filePath = String(parts.last ?? "")
+            guard !filePath.contains("/dev/"),
+                  !filePath.contains("/System/"),
+                  !filePath.contains("com.apple.") else { continue }
+
+            let ext = URL(fileURLWithPath: filePath).pathExtension.lowercased()
+            guard targetExtensions.contains(ext) else { continue }
+
+            matchCount += 1
+            let processName = String(parts[0])
 
             // Skip known safe processes
             if processName.hasPrefix("com.apple.") { continue }
@@ -147,10 +159,13 @@ public final class EvidenceScanner: Scanner {
                 options: [.skipsPackageDescendants]
             ) else { continue }
 
-            // Track image clusters per directory
             var dirImageCounts: [String: (count: Int, totalSize: Int, newest: Date, examples: [String])] = [:]
+            var filesProcessed = 0
+            let maxFiles = 100_000
 
             for case let url as URL in enumerator {
+                filesProcessed += 1
+                if filesProcessed > maxFiles { break }
                 if enumerator.level > 4 {
                     enumerator.skipDescendants()
                     continue
@@ -250,7 +265,12 @@ public final class EvidenceScanner: Scanner {
                 options: [.skipsPackageDescendants]
             ) else { continue }
 
+            var filesProcessed = 0
+            let maxFiles = 100_000
+
             for case let url as URL in enumerator {
+                filesProcessed += 1
+                if filesProcessed > maxFiles { break }
                 if enumerator.level > 4 {
                     enumerator.skipDescendants()
                     continue

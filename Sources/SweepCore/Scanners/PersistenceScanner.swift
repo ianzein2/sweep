@@ -75,7 +75,8 @@ public final class PersistenceScanner: Scanner {
     }
 
     private func analyzePlist(at path: String, dirLabel: String, findings: inout [Finding], errors: inout [String]) {
-        guard let data = FileManager.default.contents(atPath: path) else { return }
+        guard let data = FileManager.default.contents(atPath: path),
+              data.count < 5_000_000 else { return }
 
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
             return

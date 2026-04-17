@@ -136,10 +136,15 @@ public final class SystemIntegrityScanner: Scanner {
         ]
 
         for tccPath in tccPaths {
-            let tempPath = "/tmp/anti-spy-si-tcc-\(UUID().uuidString).db"
-            let copyResult = ShellRunner.run("/bin/cp", arguments: [tccPath, tempPath])
-            let queryPath = copyResult.success ? tempPath : tccPath
+            let tempDir = NSTemporaryDirectory()
+            let tempPath = "\(tempDir)sweep-si-tcc-\(UUID().uuidString).db"
             defer { try? FileManager.default.removeItem(atPath: tempPath) }
+            let copyResult = ShellRunner.run("/bin/cp", arguments: [tccPath, tempPath])
+            if copyResult.success {
+                FileManager.default.createFile(atPath: tempPath, contents: nil,
+                    attributes: [.posixPermissions: 0o600])
+            }
+            let queryPath = copyResult.success ? tempPath : tccPath
 
             let query = "SELECT client FROM access WHERE service = 'kTCCServiceSystemPolicyAllFiles' AND auth_value = 2;"
             let result = ShellRunner.run("/usr/bin/sqlite3", arguments: ["-separator", "|", queryPath, query])
@@ -254,6 +259,7 @@ public final class SystemIntegrityScanner: Scanner {
             let plistPath = "\(xpPath)/Contents/Info.plist"
             guard fm.fileExists(atPath: plistPath),
                   let data = fm.contents(atPath: plistPath),
+                  data.count < 5_000_000,
                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { continue }
 
             xprotectFound = true

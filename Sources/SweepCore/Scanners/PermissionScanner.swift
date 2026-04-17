@@ -188,6 +188,7 @@ public final class PermissionScanner: Scanner {
         for path in paths {
             let plistPath = "\(path)/Contents/Info.plist"
             guard let data = FileManager.default.contents(atPath: plistPath),
+                  data.count < 5_000_000,
                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
                   let bundleId = plist["CFBundleIdentifier"] as? String else { continue }
             if bundleIds.contains(bundleId) {
@@ -516,10 +517,15 @@ public final class PermissionScanner: Scanner {
     private func queryTCC(dbPath: String, errors: inout [String], label: String) -> [TCCGrant] {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
 
-        let tempPath = "/tmp/anti-spy-tcc-\(UUID().uuidString).db"
-        let copyResult = ShellRunner.run("/bin/cp", arguments: [dbPath, tempPath])
-        let queryPath = copyResult.success ? tempPath : dbPath
+        let tempDir = NSTemporaryDirectory()
+        let tempPath = "\(tempDir)sweep-tcc-\(UUID().uuidString).db"
         defer { try? FileManager.default.removeItem(atPath: tempPath) }
+        let copyResult = ShellRunner.run("/bin/cp", arguments: [dbPath, tempPath])
+        if copyResult.success {
+            FileManager.default.createFile(atPath: tempPath, contents: nil,
+                attributes: [.posixPermissions: 0o600])
+        }
+        let queryPath = copyResult.success ? tempPath : dbPath
 
         var grants: [TCCGrant] = []
 

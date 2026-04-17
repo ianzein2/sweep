@@ -78,18 +78,19 @@ public final class BrowserScanner: Scanner {
         for locale in ["en", "en_US"] {
             let messagesPath = "\(extVersionDir)/_locales/\(locale)/messages.json"
             if let data = fm.contents(atPath: messagesPath),
+               data.count < 2_000_000,
                let messages = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let entry = messages[key] as? [String: Any],
                let message = entry["message"] as? String {
                 return message
             }
         }
-        // Try first available locale
         let localesDir = "\(extVersionDir)/_locales"
         if let locales = try? fm.contentsOfDirectory(atPath: localesDir),
            let first = locales.first {
             let messagesPath = "\(localesDir)/\(first)/messages.json"
             if let data = fm.contents(atPath: messagesPath),
+               data.count < 2_000_000,
                let messages = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let entry = messages[key] as? [String: Any],
                let message = entry["message"] as? String {
@@ -141,6 +142,7 @@ public final class BrowserScanner: Scanner {
                     let extVersionDir = "\(extDir)/\(latest)"
                     let manifestPath = "\(extVersionDir)/manifest.json"
                     guard let data = fm.contents(atPath: manifestPath),
+                          data.count < 5_000_000,
                           let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
                     var name = manifest["name"] as? String ?? "Unknown"
@@ -247,6 +249,7 @@ public final class BrowserScanner: Scanner {
         for profile in profiles {
             let addonsPath = "\(firefoxPath)/\(profile)/extensions.json"
             guard let data = fm.contents(atPath: addonsPath),
+                  data.count < 10_000_000,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let addons = json["addons"] as? [[String: Any]] else { continue }
 
