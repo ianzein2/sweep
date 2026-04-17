@@ -4,6 +4,19 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
+    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
+    // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
+    // reported malicious extension families and IOCs.
+    private let suspiciousEditorExtKeywords: [String] = [
+        "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
+        "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
+        "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+    ]
+
+    private let dangerousEditorExtPatterns: [String] = [
+        "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -45,6 +58,11 @@ public final class BrowserScanner: Scanner {
         // 3. Firefox extensions
         progress?.update("scanning Firefox extensions")
         scanFirefoxExtensions(findings: &findings, errors: &errors)
+
+        // 4. Code editor extensions (VSCode / Cursor / Windsurf) — recently targeted by
+        //    malicious marketplace extensions that steal cookies, keychains, and wallets.
+        progress?.update("scanning code editor extensions")
+        scanEditorExtensions(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -285,5 +303,120 @@ public final class BrowserScanner: Scanner {
                 }
             }
         }
+    }
+
+    // MARK: - Code Editor Extensions (VSCode, Cursor, Windsurf, etc.)
+
+    private func scanEditorExtensions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let editors: [(name: String, dir: String)] = [
+            ("VSCode", "\(home)/.vscode/extensions"),
+            ("VSCode Insiders", "\(home)/.vscode-insiders/extensions"),
+            ("Cursor", "\(home)/.cursor/extensions"),
+            ("Windsurf", "\(home)/.windsurf/extensions"),
+            ("VSCodium", "\(home)/.vscode-oss/extensions"),
+        ]
+
+        let fm = FileManager.default
+
+        for (editorName, extDir) in editors {
+            guard fm.fileExists(atPath: extDir),
+                  let entries = try? fm.contentsOfDirectory(atPath: extDir) else { continue }
+
+            for entry in entries {
+                // VSCode-style extensions live in "publisher.name-version" directories
+                guard !entry.hasPrefix(".") else { continue }
+                let extPath = "\(extDir)/\(entry)"
+                let packagePath = "\(extPath)/package.json"
+
+                guard let data = fm.contents(atPath: packagePath),
+                      let pkg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let publisher = (pkg["publisher"] as? String) ?? "unknown"
+                let displayName = (pkg["displayName"] as? String) ?? (pkg["name"] as? String) ?? entry
+                let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
+                let combined = "\(displayName) \(extId) \(entry)".lowercased()
+
+                // Direct keyword match against known malicious families
+                if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension matches known malicious family",
+                        detail: "Extension: \(displayName) (\(extId)) — matched pattern \"\(kw)\"",
+                        path: extPath,
+                        remediation: "Remove this extension in \(editorName) and investigate your keychain/wallet activity"
+                    ))
+                    continue
+                }
+
+                // Name-based heuristic
+                if let kw = dangerousEditorExtPatterns.first(where: { combined.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension with spy-like name",
+                        detail: "Extension: \(displayName) (\(extId)) — name contains \"\(kw)\"",
+                        path: extPath,
+                        remediation: "Remove in \(editorName) > Extensions"
+                    ))
+                    continue
+                }
+
+                // Scan for suspicious runtime behaviors in the extension bundle
+                let scriptResult = scanExtensionScripts(extPath: extPath)
+                if scriptResult.hasRemoteExec || scriptResult.hasShellExec {
+                    findings.append(Finding(
+                        severity: scriptResult.hasRemoteExec ? .high : .medium,
+                        category: .suspiciousFile,
+                        title: "\(editorName) extension runs shell commands / remote code",
+                        detail: "Extension: \(displayName) (\(extId))" +
+                            (scriptResult.hasRemoteExec ? " — downloads and executes remote code" : "") +
+                            (scriptResult.hasShellExec ? " — spawns child_process commands" : ""),
+                        path: extPath,
+                        remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
+                    ))
+                }
+            }
+        }
+    }
+
+    private struct EditorScriptScan {
+        let hasRemoteExec: Bool
+        let hasShellExec: Bool
+    }
+
+    private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
+        // Walk the top-level JS files for obvious IOCs. We intentionally cap depth/size so this
+        // stays fast — we're looking for unobfuscated malicious patterns, not deep analysis.
+        let fm = FileManager.default
+        var hasRemoteExec = false
+        var hasShellExec = false
+
+        let candidatePaths = [
+            "\(extPath)/extension.js",
+            "\(extPath)/out/extension.js",
+            "\(extPath)/dist/extension.js",
+            "\(extPath)/src/extension.js",
+        ]
+
+        for path in candidatePaths {
+            guard fm.fileExists(atPath: path) else { continue }
+            guard let attrs = try? fm.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? Int, size < 5_000_000 else { continue }  // skip 5MB+ bundles
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            let lower = content.lowercased()
+            // child_process.exec / execSync with a variable is a common stage-2 loader pattern.
+            if lower.contains("child_process") &&
+               (lower.contains(".exec(") || lower.contains(".execsync(") || lower.contains(".spawn(")) {
+                hasShellExec = true
+            }
+            // http(s) GET + eval / execFile — the canonical drop-and-run.
+            if (lower.contains("https.get") || lower.contains("http.get") || lower.contains("fetch(")) &&
+               (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
+                hasRemoteExec = true
+            }
+        }
+
+        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
     }
 }

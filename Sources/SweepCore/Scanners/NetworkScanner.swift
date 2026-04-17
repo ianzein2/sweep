@@ -62,6 +62,11 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking /etc/hosts")
         scanHostsFile(findings: &findings, errors: &errors)
 
+        // 3. Check for proxy / PAC URL hijacking — a common man-in-the-middle vector used by
+        //    infostealers and enterprise monitoring tools that redirect browser traffic.
+        progress?.update("checking proxy configuration")
+        scanProxyConfiguration(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -275,6 +280,88 @@ public final class NetworkScanner: Scanner {
                 path: "/etc/hosts",
                 remediation: "Review /etc/hosts for unexpected entries"
             ))
+        }
+    }
+
+    // MARK: - Proxy / PAC Hijack Detection
+
+    private func scanProxyConfiguration(findings: inout [Finding], errors: inout [String]) {
+        // `networksetup -listallnetworkservices` returns one per line, first line is a header.
+        let servicesResult = ShellRunner.run("/usr/sbin/networksetup",
+                                             arguments: ["-listallnetworkservices"], timeout: 5)
+        guard servicesResult.success else { return }
+
+        let services = servicesResult.stdout
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.contains("denoted") && !$0.hasPrefix("*") }
+
+        let proxyKinds: [(flag: String, label: String)] = [
+            ("-getwebproxy",        "HTTP proxy"),
+            ("-getsecurewebproxy",  "HTTPS proxy"),
+            ("-getsocksfirewallproxy", "SOCKS proxy"),
+            ("-getftpproxy",        "FTP proxy"),
+            ("-getstreamingproxy",  "Streaming proxy"),
+            ("-getgopherproxy",     "Gopher proxy"),
+        ]
+
+        for service in services {
+            // PAC URL first — a single malicious PAC file can reroute ALL traffic per-URL.
+            let autoProxy = ShellRunner.run("/usr/sbin/networksetup",
+                                            arguments: ["-getautoproxyurl", service], timeout: 5)
+            if autoProxy.success {
+                let lines = autoProxy.stdout.split(separator: "\n")
+                    .map { String($0).trimmingCharacters(in: .whitespaces) }
+                let enabled = lines.contains { $0.hasPrefix("Enabled:") && $0.contains("Yes") }
+                let urlLine = lines.first { $0.hasPrefix("URL:") }
+                let url = urlLine.map { $0.replacingOccurrences(of: "URL:", with: "").trimmingCharacters(in: .whitespaces) } ?? ""
+
+                if enabled && !url.isEmpty && url != "(null)" {
+                    // PAC URLs that use plain http:// are especially risky — the PAC file itself can be swapped in transit.
+                    let isInsecure = url.lowercased().hasPrefix("http://")
+                    findings.append(Finding(
+                        severity: isInsecure ? .high : .medium,
+                        category: .networkActivity,
+                        title: "Automatic proxy configuration (PAC) is enabled",
+                        detail: "Service \"\(service)\" is using PAC URL: \(url)" +
+                            (isInsecure ? " — served over plain HTTP, trivially man-in-the-middle-able" : ""),
+                        path: nil,
+                        remediation: "Verify this is your employer's proxy, or disable: System Settings > Network > \(service) > Details > Proxies"
+                    ))
+                }
+            }
+
+            // Per-protocol proxies
+            for kind in proxyKinds {
+                let proxyResult = ShellRunner.run("/usr/sbin/networksetup",
+                                                  arguments: [kind.flag, service], timeout: 5)
+                guard proxyResult.success else { continue }
+
+                let lines = proxyResult.stdout.split(separator: "\n")
+                    .map { String($0).trimmingCharacters(in: .whitespaces) }
+                let enabled = lines.contains { $0.hasPrefix("Enabled:") && $0.contains("Yes") }
+                guard enabled else { continue }
+
+                let server = lines.first { $0.hasPrefix("Server:") }
+                    .map { $0.replacingOccurrences(of: "Server:", with: "").trimmingCharacters(in: .whitespaces) } ?? "?"
+                let port = lines.first { $0.hasPrefix("Port:") }
+                    .map { $0.replacingOccurrences(of: "Port:", with: "").trimmingCharacters(in: .whitespaces) } ?? "?"
+
+                // Proxies pointing at loopback usually mean a local interception tool (Charles, Proxyman, mitmproxy)
+                // — legitimate for developers, but worth noting.
+                let isLoopback = server == "127.0.0.1" || server == "localhost" || server == "::1"
+                findings.append(Finding(
+                    severity: isLoopback ? .low : .medium,
+                    category: .networkActivity,
+                    title: "\(kind.label) is enabled",
+                    detail: "Service \"\(service)\" routes \(kind.label.lowercased()) traffic via \(server):\(port)" +
+                        (isLoopback ? " (local interception proxy)" : ""),
+                    path: nil,
+                    remediation: isLoopback
+                        ? "Expected if you're using Proxyman/Charles/mitmproxy — otherwise disable in Network settings"
+                        : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
+                ))
+            }
         }
     }
 

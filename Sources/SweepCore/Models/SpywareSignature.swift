@@ -241,6 +241,199 @@ public struct SpywareSignature {
             filePaths: ["/Library/.chrysaor"],
             launchAgentLabels: []
         ),
+        // Modern macOS infostealers (2023-2025)
+        SpywareSignature(
+            name: "Atomic macOS Stealer (AMOS)",
+            processNames: ["Atomic", "AMOS", "atomic_stealer", "AMOSInstaller"],
+            bundleIdentifiers: ["com.atomic.stealer", "com.amos.agent"],
+            filePaths: [
+                "/private/tmp/AppleScript-*.scpt",
+                "/private/tmp/.atomic",
+                "~/Library/Application Support/.amos",
+            ],
+            launchAgentLabels: ["com.atomic.agent", "com.amos.service"]
+        ),
+        SpywareSignature(
+            name: "Banshee Stealer",
+            processNames: ["Banshee", "banshee", "bnsh", "bansheeUI"],
+            bundleIdentifiers: ["com.banshee.stealer"],
+            filePaths: [
+                "/private/tmp/.banshee",
+                "~/Library/Application Support/.Banshee",
+            ],
+            launchAgentLabels: ["com.banshee.service"]
+        ),
+        SpywareSignature(
+            name: "Cthulhu Stealer",
+            processNames: ["Cthulhu", "cthulhu_mac", "CleanMyMac_Pro"],
+            bundleIdentifiers: ["com.cthulhu.stealer"],
+            filePaths: [
+                "/private/tmp/.cthulhu",
+                "~/Library/Application Support/.Cthulhu",
+            ],
+            launchAgentLabels: ["com.cthulhu.agent"]
+        ),
+        SpywareSignature(
+            name: "Poseidon Stealer",
+            processNames: ["Poseidon", "poseidon_stealer", "pstealer"],
+            bundleIdentifiers: ["com.poseidon.stealer"],
+            filePaths: [
+                "/private/tmp/.poseidon",
+                "~/Library/Application Support/.Poseidon",
+            ],
+            launchAgentLabels: ["com.poseidon.service"]
+        ),
+        SpywareSignature(
+            name: "MetaStealer",
+            processNames: ["MetaStealer", "metastealer", "msteal"],
+            bundleIdentifiers: ["com.meta.stealer"],
+            filePaths: [
+                "/private/tmp/.metastealer",
+                "~/Library/Application Support/.MetaStealer",
+            ],
+            launchAgentLabels: ["com.meta.stealer"]
+        ),
+        SpywareSignature(
+            name: "Cuckoo Stealer",
+            processNames: ["Cuckoo", "cuckoo_stealer", "DumpMediaSpotifyMusicConverter"],
+            bundleIdentifiers: ["com.cuckoo.stealer"],
+            filePaths: [
+                "/private/tmp/.cuckoo",
+                "~/Library/Application Support/.Cuckoo",
+            ],
+            launchAgentLabels: ["com.cuckoo.agent"]
+        ),
+        SpywareSignature(
+            name: "Realst",
+            processNames: ["realst", "Realst", "realst_installer"],
+            bundleIdentifiers: ["com.realst.agent"],
+            filePaths: [
+                "/private/tmp/.realst",
+                "~/Library/Application Support/.Realst",
+            ],
+            launchAgentLabels: ["com.realst.service"]
+        ),
+        SpywareSignature(
+            name: "MacStealer",
+            processNames: ["MacStealer", "macstealer", "mstealer"],
+            bundleIdentifiers: ["com.macstealer.agent"],
+            filePaths: [
+                "/private/tmp/.macstealer",
+                "~/Library/Application Support/.MacStealer",
+            ],
+            launchAgentLabels: ["com.macstealer.service"]
+        ),
+        SpywareSignature(
+            name: "PureLand Stealer",
+            processNames: ["PureLand", "pureland", "pure_stealer"],
+            bundleIdentifiers: ["com.pureland.stealer"],
+            filePaths: [
+                "/private/tmp/.pureland",
+                "~/Library/Application Support/.PureLand",
+            ],
+            launchAgentLabels: ["com.pureland.agent"]
+        ),
+        SpywareSignature(
+            name: "Activator Backdoor",
+            processNames: ["Activator", "activator_agent", "app_activator"],
+            bundleIdentifiers: ["com.activator.macos"],
+            filePaths: [
+                "/private/tmp/.activator",
+                "~/Library/Application Support/.Activator",
+            ],
+            launchAgentLabels: ["com.activator.service"]
+        ),
+        // North Korean / APT-linked macOS malware
+        SpywareSignature(
+            name: "RustBucket",
+            processNames: ["RustBucket", "rustbucket", "InternalPDF", "DocSend", "SafariHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustbucket",
+                "~/Library/Metadata/.system_update",
+            ],
+            launchAgentLabels: ["com.apple.systempreferences.helper"]
+        ),
+        SpywareSignature(
+            name: "KandyKorn",
+            processNames: ["KandyKorn", "kandykorn", "CryptoSwift", "FinderTools"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Group Containers/.kandy",
+                "~/Library/Caches/com.apple.safari.updater",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ObjCShellz",
+            processNames: ["ObjCShellz", "objcshellz", "objc_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.objcshell"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "SpectralBlur",
+            processNames: ["SpectralBlur", "spectralblur", "macshare"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.spectral"],
+            launchAgentLabels: ["com.apple.macshare.plist"]
+        ),
+        SpywareSignature(
+            name: "SmoothOperator (3CX)",
+            processNames: ["3CX Desktop App", "3cxdesktopapp", "ffmpeg-operator"],
+            bundleIdentifiers: ["com.electron.3cxdesktopapp"],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NokNok (BlueNoroff)",
+            processNames: ["noknok", "NokNok", "SysJSONRPC", "CryptoAssetCalc"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.noknok"],
+            launchAgentLabels: []
+        ),
+        // Consumer stalkerware / monitoring (2023-2025 additions)
+        SpywareSignature(
+            name: "WebWatcher",
+            processNames: ["WebWatcher", "webwatcher", "wwservice", "wwclient"],
+            bundleIdentifiers: ["com.awarenesstech.webwatcher"],
+            filePaths: [
+                "~/Library/Application Support/WebWatcher",
+                "/Library/Application Support/WebWatcher",
+            ],
+            launchAgentLabels: ["com.awarenesstech.webwatcher"]
+        ),
+        SpywareSignature(
+            name: "TheTruthSpy",
+            processNames: ["TheTruthSpy", "truthspy", "tts_service"],
+            bundleIdentifiers: ["com.thetruthspy.agent"],
+            filePaths: ["~/Library/Application Support/.TheTruthSpy"],
+            launchAgentLabels: ["com.thetruthspy.service"]
+        ),
+        SpywareSignature(
+            name: "ClevGuard / KidsGuard Pro",
+            processNames: ["KidsGuard", "clevguard", "KidsGuardPro", "kgp_service"],
+            bundleIdentifiers: ["com.clevguard.kidsguard"],
+            filePaths: [
+                "~/Library/Application Support/ClevGuard",
+                "~/Library/Application Support/KidsGuard",
+            ],
+            launchAgentLabels: ["com.clevguard.service"]
+        ),
+        SpywareSignature(
+            name: "Mobistealth",
+            processNames: ["Mobistealth", "mobistealth", "msagent"],
+            bundleIdentifiers: ["com.mobistealth.agent"],
+            filePaths: ["~/Library/Application Support/.Mobistealth"],
+            launchAgentLabels: ["com.mobistealth.service"]
+        ),
+        SpywareSignature(
+            name: "Spyzie",
+            processNames: ["Spyzie", "spyzie", "spzagent"],
+            bundleIdentifiers: ["com.spyzie.agent"],
+            filePaths: ["~/Library/Application Support/.Spyzie"],
+            launchAgentLabels: ["com.spyzie.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -274,6 +467,13 @@ public struct SpywareSignature {
         "cfprefsd_helper",       // Real: cfprefsd
         "launchd_helper",        // Real: launchd
         "notifyd_agent",         // Real: notifyd
+        "iCloudHelper",          // Real: bird / cloudd
+        "iCloudSyncAgent",       // Not a real Apple process
+        "XProtectHelper",        // Real: XProtect (no Helper suffix)
+        "SpotlightHelper",       // Real: mds / mdworker
+        "AppleDockD",            // Real: Dock (not a daemon)
+        "ApplePushService",      // Real: apsd
+        "coreaudio_helper",      // Real: coreaudiod
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID
