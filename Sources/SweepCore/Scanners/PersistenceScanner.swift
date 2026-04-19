@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in persistence points")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript / Automator persistence")
+        scanAppleScriptPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking clipboard monitoring")
+        scanClipboardMonitoring(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +695,346 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Plug-in Persistence Points
+
+    /// macOS loads third-party bundles out of well-known plug-in directories. Malware has used
+    /// every one of these as persistence at some point — QuickLook generators execute whenever
+    /// Finder previews a file, Spotlight importers run as mdworker_shared inherits them, and
+    /// Audio Units get loaded by almost every creative app on the system.
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct PluginDir {
+            let path: String
+            let ext: String?  // file extension to match, nil = any bundle
+            let kind: String
+            let detail: String
+        }
+
+        let pluginDirs: [PluginDir] = [
+            // QuickLook generators run when Finder previews a file — silent auto-execution vector
+            PluginDir(path: "\(home)/Library/QuickLook", ext: "qlgenerator",
+                      kind: "QuickLook generator",
+                      detail: "QuickLook generators execute code whenever Finder previews a matching file type"),
+            PluginDir(path: "/Library/QuickLook", ext: "qlgenerator",
+                      kind: "QuickLook generator",
+                      detail: "QuickLook generators execute code whenever Finder previews a matching file type"),
+            // Spotlight importers are loaded by mdworker_shared during indexing
+            PluginDir(path: "\(home)/Library/Spotlight", ext: "mdimporter",
+                      kind: "Spotlight importer",
+                      detail: "Spotlight importers are loaded by mdworker_shared and run during indexing"),
+            PluginDir(path: "/Library/Spotlight", ext: "mdimporter",
+                      kind: "Spotlight importer",
+                      detail: "Spotlight importers are loaded by mdworker_shared and run during indexing"),
+            // Audio Units load into every audio host (GarageBand, Logic, etc.)
+            PluginDir(path: "\(home)/Library/Audio/Plug-Ins/Components", ext: "component",
+                      kind: "Audio Unit plug-in",
+                      detail: "Audio Units load into any audio host app and can run arbitrary code"),
+            PluginDir(path: "/Library/Audio/Plug-Ins/Components", ext: "component",
+                      kind: "Audio Unit plug-in",
+                      detail: "Audio Units load into any audio host app and can run arbitrary code"),
+            // Screen Savers run when the lock screen activates
+            PluginDir(path: "\(home)/Library/Screen Savers", ext: "saver",
+                      kind: "Screen Saver",
+                      detail: "Screen savers are bundles with executable code that run on idle"),
+            PluginDir(path: "/Library/Screen Savers", ext: "saver",
+                      kind: "Screen Saver",
+                      detail: "Screen savers are bundles with executable code that run on idle"),
+            // Input Methods run with the user's session — a classic keylogger position
+            PluginDir(path: "\(home)/Library/Input Methods", ext: nil,
+                      kind: "Input Method",
+                      detail: "Input methods run with every user session and can capture keystrokes"),
+            PluginDir(path: "/Library/Input Methods", ext: nil,
+                      kind: "Input Method",
+                      detail: "Input methods run with every user session and can capture keystrokes"),
+            // Keyboard Layouts — .bundle with executable code can hijack keyboard input
+            PluginDir(path: "\(home)/Library/Keyboard Layouts", ext: "bundle",
+                      kind: "Keyboard Layout bundle",
+                      detail: "Keyboard layout bundles with code are unusual and can intercept input"),
+            PluginDir(path: "/Library/Keyboard Layouts", ext: "bundle",
+                      kind: "Keyboard Layout bundle",
+                      detail: "Keyboard layout bundles with code are unusual and can intercept input"),
+            // Legacy Internet Plug-Ins — still loaded by Safari for older tech
+            PluginDir(path: "\(home)/Library/Internet Plug-Ins", ext: nil,
+                      kind: "Internet Plug-In",
+                      detail: "Internet plug-ins are legacy but still loaded by Safari on launch"),
+            PluginDir(path: "/Library/Internet Plug-Ins", ext: nil,
+                      kind: "Internet Plug-In",
+                      detail: "Internet plug-ins are legacy but still loaded by Safari on launch"),
+            // PreferencePanes — loaded by System Settings
+            PluginDir(path: "\(home)/Library/PreferencePanes", ext: "prefPane",
+                      kind: "Preference Pane",
+                      detail: "PreferencePanes are loaded by System Settings and run code"),
+            PluginDir(path: "/Library/PreferencePanes", ext: "prefPane",
+                      kind: "Preference Pane",
+                      detail: "PreferencePanes are loaded by System Settings and run code"),
+            // Color Pickers — loaded by any app showing a color picker
+            PluginDir(path: "\(home)/Library/ColorPickers", ext: "colorPicker",
+                      kind: "Color Picker plug-in",
+                      detail: "Color Picker bundles load into every app that opens a color panel"),
+            PluginDir(path: "/Library/ColorPickers", ext: "colorPicker",
+                      kind: "Color Picker plug-in",
+                      detail: "Color Picker bundles load into every app that opens a color panel"),
+            // Contextual menu items (legacy, but still loadable)
+            PluginDir(path: "\(home)/Library/Contextual Menu Items", ext: "plugin",
+                      kind: "Contextual Menu plug-in",
+                      detail: "Contextual Menu plug-ins extend right-click menus and can run on activation"),
+            PluginDir(path: "/Library/Contextual Menu Items", ext: "plugin",
+                      kind: "Contextual Menu plug-in",
+                      detail: "Contextual Menu plug-ins extend right-click menus and can run on activation"),
+            // Dock Tile plug-ins
+            PluginDir(path: "/Library/DockTiles", ext: "docktileplugin",
+                      kind: "Dock Tile plug-in",
+                      detail: "Dock Tile plug-ins run inside the Dock process"),
+            // CUPS filter / backend — less common but well-documented persistence for root malware
+            PluginDir(path: "/usr/libexec/cups/filter", ext: nil,
+                      kind: "CUPS filter",
+                      detail: "CUPS filters run as root during printing and have been abused by macOS malware"),
+            PluginDir(path: "/usr/libexec/cups/backend", ext: nil,
+                      kind: "CUPS backend",
+                      detail: "CUPS backends run as root when a print job is dispatched"),
+        ]
+
+        for pd in pluginDirs {
+            guard fm.fileExists(atPath: pd.path),
+                  let contents = try? fm.contentsOfDirectory(atPath: pd.path) else { continue }
+
+            for entry in contents where !entry.hasPrefix(".") {
+                // Skip entries that don't match the expected extension when one is specified.
+                if let ext = pd.ext, !entry.hasSuffix("." + ext) { continue }
+                let bundlePath = "\(pd.path)/\(entry)"
+
+                // Known CUPS defaults — Apple ships a long list of filters/backends; skip those
+                // by checking if the file is inside a signed system location already.
+                if pd.path.hasPrefix("/usr/libexec/cups/") {
+                    // Skip common Apple-shipped filter names
+                    let appleCupsDefaults: Set<String> = [
+                        "commandtops", "pstops", "cgbannertopdf", "cgpdftopdf",
+                        "cgpdftops", "cgpdftoraster", "cgtexttopdf", "pdftops",
+                        "pictwpstops", "rastertodymo", "rastertoescpx", "rastertohp",
+                        "rastertopdf", "rastertopwg", "rastertoepson", "rastertopcl",
+                        "usb", "ipp", "lpd", "socket", "http", "https", "mdns",
+                        "bluetooth", "dnssd", "rastertobrlaser", "hpcups",
+                    ]
+                    if appleCupsDefaults.contains(entry) { continue }
+                }
+
+                let bundleId = readBundleIdentifier(at: bundlePath)
+
+                // Apple-shipped plug-ins often carry Apple bundle IDs — trust those.
+                if let bid = bundleId, bid.hasPrefix("com.apple.") { continue }
+
+                // Check against known spyware by bundle ID
+                if let bid = bundleId, let sig = SpywareSignature.match(bundleId: bid) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware installed as \(pd.kind): \(sig.name)",
+                        detail: "Bundle: \(bundleId ?? "unknown"), Path: \(bundlePath)",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\" — then remove \(sig.name)"
+                    ))
+                    continue
+                }
+
+                // Flag unsigned plug-ins outright — every one of these extension points has been
+                // used by malware, and legitimate third-party plug-ins are almost always signed.
+                let isSigned = checkIsSigned(path: bundlePath)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned \(pd.kind) installed",
+                        detail: "\(pd.detail). Bundle: \(bundleId ?? entry)",
+                        path: bundlePath,
+                        remediation: "Verify this plug-in is expected. Remove if not: rm -rf \"\(bundlePath)\""
+                    ))
+                } else {
+                    // Signed but third-party plug-ins in these paths warrant a look — they auto-load.
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Third-party \(pd.kind) installed",
+                        detail: "\(pd.detail). Bundle: \(bundleId ?? entry)",
+                        path: bundlePath,
+                        remediation: "Verify this plug-in is expected — it auto-loads at runtime"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func readBundleIdentifier(at path: String) -> String? {
+        let infoPlistCandidates = [
+            "\(path)/Contents/Info.plist",
+            "\(path)/Info.plist",
+        ]
+        for plistPath in infoPlistCandidates {
+            guard let data = FileManager.default.contents(atPath: plistPath),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            else { continue }
+            if let id = plist["CFBundleIdentifier"] as? String { return id }
+        }
+        return nil
+    }
+
+    // MARK: - AppleScript / Automator Persistence
+
+    /// LaunchAgents pointing at osascript or an Automator workflow are a common stealth tactic:
+    /// the plist looks innocuous, and the actual malicious behaviour lives in a separate script
+    /// or workflow file that's easy to overlook. FrigidStealer (2025) uses exactly this pattern.
+    private func scanAppleScriptPersistence(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let home = ShellRunner.realUserHome
+
+        // 1. Folder Actions — AppleScripts that run when a folder's contents change.
+        //    They're rare in legitimate setups; any entry here deserves a look.
+        let folderActionsPath = "\(home)/Library/Workflows/Applications/Folder Actions"
+        if let entries = try? fm.contentsOfDirectory(atPath: folderActionsPath) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(folderActionsPath)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action workflow installed",
+                    detail: "Folder Actions run AppleScript/shell code when a folder's contents change: \(entry)",
+                    path: path,
+                    remediation: "Review contents, then remove if unexpected: rm -rf \"\(path)\""
+                ))
+            }
+        }
+
+        // 2. User-installed macOS Services — .workflow bundles that attach to the Services menu
+        //    and can also run on keyboard shortcuts.
+        let servicesPath = "\(home)/Library/Services"
+        if let entries = try? fm.contentsOfDirectory(atPath: servicesPath) {
+            for entry in entries where !entry.hasPrefix(".") && entry.hasSuffix(".workflow") {
+                let path = "\(servicesPath)/\(entry)"
+                // Skip obvious user-created workflows by checking if the file is signed — users
+                // typically don't sign their own workflows, so unsigned is fine here.
+                // But an unsigned .workflow that's been recently modified and has shell actions
+                // is worth surfacing.
+                let wfScript = "\(path)/Contents/document.wflow"
+                guard let data = fm.contents(atPath: wfScript),
+                      let text = String(data: data, encoding: .utf8) else { continue }
+                let suspicious = ["curl ", "wget ", "bash -c", "sh -c", "osascript",
+                                  "base64 --decode", "base64 -d", "nc ", "/tmp/",
+                                  "python -c", "python3 -c", "perl -e"]
+                if suspicious.contains(where: { text.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Services workflow runs shell / network commands",
+                        detail: "Workflow: \(entry) — contains remote-exec style commands",
+                        path: path,
+                        remediation: "Review: cat \"\(wfScript)\" — remove if unexpected"
+                    ))
+                }
+            }
+        }
+
+        // 3. LaunchAgents whose ProgramArguments invoke osascript / an .scpt file — a favourite
+        //    pattern for FrigidStealer, AdLoad and AppleScript-first stealers.
+        for (dirPath, dirLabel) in launchDirs {
+            let expanded = dirPath.hasPrefix("~/") ? home + String(dirPath.dropFirst(1)) : dirPath
+            guard let entries = try? fm.contentsOfDirectory(atPath: expanded) else { continue }
+            for file in entries where file.hasSuffix(".plist") {
+                let plistPath = "\(expanded)/\(file)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                else { continue }
+
+                let label = plist["Label"] as? String ?? "unknown"
+                // Skip Apple's own plists
+                if label.hasPrefix("com.apple.") { continue }
+
+                var args: [String] = []
+                if let program = plist["Program"] as? String { args = [program] }
+                if let pa = plist["ProgramArguments"] as? [String] { args = pa }
+                guard !args.isEmpty else { continue }
+
+                let joined = args.joined(separator: " ")
+                let isOsa = args.first?.hasSuffix("/osascript") == true || joined.contains("osascript")
+                let runsScpt = args.contains(where: { $0.hasSuffix(".scpt") || $0.hasSuffix(".applescript") })
+                let runsShellPipe = (joined.contains("curl ") || joined.contains("wget ")) &&
+                    (joined.contains("| sh") || joined.contains("| bash") ||
+                     joined.contains("|sh") || joined.contains("|bash"))
+
+                if isOsa || runsScpt {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent invokes AppleScript",
+                        detail: "Label: \(label), Dir: \(dirLabel), Args: \(String(joined.prefix(120)))",
+                        path: plistPath,
+                        remediation: "Review the script it runs, then remove the plist if unexpected: sudo rm \"\(plistPath)\""
+                    ))
+                } else if runsShellPipe {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent pipes remote content into a shell",
+                        detail: "Label: \(label), Dir: \(dirLabel), Args: \(String(joined.prefix(120)))",
+                        path: plistPath,
+                        remediation: "This is the canonical curl-into-shell downloader pattern — remove: sudo rm \"\(plistPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Clipboard Monitoring
+
+    /// Clipboard hijackers replace wallet addresses and steal copied secrets. They typically
+    /// persist as LaunchAgents that poll `pbpaste` or hook NSPasteboard. Legitimate clipboard
+    /// tools (Alfred, Raycast, Paste.app, Copy'em) are whitelisted.
+    private func scanClipboardMonitoring(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let home = ShellRunner.realUserHome
+
+        let legitClipboardLabels: Set<String> = [
+            "com.runningwithcrayons.Alfred",
+            "com.raycast.macos",
+            "com.fiplab.clipboard",
+            "com.apple.pasteboard",
+            "com.maxel.PasteApp",
+            "com.sindresorhus.Pasta",
+            "com.flexibits.Clipy",
+        ]
+
+        for (dirPath, _) in launchDirs {
+            let expanded = dirPath.hasPrefix("~/") ? home + String(dirPath.dropFirst(1)) : dirPath
+            guard let entries = try? fm.contentsOfDirectory(atPath: expanded) else { continue }
+            for file in entries where file.hasSuffix(".plist") {
+                let plistPath = "\(expanded)/\(file)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                else { continue }
+
+                let label = plist["Label"] as? String ?? "unknown"
+                if label.hasPrefix("com.apple.") { continue }
+                if legitClipboardLabels.contains(where: { label.hasPrefix($0) }) { continue }
+
+                var args: [String] = []
+                if let program = plist["Program"] as? String { args = [program] }
+                if let pa = plist["ProgramArguments"] as? [String] { args = pa }
+                let joined = args.joined(separator: " ")
+
+                // Direct references to pbpaste / NSPasteboard in a launch agent are uncommon —
+                // legitimate clipboard managers hook the API via their own frameworks.
+                let pollsClipboard = joined.contains("pbpaste") || joined.contains("pbcopy")
+                // KeepAlive + short StartInterval polling a clipboard-reading script is the
+                // classic crypto-drainer pattern.
+                let startInterval = plist["StartInterval"] as? Int ?? 0
+                let fastPoll = startInterval > 0 && startInterval < 30
+
+                if pollsClipboard {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent polls the clipboard",
+                        detail: "Label: \(label), Args: \(String(joined.prefix(120)))" +
+                            (fastPoll ? ", StartInterval: \(startInterval)s (fast polling)" : ""),
+                        path: plistPath,
+                        remediation: "Clipboard polling is the standard pattern for crypto-address swappers — remove: rm \"\(plistPath)\""
+                    ))
+                }
+            }
+        }
     }
 }

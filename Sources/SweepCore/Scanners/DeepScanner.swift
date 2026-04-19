@@ -37,6 +37,15 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. RustyAttr-style stealth: malware hiding payloads in extended attributes
+        progress?.update("scanning for xattr-stashed payloads")
+        scanExtendedAttributeStealth(findings: &findings, errors: &errors)
+
+        // 7. Quarantine bypass attempts — files downloaded via browser that have had their
+        //    com.apple.quarantine xattr stripped, a common defense evasion technique.
+        progress?.update("checking for quarantine removal")
+        scanQuarantineStripping(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -287,7 +296,14 @@ public final class DeepScanner: Scanner {
         let result = ShellRunner.run("/bin/ps", arguments: ["eww", "-o", "pid,command"], timeout: 5)
         guard result.success else { return }
 
+        // DYLD_* variables cover every known dylib-injection technique. FALLBACK_LIBRARY_PATH and
+        // VERSIONED_LIBRARY_PATH are less common but equally abusable — CVE-2023-32364
+        // (XPC LaunchServices injection) exploited exactly these.
         let dangerousEnvVars = ["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
+                                "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH",
+                                "DYLD_VERSIONED_LIBRARY_PATH", "DYLD_VERSIONED_FRAMEWORK_PATH",
+                                "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH",
+                                "DYLD_IMAGE_SUFFIX", "DYLD_PRINT_TO_FILE",
                                 "CFNETWORK_DIAGNOSTICS", "MallocStackLogging"]
 
         let lines = result.stdout.split(separator: "\n")
@@ -306,6 +322,141 @@ public final class DeepScanner: Scanner {
                         detail: "PID \(pid) — this environment variable enables runtime code injection",
                         path: nil,
                         remediation: "Investigate: ps eww \(pid) — then kill if not expected"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Extended-Attribute Stealth (RustyAttr-style)
+
+    /// RustyAttr (DPRK, Nov 2024) and similar families stash payload scripts or shell code inside
+    /// extended attributes on otherwise-empty carrier files. xattrs can hold megabytes of opaque
+    /// data that never surface in Finder or `ls`. Legitimate xattrs are few and well-known.
+    private func scanExtendedAttributeStealth(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Known-legitimate xattr names — anything outside this list warrants attention when it
+        // holds a large payload.
+        let benignXattrs: Set<String> = [
+            "com.apple.FinderInfo",
+            "com.apple.metadata:_kMDItemUserTags",
+            "com.apple.metadata:kMDItemDownloadedDate",
+            "com.apple.metadata:kMDItemWhereFroms",
+            "com.apple.metadata:kMDItemIsScreenCapture",
+            "com.apple.quarantine",
+            "com.apple.lastuseddate#PS",
+            "com.apple.ResourceFork",
+            "com.apple.TextEncoding",
+            "com.apple.macl",
+            "com.apple.diskimages.recentcksum",
+            "com.apple.diskimages.fsck",
+            "com.apple.provenance",
+        ]
+
+        let dirs = [
+            "\(home)/Library/Application Support",
+            "\(home)/Library/LaunchAgents",
+            "\(home)/Downloads",
+            "/private/tmp",
+            "/private/var/tmp",
+        ]
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            // Cap at 40 entries per dir to stay fast
+            for entry in entries.prefix(40) where !entry.hasPrefix(".") {
+                let filePath = "\(dir)/\(entry)"
+
+                // `xattr <path>` prints one attribute name per line. Much easier to parse than -l.
+                let namesResult = ShellRunner.run("/usr/bin/xattr", arguments: [filePath], timeout: 3)
+                guard namesResult.success, !namesResult.stdout.isEmpty else { continue }
+
+                let attrNames = namesResult.stdout
+                    .split(separator: "\n")
+                    .map { String($0).trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+
+                for name in attrNames where !benignXattrs.contains(name) {
+                    // Skip anything that starts with com.apple. — still Apple metadata we haven't listed.
+                    if name.hasPrefix("com.apple.") { continue }
+
+                    // Measure the attribute size by printing it and counting bytes. Any xattr with
+                    // more than a few hundred bytes that isn't Apple metadata is unusual; megabyte-
+                    // scale xattrs are the RustyAttr giveaway.
+                    let sizeResult = ShellRunner.run("/bin/sh", arguments: [
+                        "-c", "/usr/bin/xattr -p \"\(name)\" \"\(filePath)\" 2>/dev/null | wc -c"
+                    ], timeout: 3)
+                    let size = Int(sizeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+                    if size > 512 {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "File hides large payload in extended attribute",
+                            detail: "xattr \"\(name)\" (~\(size) bytes) on \(entry) — RustyAttr-style stealth",
+                            path: filePath,
+                            remediation: "Inspect: xattr -p \"\(name)\" \"\(filePath)\" | head — remove if malicious"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Quarantine Stripping
+
+    /// `com.apple.quarantine` is the flag that triggers Gatekeeper first-run checks. Malware
+    /// delivered via curl/brew scripts routinely clears it so the payload runs without a prompt.
+    /// We sample Downloads and temp dirs for executables that are suspiciously un-quarantined.
+    private func scanQuarantineStripping(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+        let dirs = ["\(home)/Downloads", "/private/tmp", "/private/var/tmp"]
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries.prefix(40) where !entry.hasPrefix(".") {
+                let path = "\(dir)/\(entry)"
+
+                // Only care about Mach-O binaries or .app bundles
+                var isApp = false
+                if entry.hasSuffix(".app") {
+                    isApp = true
+                }
+
+                let isMachO: Bool = {
+                    guard !isApp,
+                          let fh = FileHandle(forReadingAtPath: path) else { return false }
+                    defer { fh.closeFile() }
+                    let header = fh.readData(ofLength: 4)
+                    guard header.count == 4 else { return false }
+                    let magic = header.withUnsafeBytes { $0.load(as: UInt32.self) }
+                    let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+                    return machoMagics.contains(magic)
+                }()
+
+                guard isApp || isMachO else { continue }
+
+                // Check attributes — if file has MDItemWhereFroms (came from the internet)
+                // but no com.apple.quarantine, someone stripped the quarantine flag.
+                let xattrResult = ShellRunner.run("/usr/bin/xattr", arguments: [path], timeout: 3)
+                guard xattrResult.success else { continue }
+                let attrs = xattrResult.stdout
+                let fromInternet = attrs.contains("com.apple.metadata:kMDItemWhereFroms") ||
+                    attrs.contains("com.apple.metadata:kMDItemDownloadedDate")
+                let hasQuarantine = attrs.contains("com.apple.quarantine")
+
+                if fromInternet && !hasQuarantine {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "Executable downloaded from the internet with quarantine stripped",
+                        detail: "File: \(entry) — has WhereFroms metadata but no quarantine flag (Gatekeeper bypass)",
+                        path: path,
+                        remediation: "Inspect origin: xattr -p com.apple.metadata:kMDItemWhereFroms \"\(path)\""
                     ))
                 }
             }

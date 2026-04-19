@@ -55,6 +55,27 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkWiFiPrivateAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking analytics sharing")
+        checkAnalyticsSharing(findings: &findings, errors: &errors)
+
+        progress?.update("checking personalized ads")
+        checkPersonalizedAds(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessments policy")
+        checkGatekeeperAssessments(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari auto-open downloads")
+        checkSafariSafeDownloads(findings: &findings, errors: &errors)
+
+        progress?.update("checking Siri data sharing")
+        checkSiriDataSharing(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +465,185 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // AirPlay Receiver lets any device on the same network stream audio/video to this Mac,
+        // and it has had multiple CVEs in the last two years. When on, it advertises the host
+        // over mDNS — an info-leak on untrusted networks.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.RemoteDesktop", "AirPlayXPCHelperEnabled"
+        ], timeout: 5)
+        let launchctlCheck = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let isRunning = launchctlCheck.success && launchctlCheck.stdout.contains("com.apple.AirPlayXPCHelper")
+        let enabled = (result.success && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1") || isRunning
+        if enabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac can receive AirPlay streams — exposed via mDNS and discoverable on the local network",
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi MAC Randomization
+
+    private func checkWiFiPrivateAddress(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma+ supports per-network Private Wi-Fi Address (MAC randomization).
+        // Disabling it lets networks track this device across locations — a privacy regression.
+        // We detect SSIDs explicitly opted out of randomization.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.known-networks"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        // If we see "PrivateMACAddressModeUserSetting = 0" entries, those networks have
+        // randomization disabled.
+        let disabledCount = result.stdout.components(separatedBy: "PrivateMACAddressModeUserSetting = 0")
+            .count - 1
+        if disabledCount > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Wi-Fi MAC randomization disabled on \(disabledCount) network(s)",
+                detail: "Some Wi-Fi networks are using the real hardware MAC address — enables cross-network device tracking",
+                path: nil,
+                remediation: "For each affected SSID: System Settings > Wi-Fi > (network) > Details > Private Wi-Fi Address: Rotating"
+            ))
+        }
+    }
+
+    // MARK: - Analytics & Improvements
+
+    private func checkAnalyticsSharing(findings: inout [Finding], errors: inout [String]) {
+        // Analytics sharing sends diagnostic data including crash reports to Apple. Legitimate,
+        // but some users want it off for privacy reasons; we report the state rather than penalize.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist",
+            "AutoSubmit"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Diagnostic data auto-submission to Apple is enabled",
+                    detail: "Crash logs and usage data are sent to Apple automatically (AutoSubmit = 1)",
+                    path: nil,
+                    remediation: "Disable if you prefer: System Settings > Privacy & Security > Analytics & Improvements"
+                ))
+            }
+        }
+
+        // Also check whether data is shared with third-party app developers.
+        let thirdParty = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist",
+            "ThirdPartyDataSubmit"
+        ], timeout: 5)
+        if thirdParty.success &&
+           thirdParty.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Sharing analytics with third-party app developers is enabled",
+                detail: "Crash data can be shared with app developers beyond Apple",
+                path: nil,
+                remediation: "Disable: System Settings > Privacy & Security > Analytics & Improvements > Share with App Developers"
+            ))
+        }
+    }
+
+    // MARK: - Personalized Ads (Apple Advertising)
+
+    private func checkPersonalizedAds(findings: inout [Finding], errors: inout [String]) {
+        // Apple's "Personalized Ads" setting uses on-device data to target ads in Apple News, App Store,
+        // and Stocks. When enabled, it reveals an advertising identifier linked to this device.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.AdLib", "allowApplePersonalizedAdvertising"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Personalized Apple advertising is enabled",
+                    detail: "Apple's ad targeting uses on-device data and exposes an advertising identifier",
+                    path: nil,
+                    remediation: "Disable: System Settings > Privacy & Security > Apple Advertising > Personalized Ads"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Gatekeeper Assessments Policy
+
+    /// Gatekeeper can be globally enabled but have `spctl --global-disable` set for
+    /// "Anywhere" (exec policy). This is a weaker state than simply disabled and worth
+    /// calling out separately.
+    private func checkGatekeeperAssessments(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status", "--verbose"], timeout: 5)
+        let combined = result.stdout + result.stderr
+        // When the user has allowed "Anywhere" via spctl developer-mode, there's a developer
+        // mode line we can key on. The "assessments disabled" line we already handle in the
+        // System Integrity scanner; this one looks for developer mode which is a lesser-but-
+        // still-risky state that bypasses notarization checks on assessed apps.
+        if combined.contains("developer mode") && combined.contains("enabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Gatekeeper developer mode is enabled",
+                detail: "spctl developer mode bypasses notarization checks for command-line tools",
+                path: nil,
+                remediation: "Disable: sudo spctl developer-mode disable-terminal"
+            ))
+        }
+    }
+
+    // MARK: - Safari Safe Downloads
+
+    private func checkSafariSafeDownloads(findings: inout [Finding], errors: inout [String]) {
+        // Safari's "Open safe files after downloading" auto-unzips and opens files deemed safe —
+        // a classic drive-by-download vector. Off by default on new installs, but many migrated
+        // users have it on.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Safari", "AutoOpenSafeDownloads"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Safari auto-opens 'safe' downloads",
+                    detail: "Safari will automatically open archives and documents it considers safe — a drive-by download vector",
+                    path: nil,
+                    remediation: "Disable: Safari > Settings > General > uncheck 'Open \"safe\" files after downloading'"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Siri Data Sharing
+
+    private func checkSiriDataSharing(findings: inout [Finding], errors: inout [String]) {
+        // "Improve Siri & Dictation" sends voice clips to Apple for grading. Off by default
+        // since macOS Catalina's consent flow, but users who opted in may not remember.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.assistant.support", "Siri Data Sharing Opt-In Status"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 2 = opted in
+            if value == "2" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Siri voice recordings are shared with Apple",
+                    detail: "Audio from Siri interactions is uploaded to Apple for quality grading",
+                    path: nil,
+                    remediation: "Disable: System Settings > Privacy & Security > Analytics & Improvements > Improve Siri & Dictation"
                 ))
             }
         }

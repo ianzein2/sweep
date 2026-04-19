@@ -434,6 +434,194 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // Modern macOS threats (2024-2025)
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "FrigidUpdate"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/FrigidStealer",
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            processNames: ["CoreKitAgent", "GoogleChromeBeta", "trojan_nim", "installer_nim"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.update.plist"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK)",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FerretAgent"],
+            bundleIdentifiers: ["com.flexibleferret.agent"],
+            filePaths: [
+                "/private/tmp/.flex",
+                "/private/tmp/FlexibleFerret",
+                "~/Library/Application Support/.flex",
+            ],
+            launchAgentLabels: ["com.flex.agent"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["InvisibleFerret", "invisibleferret", "ferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.iferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK)",
+            processNames: ["BeaverTail", "beavertail", "beaver_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beaver",
+                "~/Library/Application Support/.beaver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HZ Rat (China)",
+            processNames: ["hzrat", "HZRat", "wechat_helper", "dingtalk_helper"],
+            bundleIdentifiers: ["com.tencent.wechat.helper", "com.dingtalk.helper"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.tencent.wechat.service"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "macos_ls", "ls_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/.lightspy",
+                "~/Library/Caches/.ls_cache",
+            ],
+            launchAgentLabels: ["com.apple.lightspy.plist"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (DPRK)",
+            processNames: ["RustyAttr", "rustyattr", "PDF_Viewer"],
+            bundleIdentifiers: ["com.justice.RustyAttr"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "TodoSwiftApp"],
+            bundleIdentifiers: ["com.bluenoroff.todoswift"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "zshrc2", "zshenv2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/root/.zshenv2",
+                "~/.zshenv2",
+                "~/Library/Application Support/.rustdoor",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AdLoad",
+            processNames: ["mdworker_local", "system_update", "progressd", "servicehelper",
+                           "mainsystem", "InstallAssistant"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.mainsystem",
+                "~/Library/Application Support/.system_update",
+            ],
+            launchAgentLabels: ["com.mainsystem.plist", "com.system_update.plist"]
+        ),
+        SpywareSignature(
+            name: "Pirrit / Bundlore",
+            processNames: ["Pirrit", "pirrit", "bundlore", "Bundlore", "spigot_install"],
+            bundleIdentifiers: ["com.pirrit.helper", "com.bundlore.installer"],
+            filePaths: [
+                "~/Library/Application Support/.pirrit",
+                "~/Library/Application Support/Bundlore",
+            ],
+            launchAgentLabels: ["com.pirrit.agent", "com.bundlore.helper"]
+        ),
+        SpywareSignature(
+            name: "Genieo / Mughthesec",
+            processNames: ["Genieo", "genieo", "mughthesec", "InstallMac"],
+            bundleIdentifiers: ["com.genieo.app", "com.mughthesec.helper"],
+            filePaths: [
+                "~/Library/Application Support/Genieo",
+                "~/Library/Application Support/.mughthesec",
+            ],
+            launchAgentLabels: ["com.genieo.engine", "com.mughthesec.agent"]
+        ),
+        SpywareSignature(
+            name: "Shlayer",
+            processNames: ["shlayer", "Shlayer", "macshlayer", "mac_installer"],
+            bundleIdentifiers: ["com.shlayer.installer"],
+            filePaths: [
+                "/private/tmp/.shlayer",
+                "~/Library/Application Support/.shlayer",
+            ],
+            launchAgentLabels: ["com.shlayer.agent"]
+        ),
+        SpywareSignature(
+            name: "PureStealer / Nova Stealer",
+            processNames: ["PureStealer", "NovaStealer", "purestealer", "nova"],
+            bundleIdentifiers: ["com.pure.stealer", "com.nova.stealer"],
+            filePaths: [
+                "/private/tmp/.purestealer",
+                "/private/tmp/.nova",
+            ],
+            launchAgentLabels: ["com.pure.agent"]
+        ),
+        SpywareSignature(
+            name: "PirateStealer",
+            processNames: ["PirateStealer", "piratestealer", "discord_grabber"],
+            bundleIdentifiers: ["com.pirate.stealer"],
+            filePaths: [
+                "/private/tmp/.piratestealer",
+                "~/Library/Application Support/.pirate",
+            ],
+            launchAgentLabels: ["com.pirate.stealer"]
+        ),
+        // Mobile stalkerware with macOS companions (2024-2025)
+        SpywareSignature(
+            name: "Aispyer",
+            processNames: ["aispyer", "Aispyer", "aisagent"],
+            bundleIdentifiers: ["com.aispyer.agent"],
+            filePaths: ["~/Library/Application Support/.Aispyer"],
+            launchAgentLabels: ["com.aispyer.service"]
+        ),
+        SpywareSignature(
+            name: "Phonsee",
+            processNames: ["Phonsee", "phonsee", "phnagent"],
+            bundleIdentifiers: ["com.phonsee.agent"],
+            filePaths: ["~/Library/Application Support/.Phonsee"],
+            launchAgentLabels: ["com.phonsee.service"]
+        ),
+        SpywareSignature(
+            name: "uMobix",
+            processNames: ["uMobix", "umobix", "umxagent"],
+            bundleIdentifiers: ["com.umobix.agent"],
+            filePaths: ["~/Library/Application Support/.uMobix"],
+            launchAgentLabels: ["com.umobix.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

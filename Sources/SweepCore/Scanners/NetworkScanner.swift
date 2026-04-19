@@ -40,6 +40,24 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // Cobalt Strike / Metasploit / modern macOS stealer defaults (2024-2025)
+        50050,                                 // Cobalt Strike team server default
+        50051, 50052,                          // Cobalt Strike alt
+        8000, 8001, 8009,                      // Frequent C2 fallback HTTP
+        8081, 8082, 8181,                      // Stealer HTTP panels
+        1604,                                  // Citrix ICA (abused by NimDoor 2025)
+        7443,                                  // Empire PowerShell default
+        1080,                                  // SOCKS (tunneling)
+        6112,                                  // Known BeaverTail/Contagious Interview loader
+        3333, 4545, 5050,                      // Modern clipper drops
+    ]
+
+    // Suspicious TLDs — freely available, frequently used for malware C2 domains.
+    // Matching is crude (substring in hostname) and may produce false positives on
+    // legitimate services, so we flag as LOW and let the user decide.
+    private let suspiciousTLDs: Set<String> = [
+        ".top", ".xyz", ".icu", ".cn", ".tk", ".ml", ".ga", ".cf", ".gq",
+        ".work", ".click", ".party", ".loan", ".download", ".zip", ".mov",
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -280,6 +298,24 @@ public final class NetworkScanner: Scanner {
                 path: "/etc/hosts",
                 remediation: "Review /etc/hosts for unexpected entries"
             ))
+        }
+
+        // Flag /etc/hosts entries that redirect to suspicious TLDs. Custom aliases to free/cheap
+        // TLDs (.tk, .ml, .xyz, etc.) in a user's hosts file are rare in normal setups and have
+        // been seen in phishing-resistant malware that routes victim traffic through attacker domains.
+        for line in lines {
+            let lineStr = String(line).trimmingCharacters(in: .whitespaces).lowercased()
+            if lineStr.isEmpty || lineStr.hasPrefix("#") { continue }
+            if let tld = suspiciousTLDs.first(where: { lineStr.contains($0 + " ") || lineStr.hasSuffix($0) }) {
+                findings.append(Finding(
+                    severity: .medium, category: .networkActivity,
+                    title: "/etc/hosts entry points to a suspicious TLD (\(tld))",
+                    detail: "Line: \(String(lineStr.prefix(120)))",
+                    path: "/etc/hosts",
+                    remediation: "Review /etc/hosts — attackers sometimes hijack hostnames to attacker-controlled free TLDs"
+                ))
+                break
+            }
         }
     }
 
