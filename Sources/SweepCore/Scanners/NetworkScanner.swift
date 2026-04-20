@@ -40,6 +40,13 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // Red-team / adversary-simulation framework defaults frequently
+        // observed in real intrusions (Cobalt Strike, Mythic, Havoc, Sliver).
+        50050,                                 // Cobalt Strike team-server default
+        7443, 7444,                            // Mythic HTTPS C2 defaults
+        40056,                                 // Havoc C2 default
+        4040,                                  // ngrok local UI / tunneled C2 staging
+        9001, 9030,                            // Tor relay ports (rare for end-user Macs)
     ]
 
     private let blockedAppleDomains: Set<String> = [

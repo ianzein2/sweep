@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari cross-site tracking")
+        checkSafariPrivacy(findings: &findings, errors: &errors)
+
+        progress?.update("checking Secure Keyboard Entry")
+        checkSecureKeyboardEntry(findings: &findings, errors: &errors)
+
+        progress?.update("checking background login items")
+        checkBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version support")
+        checkMacOSSupport(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +461,144 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac lets an owner remotely lock or wipe a stolen device. Stalkerware
+        // operators, resellers of stolen gear, and attackers who want to keep the device
+        // invisible often disable it, so a LOW informational finding here is meaningful.
+        let fmmPlist = "/Library/Preferences/com.apple.FindMyMac.plist"
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", fmmPlist, "FMMEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "If this Mac is stolen you can't locate, lock, or erase it remotely",
+                    path: fmmPlist,
+                    remediation: "Enable: System Settings > [Apple ID] > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Safari Privacy
+
+    private func checkSafariPrivacy(findings: inout [Finding], errors: inout [String]) {
+        // "Prevent cross-site tracking" has been the default in Safari since 2018, but
+        // malware and misconfigured profiles sometimes turn it off to let trackers persist.
+        // The pref key is BlockStoragePolicy: 1/2 = blocking, 0 = allow all.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Safari", "BlockStoragePolicy"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Safari cross-site tracking prevention is disabled",
+                    detail: "All cookies, including third-party trackers, are accepted",
+                    path: nil,
+                    remediation: "Enable: Safari > Settings > Privacy > Prevent cross-site tracking"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Secure Keyboard Entry
+
+    private func checkSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        // Terminal's Secure Keyboard Entry blocks other apps (including event-tap keyloggers)
+        // from observing keystrokes typed into the Terminal window. Recommended especially
+        // when pasting secrets, SSH keys, or sudo passwords.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Terminal Secure Keyboard Entry is disabled",
+                    detail: "Other apps (including keyloggers) can observe keystrokes typed into Terminal",
+                    path: nil,
+                    remediation: "Enable: Terminal > Secure Keyboard Entry (menu bar)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Items (SMAppService / launchd user agents)
+
+    private func checkBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // Since macOS Ventura, "Login Items & Extensions" lists every background item a
+        // user has approved to run at login — apps, helpers, and SMAppService agents.
+        // A large pile of unknown third-party items is a common stalkerware / adware
+        // footprint. We flag only when the count is high so we don't nag developer setups.
+        let result = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        guard result.success else { return }
+
+        var thirdPartyEnabled = 0
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            // Format: "PID\tStatus\tLabel" — skip the header and any malformed rows.
+            let cols = lineStr.split(separator: "\t", omittingEmptySubsequences: true)
+            guard cols.count >= 3 else { continue }
+            let label = String(cols[2]).trimmingCharacters(in: .whitespaces)
+            if label.isEmpty || label == "Label" { continue }
+            if label.hasPrefix("com.apple.") { continue }
+            if label.hasPrefix("application.com.apple.") { continue }
+            thirdPartyEnabled += 1
+        }
+
+        if thirdPartyEnabled >= 30 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Large number of third-party background items (\(thirdPartyEnabled))",
+                detail: "Many apps are allowed to run in the background — review for unknown entries",
+                path: nil,
+                remediation: "Audit: System Settings > General > Login Items & Extensions"
+            ))
+        }
+    }
+
+    // MARK: - macOS Version Support
+
+    private func checkMacOSSupport(findings: inout [Finding], errors: inout [String]) {
+        // Apple only ships security patches for the current and two prior major releases
+        // (a rolling 3-version support window). Running an older version leaves known
+        // privilege-escalation and RCE bugs unpatched.
+        let result = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        guard result.success else { return }
+
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let majorString = version.split(separator: ".").first,
+              let major = Int(majorString) else { return }
+
+        // Support window shifts forward each fall with the new release. macOS 14 (Sonoma)
+        // dropped off Apple's update schedule in fall 2025; 13 (Ventura) dropped in fall 2024.
+        if major < 14 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(version) no longer receives security updates",
+                detail: "Apple has stopped patching this major version — known vulnerabilities remain unfixed",
+                path: nil,
+                remediation: "Upgrade: System Settings > General > Software Update"
+            ))
+        } else if major == 14 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS \(version) is on the oldest supported major version",
+                detail: "Security updates for this version will end when the next major macOS ships",
+                path: nil,
+                remediation: "Plan to upgrade: System Settings > General > Software Update"
+            ))
         }
     }
 

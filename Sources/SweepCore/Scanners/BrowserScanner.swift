@@ -11,10 +11,22 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2025 reported malicious publishers / typosquats
+        "prettiest", "material-theme-plus", "chatgpt-autocoder",
+        "solana-foundation-toolkit", "ahban.cychelloworld",
+        "ahban.shiba", "evaera.discord-presence-stealer",
+        "cursor-pro-activate", "cursor-pro-crack", "vscode-theme-hoverinc",
+        "python-indent-pro", "dotenv-official",
+        // Open VSX / Cursor marketplace abuse (Ferret family "interview" variants)
+        "eslint-community-helper", "eslint-prettier-helper",
+        "react-dev-tools-helper", "pylance-helper",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2024-2025 additions
+        "wallet-drain", "seed-extractor", "cookie-exfil", "cred-dump",
+        "c2-beacon", "mnemonic-steal",
     ]
 
     // Extensions that are well-known and safe
