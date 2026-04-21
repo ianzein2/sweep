@@ -70,9 +70,9 @@ sudo sweep --json
 
 | Scanner | What it does |
 |---------|-------------|
-| **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
+| **Process** | Matches running processes against a curated spyware signature set (classic stalkerware plus 2024-2025 macOS threats — BeaverTail/InvisibleFerret/FROSTYFERRET/FRIENDLYFERRET, RustDoor, NimDoor, Koi Stealer, TodoSwift, HZ RAT, NotLockBit, LightSpy, RustyAttr, XLoader, Lumma Stealer, ClickFix, Vortax, CloudChat), flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
+| **Persistence** | LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron, login/logout hooks, periodic scripts, emond rules, authorization plugins, Mail/QuickLook/Audio Unit/Spotlight/ScreenSaver plugin bundles, Folder Actions, at jobs |
 | **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
@@ -80,9 +80,9 @@ sudo sweep --json
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
 | **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions, inspects Native Messaging Hosts for unsigned or rogue IPC binaries |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, RustyAttr-style large xattr payloads, Gatekeeper quarantine-bypass apps, risky code-signing entitlements (library-validation disabled, get-task-allow, dyld env vars) |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH client + sshd server config, sharing services, software updates, USB accessory policy (Sequoia+), Find My, Handoff, wake-on-network, Bonjour advertising |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

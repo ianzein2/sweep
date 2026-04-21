@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
@@ -63,6 +64,13 @@ public final class BrowserScanner: Scanner {
         //    malicious marketplace extensions that steal cookies, keychains, and wallets.
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
+
+        // 5. Native Messaging Hosts — binaries that browser extensions can invoke via stdio.
+        //    After the Dec 2024 Cyberhaven-style supply-chain attacks, compromised extensions
+        //    have been observed using Native Messaging to execute local payloads and
+        //    persist across sessions without a LaunchAgent.
+        progress?.update("scanning native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -377,6 +385,141 @@ public final class BrowserScanner: Scanner {
                 }
             }
         }
+    }
+
+    // MARK: - Native Messaging Hosts
+
+    /// Browser extensions can register a "Native Messaging Host" — a manifest JSON that
+    /// points to a local binary the extension is allowed to invoke over stdio. A malicious
+    /// or compromised extension with the "nativeMessaging" permission can then execute
+    /// that binary with arbitrary stdin. Legitimate uses (1Password, KeePassXC, enterprise
+    /// SSO agents) exist, but unsigned binaries in user-writable paths are a major red flag.
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let hostDirs: [(browser: String, path: String)] = [
+            ("Chrome",    "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts"),
+            ("Chrome",    "/Library/Google/Chrome/NativeMessagingHosts"),
+            ("Brave",     "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            ("Edge",      "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts"),
+            ("Edge",      "/Library/Microsoft/Edge/NativeMessagingHosts"),
+            ("Chromium",  "\(home)/Library/Application Support/Chromium/NativeMessagingHosts"),
+            ("Arc",       "\(home)/Library/Application Support/Arc/NativeMessagingHosts"),
+            ("Firefox",   "\(home)/Library/Application Support/Mozilla/NativeMessagingHosts"),
+            ("Firefox",   "/Library/Application Support/Mozilla/NativeMessagingHosts"),
+        ]
+
+        // Hosts shipped by trusted vendors — we don't flag these.
+        let trustedHostNames: Set<String> = [
+            "com.1password.1password",
+            "com.1password.browser_support",
+            "com.keepassxc.keepassxc_browser",
+            "org.keepassxc.keepassxc_browser",
+            "com.bitwarden.browser",
+            "com.google.native_messaging",
+            "com.google.chrome.remote_assistance",
+            "com.github.gnome-shell-extensions.browser-connector",
+            "org.gnome.browser_connector",
+            "com.dashlane.helper",
+            "com.lastpass.lpbinary",
+            "com.lastpass.nativemessaging",
+        ]
+
+        let fm = FileManager.default
+        for (browser, dir) in hostDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let hostName = manifest["name"] as? String ?? entry.replacingOccurrences(of: ".json", with: "")
+                let execPath = manifest["path"] as? String ?? ""
+                let allowedExtensions = (manifest["allowed_extensions"] as? [String]) ?? []
+                let allowedOrigins = (manifest["allowed_origins"] as? [String]) ?? []
+
+                if trustedHostNames.contains(hostName) { continue }
+
+                // Broken manifest: executable doesn't exist. Either stale or tampered.
+                if !execPath.isEmpty && !fm.fileExists(atPath: execPath) {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "\(browser) Native Messaging Host references missing binary",
+                        detail: "Host: \(hostName), expected at: \(execPath)",
+                        path: manifestPath,
+                        remediation: "Stale host manifest — remove if not needed: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Hosts pointing to temp / hidden / user-writable directories are suspicious.
+                let isTempOrHidden = execPath.hasPrefix("/tmp") ||
+                                     execPath.hasPrefix("/private/tmp") ||
+                                     execPath.hasPrefix("/var/tmp") ||
+                                     execPath.contains("/.")
+                let isInDownloads = execPath.hasPrefix("\(home)/Downloads")
+
+                if isTempOrHidden || isInDownloads {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(browser) Native Messaging Host points to \(isInDownloads ? "Downloads" : "temp/hidden") path",
+                        detail: "Host: \(hostName), binary: \(execPath) — browser extensions with nativeMessaging permission can launch this at will",
+                        path: manifestPath,
+                        remediation: "Remove manifest: rm \"\(manifestPath)\" and investigate the target binary"
+                    ))
+                    continue
+                }
+
+                // Check code signature of the host binary.
+                if !execPath.isEmpty && fm.fileExists(atPath: execPath) {
+                    let isSigned = checkNativeHostSigned(path: execPath)
+                    if !isSigned {
+                        let allowList = !allowedExtensions.isEmpty
+                            ? "extensions: \(allowedExtensions.prefix(3).joined(separator: ", "))"
+                            : (allowedOrigins.isEmpty ? "no allow-list" : "origins: \(allowedOrigins.prefix(3).joined(separator: ", "))")
+                        findings.append(Finding(
+                            severity: .medium, category: .persistence,
+                            title: "Unsigned \(browser) Native Messaging Host",
+                            detail: "Host: \(hostName), binary: \(execPath), \(allowList)",
+                            path: manifestPath,
+                            remediation: "Verify this host is legitimate — unsigned native hosts can be hijacked by malicious extensions"
+                        ))
+                    }
+                }
+
+                // Permissive allow-lists ("*" or empty) mean any extension can invoke the host.
+                if allowedExtensions.contains("*") || (allowedExtensions.isEmpty && allowedOrigins.isEmpty) {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "\(browser) Native Messaging Host has permissive allow-list",
+                        detail: "Host: \(hostName) — no extension/origin restriction means any installed extension can invoke \(execPath)",
+                        path: manifestPath,
+                        remediation: "Restrict allowed_extensions in the manifest or remove if not essential"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func checkNativeHostSigned(path: String) -> Bool {
+        // Only check signature of Mach-O binaries. Many native hosts are shell scripts
+        // or Python entry points that won't have a code signature but aren't inherently bad.
+        guard let fh = FileHandle(forReadingAtPath: path) else { return true }
+        let header = fh.readData(ofLength: 4)
+        fh.closeFile()
+        guard header.count == 4 else { return true }
+        let magic = header.withUnsafeBytes { $0.load(as: UInt32.self) }
+        let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+        guard machoMagics.contains(magic) else { return true }  // not Mach-O — skip
+
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let code = staticCode else {
+            return false
+        }
+        return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
     }
 
     private struct EditorScriptScan {

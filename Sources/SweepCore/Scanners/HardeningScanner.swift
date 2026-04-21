@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server configuration")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking USB accessory permissions")
+        checkUSBAccessoryPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Handoff / Continuity")
+        checkHandoff(findings: &findings, errors: &errors)
+
+        progress?.update("checking wake on network access")
+        checkWakeOnNetwork(findings: &findings, errors: &errors)
+
+        progress?.update("checking bonjour / mDNS advertising")
+        checkBonjourAdvertising(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,221 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - SSH Server Configuration
+
+    /// When Remote Login is enabled, sshd's configuration controls how exposed the
+    /// Mac actually is. Default Apple config is reasonable but can be weakened by
+    /// users or enterprise tooling — and every CVE-weak setting we can detect is one
+    /// fewer way in for a brute-force or credential-stuffing attack.
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only flag SSH-config issues if sshd is actually enabled. Otherwise they're moot.
+        let sshEnabled = ShellRunner.run("/usr/sbin/systemsetup",
+                                         arguments: ["-getremotelogin"], timeout: 5)
+        guard sshEnabled.success && sshEnabled.stdout.lowercased().contains(": on") else { return }
+
+        // Prefer the effective config as sshd sees it (resolves Match/Include blocks).
+        // Fall back to the raw file if sshd -T isn't available to us.
+        var effective = ShellRunner.run("/usr/sbin/sshd", arguments: ["-T"], timeout: 5).stdout
+        if effective.isEmpty {
+            effective = (try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8)) ?? ""
+        }
+        guard !effective.isEmpty else { return }
+
+        // sshd -T outputs lowercased keys; raw config can use any case. Normalize for matching.
+        let lines = effective.split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+
+        func value(for key: String) -> String? {
+            let lowerKey = key.lowercased()
+            for line in lines {
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                if parts[0].lowercased() == lowerKey {
+                    return String(parts[1]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+            return nil
+        }
+
+        // PermitRootLogin yes is a classic misconfiguration — root should never accept SSH.
+        if let permitRoot = value(for: "PermitRootLogin"),
+           permitRoot.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd allows root login",
+                detail: "PermitRootLogin = yes — an attacker with root's password or a leaked key gets full control",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set PermitRootLogin to \"no\" or \"prohibit-password\" in /etc/ssh/sshd_config.d/*.conf"
+            ))
+        }
+
+        // Password auth over SSH is the #1 brute-force target; key-only is the modern default.
+        if let passAuth = value(for: "PasswordAuthentication"),
+           passAuth.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "sshd accepts password authentication",
+                detail: "PasswordAuthentication = yes — SSH is exposed to credential stuffing and brute-force attempts",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Disable passwords and rely on public keys: set PasswordAuthentication no"
+            ))
+        }
+
+        // PermitEmptyPasswords yes on a publicly reachable host is a security catastrophe.
+        if let empty = value(for: "PermitEmptyPasswords"),
+           empty.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd permits empty passwords",
+                detail: "PermitEmptyPasswords = yes — an account with no password can log in without credentials",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set PermitEmptyPasswords no in /etc/ssh/sshd_config"
+            ))
+        }
+
+        // Old protocol 1 is deprecated and insecure.
+        if let proto = value(for: "Protocol"), proto.contains("1") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd enables SSH protocol 1",
+                detail: "Protocol includes 1 — protocol 1 has known cryptographic flaws",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set Protocol 2 in /etc/ssh/sshd_config"
+            ))
+        }
+    }
+
+    // MARK: - USB Accessory Permissions (macOS Sequoia 15+)
+
+    /// macOS Sequoia introduced a permission prompt for "unlocked" USB accessories on
+    /// Apple Silicon. Disabling the default (secure) value makes the Mac connect
+    /// silently to anything plugged in, including BadUSB/rubber-ducky-style devices.
+    private func checkUSBAccessoryPolicy(findings: inout [Finding], errors: inout [String]) {
+        // UserWasNotifiedOfChange=1 and AllowUSBRestrictedMode=0 indicate the user opted out.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.accessoryconnection", "AllowedNewAccessories"
+        ], timeout: 5)
+        // Missing key (default) is fine. Value of "Always" means "allow every new accessory".
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "Always" || value.lowercased() == "always" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "USB accessories are allowed without prompting",
+                    detail: "Setting is \"Always\" — any USB device (including BadUSB-style keystroke injectors) can connect silently on lock",
+                    path: nil,
+                    remediation: "Set to \"Ask Every Time\": System Settings > Privacy & Security > Allow accessories to connect"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    /// Find My Mac is the first line of defense for a stolen or lost Mac: remote wipe,
+    /// remote lock, location. If it's off, a thief can simply reformat and resell the machine.
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // MobileMeAccounts stores the iCloud account config, including a FindMyMac section.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "MobileMeAccounts"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        // If there's an account configured but no "FindMyMac" payload with Enabled=1, it's off.
+        let hasAccount = result.stdout.contains("AccountID") || result.stdout.contains("AccountDSID")
+        guard hasAccount else { return }
+
+        // A rough text search is robust to plist key ordering; the structured parse
+        // would need to walk a complex nested array of dictionaries.
+        let hasFMMEnabled = result.stdout.contains("FIND_MY_MAC") ||
+                            result.stdout.contains("FindMyMac") ||
+                            result.stdout.contains("com.apple.Dataclass.Device")
+        if !hasFMMEnabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "iCloud is configured but Find My Mac isn't — a lost or stolen Mac can't be located or remotely wiped",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Handoff / Continuity
+
+    /// Handoff and Universal Clipboard share data between Apple devices over Bluetooth
+    /// and iCloud. Disabling them reduces lateral-movement surface on family-shared IDs.
+    /// We only flag this at LOW severity — most users legitimately want it on.
+    private func checkHandoff(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.coreservices.useractivityd", "ActivityAdvertisingAllowed"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                // Informational: we don't penalize. Surface only if the user also runs on
+                // shared-ID hardware where clipboard leakage could matter.
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Handoff / Universal Clipboard is enabled",
+                    detail: "Clipboard and activity data is broadcast to other Apple devices on the same iCloud account",
+                    path: nil,
+                    remediation: "If this Mac's iCloud account is shared with others, disable: System Settings > General > AirDrop & Handoff"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wake on Network Access
+
+    /// Wake on network/LAN lets a remote device wake the Mac from sleep — very useful
+    /// for home media and enterprise management, but also a path for someone on the
+    /// local network to probe the Mac without the owner noticing.
+    private func checkWakeOnNetwork(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/pmset", arguments: ["-g"], timeout: 5)
+        guard result.success else { return }
+
+        // womp = Wake on Magic Packet (Ethernet); powernap wakes on iCloud sync.
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("womp") {
+                let parts = trimmed.split(separator: " ").filter { !$0.isEmpty }
+                if parts.count >= 2, parts[1] == "1" {
+                    findings.append(Finding(
+                        severity: .low, category: .hardening,
+                        title: "Wake-on-network is enabled",
+                        detail: "The Mac will wake from sleep in response to a magic packet on the LAN",
+                        path: nil,
+                        remediation: "If not needed, disable: sudo pmset -a womp 0"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Bonjour / mDNS Advertising
+
+    /// NoMulticastAdvertisements=1 hides the Mac's name and services from the local
+    /// network (Bonjour / mDNS). On untrusted Wi-Fi this reduces reconnaissance surface.
+    private func checkBonjourAdvertising(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.mDNSResponder.plist", "NoMulticastAdvertisements"
+        ], timeout: 5)
+        // Missing or 0 means advertising is on. Only flag as LOW since most users want it.
+        let advertising = !result.success ||
+                          result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0"
+        if advertising {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bonjour / mDNS advertising is enabled",
+                detail: "The Mac's name and shared services (AirPlay, Printer Sharing, File Sharing) are visible to any device on the same Wi-Fi",
+                path: nil,
+                remediation: "On untrusted networks, disable: sudo defaults write /Library/Preferences/com.apple.mDNSResponder.plist NoMulticastAdvertisements -bool YES"
+            ))
         }
     }
 

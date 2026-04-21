@@ -434,6 +434,222 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS malware families
+        // "Contagious Interview" DPRK campaign — fake job offers target devs with malicious
+        // npm packages and interview apps that drop BeaverTail, InvisibleFerret, and the
+        // FERRET family (FROSTYFERRET, FRIENDLYFERRET, MULTIPEEK, etc.).
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "pw.js", "main99"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "ordinaryMondogdb", "ordinaryMongods"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ssl",
+                "~/.ssl",
+                "~/Library/Application Support/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FROSTYFERRET (Ferret family)",
+            processNames: ["FROSTYFERRET", "FROSTYFERRET_UI", "ChromeUpdater", "chromeupdate",
+                           "CameraAccess", "chromeupdate_ua"],
+            bundleIdentifiers: ["com.google.chromeupdater"],
+            filePaths: [
+                "/private/tmp/.chromeupdate",
+                "~/Library/Application Support/.ChromeUpdate",
+            ],
+            launchAgentLabels: ["com.google.chromeupdater", "com.google.chromeupdate"]
+        ),
+        SpywareSignature(
+            name: "FRIENDLYFERRET (Ferret family)",
+            processNames: ["FRIENDLYFERRET", "FRIENDLYFERRET_SECD", "secd_agent", "securityd_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.secd",
+                "/private/var/tmp/.secd",
+            ],
+            launchAgentLabels: ["com.apple.secd.helper"]
+        ),
+        SpywareSignature(
+            name: "MULTIPEEK (Ferret family)",
+            processNames: ["MULTIPEEK", "multipeek", "videocallservice", "VirtualCam"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.multipeek"],
+            launchAgentLabels: []
+        ),
+        // RustDoor / ThiefBucket (Nov 2023, active through 2024-2025) — Rust-based backdoor
+        // often delivered as fake Visual Studio updates or crypto trading apps.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "mypass", "mypass_helper",
+                           "zshenv_helper", "zshrc_helper", "VisualStudioUpdater"],
+            bundleIdentifiers: ["com.microsoft.VisualStudioUpdater"],
+            filePaths: [
+                "/private/tmp/.test",
+                "~/Library/Application Support/.rustdoor",
+                "~/.systemd",
+                "/Users/Shared/.rustdoor",
+            ],
+            launchAgentLabels: ["com.apple.systemd", "com.microsoft.visualstudioupdater"]
+        ),
+        // Koi Stealer / NimDoor (Lazarus, 2024-2025) — Nim-compiled dropper that injects
+        // an AppleScript payload chain and targets macOS crypto and messaging clients.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "installer_helper", "GoogleCrashHelper",
+                           "trojanized_zoom"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Google/.helper",
+            ],
+            launchAgentLabels: ["com.google.crashhelper"]
+        ),
+        SpywareSignature(
+            name: "Koi Stealer",
+            processNames: ["KoiStealer", "koistealer", "koi_agent"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.koi", "~/Library/Application Support/.koi"],
+            launchAgentLabels: []
+        ),
+        // TodoSwift / SwiftSpy (Lazarus variant, 2024) — Swift-based loader disguised
+        // as a to-do list app, talks to attacker-controlled GitHub repos for payloads.
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "SwiftUpdater", "swiftupdater"],
+            bundleIdentifiers: ["com.todoswift.app", "com.swiftupdater.helper"],
+            filePaths: ["~/Library/Application Support/.todoswift"],
+            launchAgentLabels: ["com.apple.swiftupdater"]
+        ),
+        // HZ RAT (macOS variant, 2024) — ported from Windows, primarily targets WeChat
+        // and DingTalk on Macs used by Chinese-speaking crypto and finance workers.
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZ", "HZRat", "hz_rat", "rat_macos", "OpenVPNConnect_helper"],
+            bundleIdentifiers: ["com.hz.rat", "com.openvpn.connecthelper"],
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/tmp/.hz",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        // NotLockBit (Oct 2024) — first real macOS ransomware family after ThiefQuest,
+        // Go-based, exfiltrates data to S3 then encrypts with AES + RSA.
+        SpywareSignature(
+            name: "NotLockBit (macOS ransomware)",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_mac", "mac_ransom"],
+            bundleIdentifiers: ["com.notlockbit.payload"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.lockbit",
+            ],
+            launchAgentLabels: ["com.lockbit.agent"]
+        ),
+        // EvilQuest / ThiefQuest — ransomware + infostealer hybrid, still in the wild.
+        SpywareSignature(
+            name: "EvilQuest / ThiefQuest",
+            processNames: ["EvilQuest", "thiefquest", "mixednkey", "toolroomd",
+                           "com.apple.questd", "patch", "CrashReporter.tool"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/AppQuest",
+                "/Library/AppQuest",
+                "~/Library/mixednkey",
+            ],
+            launchAgentLabels: ["com.apple.questd", "com.apple.tooloom"]
+        ),
+        // LightSpy (macOS 2024) — modular implant first seen on iOS, ported to macOS
+        // via watering-hole attacks against Hong Kong journalists and activists.
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["LightSpy", "lightspy", "macload", "F_Warehouse",
+                           "MacPluginsLoader", "irc_loader"],
+            bundleIdentifiers: ["com.apple.lightspy", "com.light.spy"],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+            ],
+            launchAgentLabels: []
+        ),
+        // RustyAttr (Nov 2024) — stores the actual malware payload inside extended
+        // file attributes (xattr) to evade static scanners that only read file contents.
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "xattr_loader"],
+            bundleIdentifiers: ["com.rusty.attr", "io.nwjs.app"],
+            filePaths: ["/private/tmp/.rustyattr"],
+            launchAgentLabels: []
+        ),
+        // XLoader (formerly FormBook) macOS port — commodity infostealer leased as MaaS.
+        SpywareSignature(
+            name: "XLoader (macOS)",
+            processNames: ["XLoader", "xloader", "OfficeUpdate", "office_update"],
+            bundleIdentifiers: ["com.microsoft.officeupdater"],
+            filePaths: [
+                "/private/tmp/.xloader",
+                "~/Library/Application Support/.xloader",
+            ],
+            launchAgentLabels: ["com.microsoft.officeupdater"]
+        ),
+        // Shlayer / Bundlore — historically the top macOS adware loader, often drops
+        // secondary stealers. Still widely distributed via fake Flash/codec updates in 2024.
+        SpywareSignature(
+            name: "Shlayer / Bundlore",
+            processNames: ["Shlayer", "shlayer", "Bundlore", "bundlore", "MacSearch",
+                           "Mughthesec", "Advanced Mac Cleaner", "MyCouponsmart"],
+            bundleIdentifiers: ["com.Shlayer", "com.bundlore.installer"],
+            filePaths: [
+                "/private/tmp/.shlayer",
+                "~/Library/Application Support/.bundlore",
+            ],
+            launchAgentLabels: ["com.shlayer.agent", "com.bundlore.agent"]
+        ),
+        // CloudChat (2024) — fake chat client delivered to targets in South Asia,
+        // with backdoor and screen-capture capabilities.
+        SpywareSignature(
+            name: "CloudChat",
+            processNames: ["CloudChat", "cloudchat", "CloudChatHelper"],
+            bundleIdentifiers: ["com.cloudchat.mac", "com.cloudchat.helper"],
+            filePaths: ["~/Library/Application Support/.CloudChat"],
+            launchAgentLabels: ["com.cloudchat.helper"]
+        ),
+        // Vortax (Jun 2024) — Rhadamanthys-adjacent macOS stealer distributed as a fake
+        // video-conferencing app on X and crypto Telegram channels.
+        SpywareSignature(
+            name: "Vortax",
+            processNames: ["Vortax", "vortax", "VortaxMeeting", "VortaxHelper"],
+            bundleIdentifiers: ["com.vortax.app", "com.vortax.helper"],
+            filePaths: ["/private/tmp/.vortax", "~/Library/Application Support/.Vortax"],
+            launchAgentLabels: ["com.vortax.helper"]
+        ),
+        // DeceptiveDeveloper / ClickFix (2024-2025) — social-engineered fake "fix"
+        // pages that trick users into pasting malicious curl|bash commands in Terminal.
+        SpywareSignature(
+            name: "ClickFix loader",
+            processNames: ["clickfix", "clickfix_mac", "update_terminal"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.clickfix", "~/Library/Application Support/.clickfix"],
+            launchAgentLabels: []
+        ),
+        // Lumma Stealer (macOS port spotted 2025) — major Windows stealer with a Mach-O
+        // build that targets browser logins and crypto wallets.
+        SpywareSignature(
+            name: "Lumma Stealer (macOS)",
+            processNames: ["Lumma", "lumma", "lummac", "lummastealer"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: ["/private/tmp/.lumma", "~/Library/Application Support/.lumma"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

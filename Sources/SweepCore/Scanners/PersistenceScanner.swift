@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plugin bundles (Mail / QuickLook / AudioUnit)")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking authorization plugins")
+        scanAuthorizationPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript folder actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking at(1) job queue")
+        scanAtJobs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +688,204 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - Plugin Bundles (Mail / Quick Look / Audio Units / Spotlight / Screen Savers)
+
+    /// Each of these plugin directories loads third-party code into a running system
+    /// process: Mail plugins run inside Mail.app, Quick Look generators run inside the
+    /// QuickLook daemon, Audio Unit plugins load into coreaudiod, Spotlight importers
+    /// run as mdworker. All are documented-but-underused persistence vectors.
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let pluginDirs: [(kind: String, path: String, host: String)] = [
+            ("Mail bundle",        "\(home)/Library/Mail/Bundles",                            "Mail.app"),
+            ("Mail bundle",        "/Library/Mail/Bundles",                                   "Mail.app"),
+            ("Quick Look plugin",  "\(home)/Library/QuickLook",                               "QuickLook daemon"),
+            ("Quick Look plugin",  "/Library/QuickLook",                                      "QuickLook daemon"),
+            ("Audio Unit plugin",  "\(home)/Library/Audio/Plug-Ins/Components",               "Core Audio host"),
+            ("Audio Unit plugin",  "/Library/Audio/Plug-Ins/Components",                      "Core Audio host"),
+            ("Audio Unit plugin",  "\(home)/Library/Audio/Plug-Ins/HAL",                      "Core Audio host"),
+            ("Audio Unit plugin",  "/Library/Audio/Plug-Ins/HAL",                             "Core Audio host"),
+            ("Spotlight importer", "\(home)/Library/Spotlight",                               "mdworker"),
+            ("Spotlight importer", "/Library/Spotlight",                                      "mdworker"),
+            ("Screen Saver",       "\(home)/Library/Screen Savers",                           "legacyScreenSaver"),
+            ("Screen Saver",       "/Library/Screen Savers",                                  "legacyScreenSaver"),
+        ]
+
+        let fm = FileManager.default
+        for (kind, path, host) in pluginDirs {
+            guard fm.fileExists(atPath: path),
+                  let entries = try? fm.contentsOfDirectory(atPath: path) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let bundlePath = "\(path)/\(entry)"
+                // Skip obvious Apple-provided screen savers / samples.
+                if entry.hasSuffix(".saver") && path.hasPrefix("/System/") { continue }
+
+                // Read the bundle's Info.plist to extract identifier and executable name
+                let infoPlistPath = "\(bundlePath)/Contents/Info.plist"
+                var bundleId = entry
+                var execName: String?
+                if let data = fm.contents(atPath: infoPlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    if let id = plist["CFBundleIdentifier"] as? String { bundleId = id }
+                    execName = plist["CFBundleExecutable"] as? String
+                }
+
+                // Apple-bundled plugins are expected; skip known safe vendors.
+                if bundleId.hasPrefix("com.apple.") { continue }
+                let trustedVendorPrefixes = [
+                    "com.microsoft.", "com.adobe.", "com.avid.", "com.ableton.",
+                    "com.nativeinstruments.", "com.waves.", "com.izotope.",
+                    "com.universalaudio.", "com.fabfilter.", "com.spectrasonics.",
+                    "com.plugin-alliance.",
+                ]
+                if trustedVendorPrefixes.contains(where: { bundleId.hasPrefix($0) }) { continue }
+
+                // Check against known spyware
+                if let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware installed as \(kind): \(sig.name)",
+                        detail: "Bundle: \(bundleId) — runs inside \(host)",
+                        path: bundlePath,
+                        remediation: "Remove: rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Check signature of the main executable (falls back to bundle path).
+                let execPath = execName.map { "\(bundlePath)/Contents/MacOS/\($0)" } ?? bundlePath
+                let isSigned = checkIsSigned(path: execPath)
+
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high, category: .persistence,
+                    title: "Third-party \(kind) installed\(isSigned ? "" : " (unsigned)")",
+                    detail: "Bundle: \(bundleId) — loads into \(host) and runs with that process's privileges",
+                    path: bundlePath,
+                    remediation: "Verify this plugin is intentional. Mail/Quick Look/Audio Unit plugins inherit their host's TCC grants."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Authorization Plugins (SecurityAgentPlugins)
+
+    /// `/Library/Security/SecurityAgentPlugins` contains modules that run inside
+    /// SecurityAgent during authentication flows — login, screen unlock, keychain
+    /// prompts. XCSSET and several APT campaigns have abused this directory to capture
+    /// user passwords as they are entered. The directory is empty by default on stock macOS.
+    private func scanAuthorizationPlugins(findings: inout [Finding], errors: inout [String]) {
+        let pluginDir = "/Library/Security/SecurityAgentPlugins"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: pluginDir) else { return }
+
+        // Known legitimate plugins shipped by enterprise tools (e.g. Okta Verify,
+        // JumpCloud, NoMAD/Jamf Connect). We report them at LOW but still surface them
+        // so the user knows something has authentication-time code execution.
+        let knownEnterprisePrefixes = [
+            "com.jamf.", "com.okta.", "com.jumpcloud.", "com.nomad.",
+            "com.trellix.", "com.apple.",
+        ]
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let fullPath = "\(pluginDir)/\(entry)"
+            let infoPlistPath = "\(fullPath)/Contents/Info.plist"
+            var bundleId = entry
+            if let data = fm.contents(atPath: infoPlistPath),
+               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+               let id = plist["CFBundleIdentifier"] as? String {
+                bundleId = id
+            }
+
+            let isKnownEnterprise = knownEnterprisePrefixes.contains(where: { bundleId.hasPrefix($0) })
+            let isSigned = checkIsSigned(path: fullPath)
+
+            let severity: Severity = (isKnownEnterprise && isSigned) ? .low
+                : (isSigned ? .medium : .high)
+
+            findings.append(Finding(
+                severity: severity, category: .persistence,
+                title: "Authorization plugin installed",
+                detail: "Bundle: \(bundleId)\(isSigned ? "" : " (unsigned)") — runs inside SecurityAgent during login and unlock",
+                path: fullPath,
+                remediation: "Authorization plugins can observe passwords at login. Verify the vendor, then remove if not expected: sudo rm -rf \"\(fullPath)\""
+            ))
+        }
+    }
+
+    // MARK: - AppleScript Folder Actions
+
+    /// Folder Actions attach AppleScript handlers to directories so that adding or
+    /// removing a file triggers a script. This is a low-profile persistence channel
+    /// because it lives entirely in user-space preferences, no LaunchAgent plist.
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // Folder actions are serialized into a FolderActionsDispatcher plist.
+        let paths = [
+            "\(home)/Library/Application Scripts/com.apple.FolderActionsDispatcher",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+        ]
+
+        let fm = FileManager.default
+        for path in paths {
+            guard fm.fileExists(atPath: path),
+                  let entries = try? fm.contentsOfDirectory(atPath: path) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let scriptPath = "\(path)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "AppleScript folder action installed",
+                    detail: "File: \(entry) — runs automatically when the attached folder changes",
+                    path: scriptPath,
+                    remediation: "Review the script, and the folder it's attached to in Script Editor > Folder Actions Setup"
+                ))
+            }
+        }
+
+        // Check the dispatcher preferences for attached folders
+        let prefs = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: prefs),
+           let data = fm.contents(atPath: prefs),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let attached = plist["AttachedScripts"] as? [String: Any], !attached.isEmpty {
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "Folder Actions dispatcher has \(attached.count) attached script(s)",
+                detail: "Folders: \(attached.keys.prefix(3).joined(separator: ", "))",
+                path: prefs,
+                remediation: "Review attached scripts: open -a 'Script Editor' and use Folder Actions Setup"
+            ))
+        }
+    }
+
+    // MARK: - at(1) Job Queue
+
+    /// The Unix `at` command schedules one-shot jobs that `atrun` executes later.
+    /// Jobs live in `/var/at/jobs` and persist across reboots. `atrun` is disabled by
+    /// default on macOS, but re-enabling it is trivial persistence and rarely expected.
+    private func scanAtJobs(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let jobsDir = "/var/at/jobs"
+        guard let entries = try? fm.contentsOfDirectory(atPath: jobsDir) else { return }
+        let real = entries.filter { !$0.hasPrefix(".") && $0 != ".SEQ" }
+        guard !real.isEmpty else { return }
+
+        // If there are jobs AND atrun is enabled, this is actively scheduled execution.
+        let atrunCheck = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let atrunEnabled = atrunCheck.success && atrunCheck.stdout.contains("com.apple.atrun")
+
+        findings.append(Finding(
+            severity: atrunEnabled ? .high : .medium,
+            category: .persistence,
+            title: "\(real.count) at(1) job(s) queued\(atrunEnabled ? " with atrun enabled" : "")",
+            detail: "Files: \(real.prefix(3).joined(separator: ", "))" +
+                (atrunEnabled ? "" : " — atrun is currently disabled, so jobs won't run until it's loaded"),
+            path: jobsDir,
+            remediation: "Inspect: sudo at -l, then remove unwanted jobs with: sudo atrm <jobid>"
+        ))
     }
 
     private func checkIsSigned(path: String) -> Bool {
