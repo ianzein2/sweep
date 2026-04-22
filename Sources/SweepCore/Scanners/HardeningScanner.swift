@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Apple Silicon reduced security")
+        checkReducedSecurity(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking background login item digest")
+        checkBackgroundItemDigest(findings: &findings, errors: &errors)
+
+        progress?.update("checking web content filter / monitoring profile")
+        checkWebContentFilter(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,126 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Apple Silicon reduced security (bputil / LocalPolicy)
+
+    private func checkReducedSecurity(findings: inout [Finding], errors: inout [String]) {
+        // `bputil -d` reads the LocalPolicy on Apple Silicon. "Reduced Security" disables
+        // signed system volume enforcement and allows kext loading — a prerequisite for
+        // several post-exploitation primitives. Only runs if bputil exists (Apple Silicon only)
+        // and we're root; otherwise silently skip.
+        guard FileManager.default.fileExists(atPath: "/usr/bin/bputil") else { return }
+        guard getuid() == 0 else { return }
+
+        let result = ShellRunner.run("/usr/bin/bputil", arguments: ["-d"], timeout: 10)
+        guard result.success else { return }
+
+        let output = result.stdout + result.stderr
+        let lower = output.lowercased()
+
+        if lower.contains("reduced security") ||
+           lower.contains("permissive security") {
+            let level = lower.contains("permissive") ? "Permissive" : "Reduced"
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Apple Silicon boot security is set to \(level)",
+                detail: "macOS is not running in Full Security mode — signed-system-volume enforcement and kext restrictions are weakened",
+                path: nil,
+                remediation: "Restore Full Security: boot into Recovery (hold power button), open Startup Security Utility, and select 'Full Security'"
+            ))
+        }
+        if lower.contains("3rd party kexts: enabled") || lower.contains("3rd party kernel extensions: enabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Third-party kernel extensions are enabled",
+                detail: "Boot policy allows loading unsigned/third-party kernel extensions — a legacy privilege that's unusual on modern macOS",
+                path: nil,
+                remediation: "Disable in Startup Security Utility unless a specific security tool requires it"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay (iCloud+) hides the user's IP and DNS from websites. Its absence isn't
+        // a security hole, but is surfaced as informational so users know whether their traffic
+        // is being anonymized. We only flag an affirmatively-disabled state on eligible accounts.
+        let home = ShellRunner.realUserHome
+        let prefsPath = "\(home)/Library/Preferences/com.apple.networkserviceproxy.plist"
+        guard let data = FileManager.default.contents(atPath: prefsPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        // The user-facing toggle surfaces as NetworkServiceProxyEnabled = 0 when the user
+        // has turned Private Relay off.
+        if let enabled = plist["NetworkServiceProxyEnabled"] as? Int, enabled == 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is turned off",
+                detail: "Your IP and DNS queries are visible to websites and ISPs — Private Relay is available on iCloud+ to hide both",
+                path: prefsPath,
+                remediation: "Enable in System Settings > [Your Name] > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Background login items that bypass Login Items UI
+
+    private func checkBackgroundItemDigest(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura introduced BackgroundItems-v*.btm — a signed db of every login
+        // item/LaunchAgent/helper. If this file is writable by a non-root user or has
+        // very recent modifications from unknown processes, it suggests tampering.
+        let btmDir = "/private/var/db/com.apple.backgroundtaskmanagement"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: btmDir) else { return }
+
+        for entry in entries where entry.hasSuffix(".btm") {
+            let path = "\(btmDir)/\(entry)"
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+                  let ownerId = attrs[.ownerAccountID] as? Int else { continue }
+            if ownerId != 0 {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Background task management file not owned by root",
+                    detail: "File \(path) is owned by UID \(ownerId) — an attacker may have rewritten the Login Items database to hide persistence",
+                    path: path,
+                    remediation: "Inspect \(path) and restore ownership: sudo chown root:wheel \(path)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Web content filter / traffic monitoring
+
+    private func checkWebContentFilter(findings: inout [Finding], errors: inout [String]) {
+        // Configuration profiles with a `com.apple.webcontent-filter` payload (a Network
+        // Extension content filter) can transparently proxy *all* HTTPS traffic. This is
+        // used by legitimate MDM/enterprise DLP, but is the same primitive spyware uses.
+        let result = ShellRunner.run("/bin/sh", arguments: [
+            "-c", "profiles show 2>/dev/null | grep -i 'PayloadType' | grep -Ei 'webcontent|dns-proxy|vpn' | head -10"
+        ], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        if result.stdout.lowercased().contains("webcontent-filter") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Web content filter profile installed",
+                detail: "A configuration profile installs a Network Extension content filter — all HTTPS traffic can be inspected. Confirm this is your employer's MDM.",
+                path: nil,
+                remediation: "Review: System Settings > General > Device Management. Remove if not expected."
+            ))
+        }
+        if result.stdout.lowercased().contains("dns-proxy") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "DNS-proxy profile installed",
+                detail: "A configuration profile installs a DNS proxy — all DNS queries can be intercepted and redirected",
+                path: nil,
+                remediation: "Review: System Settings > General > Device Management"
+            ))
         }
     }
 

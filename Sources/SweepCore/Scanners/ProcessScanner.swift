@@ -137,6 +137,10 @@ public final class ProcessScanner: Scanner {
         progress?.update("checking process hierarchy")
         scanProcessHierarchy(processes: processes, findings: &findings)
 
+        // Detect cryptominers — high-CPU background processes named like known miners
+        progress?.update("checking for cryptominers")
+        scanForCryptominers(processes: processes, findings: &findings)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -246,6 +250,41 @@ public final class ProcessScanner: Scanner {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - Cryptominer detection
+
+    /// Process-name fragments used by well-known cryptominer families. We match conservatively —
+    /// full equality or a very specific substring — because names like "xmr" appear in legitimate
+    /// processes too.
+    private let cryptominerNames: Set<String> = [
+        "xmrig", "xmrigdaemon", "xmr-stak", "xmr-stak-cpu", "xmr-stak-amd",
+        "cpuminer", "cpuminer-multi", "minerd", "ethminer", "claymore",
+        "nanominer", "nbminer", "phoenixminer", "t-rex", "trex",
+        "lolminer", "teamredminer", "gminer", "bzminer",
+        "kawpowminer", "rigelminer", "srbminer",
+    ]
+
+    /// Flags running cryptominers. Miners rarely hide behind a renamed binary on macOS because
+    /// OpenCL/Metal initialization logs via the binary's own path; we match the process name only.
+    private func scanForCryptominers(processes: [ProcessEntry], findings: inout [Finding]) {
+        let myPid = ProcessInfo.processInfo.processIdentifier
+
+        for proc in processes {
+            if proc.pid <= 1 || proc.pid == myPid { continue }
+
+            let nameLower = proc.name.lowercased()
+            guard cryptominerNames.contains(nameLower) else { continue }
+
+            findings.append(Finding(
+                severity: .high,
+                category: .cryptomining,
+                title: "Cryptominer process running: \"\(proc.name)\"",
+                detail: "PID \(proc.pid), Path: \(proc.path ?? "unknown") — known miner family",
+                path: proc.path,
+                remediation: "Terminate: kill \(proc.pid) — then hunt for the dropper via persistence/browser extensions"
+            ))
         }
     }
 

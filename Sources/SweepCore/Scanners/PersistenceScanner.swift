@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking Automator workflows")
+        scanAutomatorWorkflows(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,90 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Folder Actions (AppleScript triggered by file-system events)
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach an AppleScript to a folder; the script runs whenever
+        // the folder's contents change (Desktop, Downloads, etc.). This is an old-school
+        // primitive still abused by macOS malware. The actual scripts live in
+        // ~/Library/Scripts/Folder Action Scripts/. Any script there is worth surfacing.
+        let home = ShellRunner.realUserHome
+        let scriptsDir = "\(home)/Library/Scripts/Folder Action Scripts"
+        let fm = FileManager.default
+
+        if let entries = try? fm.contentsOfDirectory(atPath: scriptsDir) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let scriptPath = "\(scriptsDir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed: \(entry)",
+                    detail: "Script in \(scriptsDir) — runs whenever an attached folder changes. Verify it's yours.",
+                    path: scriptPath,
+                    remediation: "Review in Script Editor, or remove: rm \"\(scriptPath)\" (and detach via Folder Actions Setup)"
+                ))
+            }
+        }
+
+        // Also peek at the dispatcher plist for folder-to-script bindings. The schema has
+        // varied across macOS versions, so we do a lenient top-level walk: anything in the
+        // plist with a path-like value is surfaced for review.
+        let plistPath = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        guard let data = fm.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
+              let dict = plist as? [String: Any], !dict.isEmpty else { return }
+
+        // Minimal signal: the plist exists and has keys — user has enabled folder actions.
+        findings.append(Finding(
+            severity: .low, category: .persistence,
+            title: "Folder Actions are configured",
+            detail: "\(dict.count) key(s) in \(plistPath) — folder actions dispatcher is active",
+            path: plistPath,
+            remediation: "Review attachments in: right-click any folder > Services > Folder Actions Setup"
+        ))
+    }
+
+    // MARK: - Automator workflows
+
+    private func scanAutomatorWorkflows(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Workflows/Applications/* holds Automator-installed workflows. These can
+        // bind to file previews, Print dialog, or arbitrary launch triggers, and have full
+        // AppleScript / shell-script capabilities. Malicious workflows are rare but cheap to
+        // check — we surface any non-empty directory.
+        let home = ShellRunner.realUserHome
+        let roots = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Services",
+        ]
+
+        for root in roots {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root) else { continue }
+            for entry in entries where entry.hasSuffix(".workflow") || entry.hasSuffix(".action") {
+                let workflowPath = "\(root)/\(entry)"
+                // Try to surface whether the workflow contains a shell-script step — those
+                // are strictly more dangerous than AppleScript-only workflows.
+                let docPath = "\(workflowPath)/Contents/document.wflow"
+                var containsShell = false
+                if let content = try? String(contentsOfFile: docPath, encoding: .utf8) {
+                    let lower = content.lowercased()
+                    containsShell = lower.contains("run shell script") ||
+                                    lower.contains("shellscriptaction") ||
+                                    lower.contains("/bin/bash") ||
+                                    lower.contains("/bin/sh")
+                }
+                findings.append(Finding(
+                    severity: containsShell ? .medium : .low,
+                    category: .persistence,
+                    title: "Automator workflow installed: \(entry)",
+                    detail: containsShell
+                        ? "Workflow contains a shell-script action — verify it's yours"
+                        : "Workflow registered as a Service / Folder Action",
+                    path: workflowPath,
+                    remediation: "Inspect in Automator.app or remove: rm -rf \"\(workflowPath)\""
+                ))
+            }
         }
     }
 

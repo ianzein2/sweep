@@ -60,6 +60,12 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Hunt for ClickFix / quarantine-bypass artifacts — downloaded executables whose
+        //    com.apple.quarantine xattr was stripped to sidestep Gatekeeper prompts (2024-2025
+        //    social-engineering wave).
+        progress?.update("checking for quarantine-bypass downloads")
+        scanForQuarantineBypass(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -547,6 +553,72 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Quarantine Bypass Detection
+
+    /// Every file macOS downloads via Safari/Chrome/Mail/AirDrop gets a `com.apple.quarantine`
+    /// extended attribute. Gatekeeper uses that attribute to enforce notarization and trigger
+    /// the "are you sure you want to open this?" prompt. ClickFix-style social engineering
+    /// convinces the victim to run `xattr -c file` (or bundles a .command that does it) to
+    /// strip the attribute and silently bypass Gatekeeper. Finding a recently-modified Mach-O
+    /// binary or shell script in ~/Downloads with NO quarantine attribute is a strong IOC.
+    private func scanForQuarantineBypass(home: String, findings: inout [Finding], errors: inout [String]) {
+        let downloadDirs = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+        ]
+        let fm = FileManager.default
+
+        for dir in downloadDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for file in contents {
+                // Skip dotfiles and obvious non-executables
+                if file.hasPrefix(".") { continue }
+                let filePath = "\(dir)/\(file)"
+
+                guard let attrs = try? fm.attributesOfItem(atPath: filePath),
+                      let modDate = attrs[.modificationDate] as? Date,
+                      modDate.timeIntervalSinceNow > -86400 * 30,   // downloaded in last 30 days
+                      let isRegular = attrs[.type] as? FileAttributeType,
+                      isRegular == .typeRegular else { continue }
+
+                // Cheap filter: restrict the check to .command, .sh, .pkg, .app, .dmg, or
+                // Mach-O binaries. Parsing xattrs for every Download is unnecessary.
+                let suspiciousExts: Set<String> = ["command", "sh", "pkg", "dmg", "app", "bin", "zsh", "bash"]
+                let ext = URL(fileURLWithPath: filePath).pathExtension.lowercased()
+                var isMacho = false
+                if !suspiciousExts.contains(ext) {
+                    // Peek the first 4 bytes to catch unmarked Mach-O droppers
+                    if let fh = FileHandle(forReadingAtPath: filePath) {
+                        let magic = fh.readData(ofLength: 4)
+                        fh.closeFile()
+                        if magic.count == 4 {
+                            let u = magic.withUnsafeBytes { $0.load(as: UInt32.self) }
+                            let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+                            if machoMagics.contains(u) { isMacho = true }
+                        }
+                    }
+                    if !isMacho { continue }
+                }
+
+                // Ask xattr for com.apple.quarantine. Absent attribute = stripped.
+                let xResult = ShellRunner.run("/usr/bin/xattr", arguments: ["-p", "com.apple.quarantine", filePath], timeout: 3)
+                let hasQuarantine = xResult.success && !xResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+                if !hasQuarantine {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Downloaded executable has quarantine attribute stripped",
+                        detail: "File \(filePath) is \(isMacho ? "a Mach-O binary" : ".\(ext)") but carries no com.apple.quarantine — Gatekeeper will not prompt before it runs",
+                        path: filePath,
+                        remediation: "If you don't recognize the file: rm \"\(filePath)\" — otherwise re-quarantine: xattr -w com.apple.quarantine '0083;00000000;manual;' \"\(filePath)\""
                     ))
                 }
             }

@@ -434,6 +434,213 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 threat intel — DPRK "Contagious Interview" / Lazarus cluster
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node_modules_installer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+                "~/.pyp",
+                "~/.n2",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "python_agent", "p.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/.n2",
+                "~/Library/Application Support/.ferret",
+                "/private/tmp/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FerretHelper"],
+            bundleIdentifiers: ["com.apple.ChromeUpdate", "com.flexible.ferret"],
+            filePaths: [
+                "~/Library/Application Support/.flexibleferret",
+                "/private/tmp/.flexferret",
+            ],
+            launchAgentLabels: ["com.apple.ChromeUpdate"]
+        ),
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "zshrc2", "visualstudioupdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/private/var/tmp/.rustdoor",
+                "~/.zshrc2",
+                "/Users/Shared/.visualstudioupdater",
+            ],
+            launchAgentLabels: ["com.visualstudio.code.updater"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "CoreKitAgent", "InjectWithDyldArm64"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todo-app"],
+            bundleIdentifiers: ["com.todo.swift"],
+            filePaths: [
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ThieveCoin / FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "SafariUpdate", "MacInstaller"],
+            bundleIdentifiers: ["com.apple.Safari.updater", "com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ReaderUpdate",
+            processNames: ["ReaderUpdate", "readerupdate", "nimadapter", "crystaladapter"],
+            bundleIdentifiers: ["com.reader.update"],
+            filePaths: [
+                "~/Library/Application Support/ReaderUpdate",
+                "/private/tmp/.readerupdate",
+            ],
+            launchAgentLabels: ["com.reader.update"]
+        ),
+        SpywareSignature(
+            name: "Ferret Family (ContagiousInterview)",
+            processNames: ["FROSTYFERRET_UI", "FRIENDLYFERRET_SECD", "MULTI_FROSTYFERRET_CMDCODES"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ferretdata",
+                "~/Library/Caches/com.apple.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        // AMOS-family / commodity stealer variants that emerged in 2024-2025
+        SpywareSignature(
+            name: "Marko Stealer",
+            processNames: ["Marko", "marko_mac", "markostealer"],
+            bundleIdentifiers: ["com.marko.stealer"],
+            filePaths: [
+                "/private/tmp/.marko",
+                "~/Library/Application Support/.Marko",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Mercury Stealer",
+            processNames: ["Mercury", "mercurystealer", "hg_mac"],
+            bundleIdentifiers: ["com.mercury.stealer"],
+            filePaths: [
+                "/private/tmp/.mercury",
+                "~/Library/Application Support/.Mercury",
+            ],
+            launchAgentLabels: ["com.mercury.agent"]
+        ),
+        SpywareSignature(
+            name: "Greedy Stealer",
+            processNames: ["Greedy", "greedystealer", "gstealer"],
+            bundleIdentifiers: ["com.greedy.stealer"],
+            filePaths: [
+                "/private/tmp/.greedy",
+                "~/Library/Application Support/.Greedy",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync", "sync_service"],
+            bundleIdentifiers: ["com.macsync.agent"],
+            filePaths: [
+                "/private/tmp/.macsync",
+                "~/Library/Application Support/.MacSync",
+            ],
+            launchAgentLabels: ["com.macsync.service"]
+        ),
+        // Crypto-clippers (clipboard hijackers that swap wallet addresses)
+        SpywareSignature(
+            name: "ClipBanker / Crypto Clipper",
+            processNames: ["clipbanker", "ClipBanker", "clipper", "clipwatcher", "ClipboardHelper"],
+            bundleIdentifiers: ["com.clipboard.helper", "com.clip.banker"],
+            filePaths: [
+                "/private/tmp/.clipper",
+                "~/Library/Application Support/.clipper",
+            ],
+            launchAgentLabels: ["com.clipboard.helper"]
+        ),
+        SpywareSignature(
+            name: "SparkCat (crypto OCR)",
+            processNames: ["SparkCat", "sparkcat", "im_sdk_scan"],
+            bundleIdentifiers: ["com.sparkcat.agent"],
+            filePaths: [
+                "~/Library/Application Support/.sparkcat",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024-2025 XCSSET v2 resurgence (Xcode 16 / modern obfuscation)
+        SpywareSignature(
+            name: "XCSSET v2024",
+            processNames: ["XcodeSpy", "xcsset_agent", "AssetsService", "safariupdated"],
+            bundleIdentifiers: ["com.apple.safariupdated", "com.apple.assets.service"],
+            filePaths: [
+                "~/Library/Application Scripts/com.apple.systempreferences",
+                "~/Library/LaunchAgents/com.apple.safariupdated.plist",
+            ],
+            launchAgentLabels: ["com.apple.safariupdated", "com.apple.assets.service"]
+        ),
+        // HZ RAT family — Chinese-speaking actor, 2024 resurgence
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZ", "hzrat", "hz_updater"],
+            bundleIdentifiers: ["com.hz.updater"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hz.updater"]
+        ),
+        // Open-source macOS RATs abused in the wild (2024-2025)
+        SpywareSignature(
+            name: "Mythic/Poseidon-macOS Agent",
+            processNames: ["mythic_agent", "poseidon_c2", "apollo_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.mythic",
+                "/private/var/tmp/.apollo",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "DarkWatchman (macOS port)",
+            processNames: ["darkwatchman", "DarkWatchman"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.darkwm"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

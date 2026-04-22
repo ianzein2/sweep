@@ -15,7 +15,7 @@ struct Sweep: ParsableCommand {
     @Flag(name: .long, help: "Verbose output")
     var verbose = false
 
-    @Option(name: .long, help: "Run only a specific scanner (process, permission, persistence, evidence, eventtap, device, kernel, integrity, network, profile, browser, deep, hardening)")
+    @Option(name: .long, help: "Run only a specific scanner (process, permission, persistence, evidence, eventtap, device, kernel, integrity, network, profile, browser, deep, hardening, supplychain)")
     var only: String?
 
     @Flag(name: .long, help: "Save scan results as baseline for future comparison")
@@ -77,6 +77,9 @@ struct Sweep: ParsableCommand {
         }
         if only == nil || only == "hardening" {
             scanners.append(HardeningScanner())
+        }
+        if only == nil || only == "supplychain" {
+            scanners.append(SupplyChainScanner())
         }
 
         var results: [ScanResult] = []
