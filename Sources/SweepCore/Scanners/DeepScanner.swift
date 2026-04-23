@@ -37,6 +37,13 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Scan shell history for "ClickFix" / pipe-to-shell attack residue.
+        //    ClickFix (2024-2025) tricks users via fake CAPTCHA or fake error prompts into
+        //    pasting a shell command from their clipboard — the command lands in history,
+        //    so history is forensic gold even after the attack completes.
+        progress?.update("scanning shell history for pipe-to-shell attacks")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +284,112 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Shell History (ClickFix / pipe-to-shell residue)
+
+    /// Classic pipe-to-shell loader patterns. Any of these in a user's shell history is
+    /// worth surfacing — they are rarely typed by hand and are a staple of ClickFix,
+    /// fake-browser-update, and fake-CAPTCHA lures that have been dominant in 2024-2025.
+    private let clickFixPatterns: [(regex: String, severity: Severity, label: String)] = [
+        // curl ... | sh / bash / zsh — the canonical drop-and-run.
+        (#"curl[^\n]*\|\s*(sh|bash|zsh)\b"#, .high,
+         "downloaded script piped directly into a shell"),
+        (#"wget[^\n]*\|\s*(sh|bash|zsh)\b"#, .high,
+         "downloaded script piped directly into a shell"),
+        // base64 -d | sh — obfuscated payload decode-and-run.
+        (#"base64\s+(-d|--decode)[^\n]*\|\s*(sh|bash|zsh)\b"#, .high,
+         "base64-decoded payload piped into a shell"),
+        // osascript -e 'do shell script ...' — AppleScript-wrapped execution, often with
+        // elevated-privilege prompts attackers prefer because they look native.
+        (#"osascript\s+-e\s*['"]do shell script"#, .high,
+         "AppleScript wrapper used to run a shell command (common lure technique)"),
+        // `xattr -d com.apple.quarantine` on a downloaded file — strips Gatekeeper flag so
+        // a just-downloaded app can run without the usual warning.
+        (#"xattr\s+-d\s+com\.apple\.quarantine"#, .medium,
+         "quarantine flag stripped from a downloaded file — bypasses Gatekeeper"),
+        // `sudo spctl --master-disable` — turns off Gatekeeper system-wide.
+        (#"spctl\s+--master-disable"#, .high,
+         "Gatekeeper was disabled via spctl"),
+        // eval "$(curl ...)" — direct remote-code execution in a shell evaluator.
+        (#"eval\s*["`\$]?\s*\(?\s*curl"#, .high,
+         "remote output evaluated as shell code"),
+        // python -c "... urllib ... exec(...)" — Python one-liner loader.
+        (#"python3?\s+-c[^\n]*urllib[^\n]*exec\("#, .high,
+         "Python one-liner that fetches and executes remote code"),
+        // `chmod +x /tmp/...` followed by invocation — downloaded-binary loader shape.
+        (#"chmod\s+\+x\s+/(tmp|var/tmp|private/tmp)/"#, .medium,
+         "made a file in a temp directory executable"),
+        // killall Terminal after running something — common finisher in ClickFix lures to
+        // hide shell output from the user.
+        (#"killall\s+Terminal"#, .medium,
+         "killed Terminal from the command line — common in ClickFix lures that hide their trail"),
+    ]
+
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let histories = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.sh_history",
+            "\(home)/.history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        let fm = FileManager.default
+
+        for path in histories {
+            guard fm.fileExists(atPath: path) else { continue }
+            // Read latest portion only — long histories can be dozens of MB.
+            guard let attrs = try? fm.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? Int, size > 0 else { continue }
+
+            let readSize = min(size, 2_000_000)  // last 2MB is plenty for recent commands
+            guard let handle = FileHandle(forReadingAtPath: path) else { continue }
+            defer { try? handle.close() }
+            if size > readSize {
+                try? handle.seek(toOffset: UInt64(size - readSize))
+            }
+            let data = handle.readDataToEndOfFile()
+            guard let content = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .ascii) else { continue }
+
+            // De-dupe: the same pattern firing on every invocation isn't useful — one finding
+            // per (file, pattern) with a count and a sample line is much more readable.
+            struct Hit { var count: Int; var sample: String }
+            var hits: [String: Hit] = [:]
+
+            let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+            for rawLine in lines.suffix(5_000) {  // cap on lines to bound work
+                // .zsh_history uses ": <timestamp>:0;<command>" — strip the metadata prefix.
+                var line = String(rawLine)
+                if line.hasPrefix(":"), let semicolon = line.firstIndex(of: ";") {
+                    line = String(line[line.index(after: semicolon)...])
+                }
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                for pattern in clickFixPatterns {
+                    if trimmed.range(of: pattern.regex, options: [.regularExpression, .caseInsensitive]) != nil {
+                        var h = hits[pattern.label] ?? Hit(count: 0, sample: String(trimmed.prefix(160)))
+                        h.count += 1
+                        hits[pattern.label] = h
+                    }
+                }
+            }
+
+            // Find the severity we want from the first pattern matching each label.
+            for (label, hit) in hits {
+                let severity = clickFixPatterns.first { $0.label == label }?.severity ?? .medium
+                findings.append(Finding(
+                    severity: severity, category: .suspiciousProcess,
+                    title: "Shell history: \(label)",
+                    detail: "\(hit.count) occurrence(s) in \(URL(fileURLWithPath: path).lastPathComponent). Sample: \(hit.sample)",
+                    path: path,
+                    remediation: "Open the file and inspect these lines; if you don't recognize them, assume compromise and rotate credentials."
+                ))
+            }
         }
     }
 

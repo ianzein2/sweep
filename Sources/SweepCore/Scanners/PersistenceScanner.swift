@@ -69,6 +69,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking SSH authorized_keys")
         scanSSHAuthorizedKeys(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH client config")
+        scanSSHClientConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Homebrew taps")
+        scanHomebrewTaps(findings: &findings, errors: &errors)
+
         progress?.update("checking sudoers drop-ins")
         scanSudoers(findings: &findings, errors: &errors)
 
@@ -675,6 +681,141 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - SSH client config
+
+    private func scanSSHClientConfig(findings: inout [Finding], errors: inout [String]) {
+        // A malicious ~/.ssh/config entry can silently tunnel traffic, open remote ports,
+        // or redirect every SSH session through an attacker's relay. These entries are rare
+        // in benign use and extremely dangerous when present.
+        let home = ShellRunner.realUserHome
+        let configs = [
+            "\(home)/.ssh/config",
+            "\(home)/.ssh/config.d",
+            "/etc/ssh/ssh_config",
+        ]
+
+        let fm = FileManager.default
+        var filesToScan: [String] = []
+
+        for configPath in configs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: configPath, isDirectory: &isDir) else { continue }
+            if isDir.boolValue {
+                if let entries = try? fm.contentsOfDirectory(atPath: configPath) {
+                    for entry in entries where !entry.hasPrefix(".") {
+                        filesToScan.append("\(configPath)/\(entry)")
+                    }
+                }
+            } else {
+                filesToScan.append(configPath)
+            }
+        }
+
+        // Each pattern: (directive, severity, reason). Directives match case-insensitively.
+        let riskyDirectives: [(directive: String, severity: Severity, reason: String)] = [
+            ("RemoteForward",   .high,   "opens a port on the remote host that tunnels back into this Mac"),
+            ("DynamicForward",  .medium, "turns SSH into a SOCKS proxy — all traffic can be routed through the remote host"),
+            ("LocalForward",    .medium, "forwards a remote service to this Mac — verify the remote is trusted"),
+            ("ProxyCommand",    .high,   "runs an arbitrary command for every ssh invocation — can be a wrapper that logs or MITMs traffic"),
+            ("ProxyJump",       .low,    "routes SSH through a jump host — verify this host is yours"),
+            ("PermitLocalCommand", .medium, "allows arbitrary local shell commands to run after connecting"),
+            ("IdentityAgent",   .medium, "redirects the SSH agent socket — a malicious agent can steal forwarded keys"),
+            ("Include",         .low,    "pulls in another config file — follow the chain to make sure it isn't hostile"),
+        ]
+
+        for file in filesToScan {
+            guard let content = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
+            for (idx, rawLine) in content.split(separator: "\n").enumerated() {
+                let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                let lower = trimmed.lowercased()
+
+                for item in riskyDirectives {
+                    // Match directive as the first token (case-insensitive). Avoids false
+                    // positives like a Host block named "LocalForwarding".
+                    let dirLower = item.directive.lowercased()
+                    guard lower.hasPrefix(dirLower + " ") || lower.hasPrefix(dirLower + "\t") ||
+                          lower == dirLower else { continue }
+
+                    findings.append(Finding(
+                        severity: item.severity, category: .persistence,
+                        title: "SSH config directive: \(item.directive)",
+                        detail: "File: \(file), line \(idx + 1): \(String(trimmed.prefix(140))) — \(item.reason)",
+                        path: file,
+                        remediation: "Review with: open -a TextEdit \"\(file)\" — remove unfamiliar entries"
+                    ))
+                    break // one finding per line
+                }
+            }
+        }
+    }
+
+    // MARK: - Homebrew taps
+
+    private func scanHomebrewTaps(findings: inout [Finding], errors: inout [String]) {
+        // A Homebrew "tap" is a third-party formula/cask repository. Once tapped, a user
+        // can `brew install <anything-from-tap>` — so a malicious tap is a supply-chain foothold.
+        // Google-ads-delivered fake Homebrew installers (2023-2024 campaigns) routinely register
+        // custom taps, and recent stealers include tap-injection as part of their install.
+        // Core / Apple-blessed taps are known-good; anything else is worth a human look.
+        let trustedTaps: Set<String> = [
+            "homebrew/core", "homebrew/cask", "homebrew/services",
+            "homebrew/bundle", "homebrew/command-not-found",
+            "homebrew/cask-versions", "homebrew/cask-fonts",
+            "homebrew/test-bot", "homebrew/autoupdate",
+            "hashicorp/tap",            // common, widely used
+            "aws/tap", "azure/functions",
+            "mongodb/brew", "cloudflare/cloudflare",
+            "heroku/brew", "fluxcd/tap",
+            "aquasecurity/trivy", "getsops/sops",
+            "oven-sh/bun", "buo/cask-upgrade",
+        ]
+
+        // Search both possible Homebrew roots; "which brew" isn't reliable under sudo.
+        let brewPaths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        guard let brew = brewPaths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+            return
+        }
+
+        let result = ShellRunner.run(brew, arguments: ["tap"], timeout: 10)
+        guard result.success else { return }
+
+        let taps = result.stdout
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        for tap in taps {
+            let lower = tap.lowercased()
+            if trustedTaps.contains(lower) { continue }
+            // Homebrew's own namespace is always safe.
+            if lower.hasPrefix("homebrew/") { continue }
+
+            // Obvious danger words in a tap slug are a very strong signal.
+            let suspiciousMarkers = ["stealer", "keylog", "keygen", "crack", "patcher",
+                                     "bypass", "hack", "leak", "loader"]
+            let flagged = suspiciousMarkers.first { lower.contains($0) }
+
+            if let marker = flagged {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Homebrew tap with suspicious name: \(tap)",
+                    detail: "Tap slug contains \"\(marker)\" — anything installed from this tap runs with your user's privileges",
+                    path: nil,
+                    remediation: "Remove: brew untap \(tap)"
+                ))
+            } else {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Third-party Homebrew tap: \(tap)",
+                    detail: "Non-core Homebrew tap registered — formulas from here are maintained by a third party",
+                    path: nil,
+                    remediation: "If you don't recognize it: brew untap \(tap)"
+                ))
+            }
         }
     }
 

@@ -67,6 +67,13 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Check for local-AI inference servers bound to non-loopback interfaces.
+        //    Ollama, LM Studio, llama.cpp servers etc. have become a common "oops" — users
+        //    set OLLAMA_HOST=0.0.0.0 for convenience and end up exposing a model server
+        //    (and in vulnerable versions a full RCE) to the local network.
+        progress?.update("checking exposed AI inference servers")
+        scanExposedAIServers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -362,6 +369,73 @@ public final class NetworkScanner: Scanner {
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
             }
+        }
+    }
+
+    // MARK: - Exposed AI Inference Servers
+
+    /// Local AI services that, if bound to 0.0.0.0 or a non-loopback IP, expose a model
+    /// server (and sometimes the filesystem via tool-calling) to anyone on the LAN.
+    /// Port / service catalogue reflects the mainstream 2024-2025 lineup.
+    private let aiInferencePorts: [(port: Int, product: String, notes: String)] = [
+        (11434, "Ollama",            "Ollama's HTTP API — full model pull/run control, prior CVEs allow path traversal"),
+        (1234,  "LM Studio",         "LM Studio local server — browses local models and runs prompts"),
+        (5000,  "AUTOMATIC1111 / Flask AI", "Commonly used by local Stable Diffusion and Flask-based AI tools"),
+        (7860,  "Gradio / A1111 share", "Gradio / A1111 web UI — can expose uploaded files and model configs"),
+        (8001,  "vLLM / OpenAI-compat", "vLLM OpenAI-compatible server"),
+        (8080,  "llama.cpp server",  "llama.cpp's built-in HTTP server"),
+        (8188,  "ComfyUI",           "ComfyUI — node-based workflow UI with filesystem access"),
+        (3000,  "Open WebUI / ChatUI", "Open WebUI chat front-end — stores chat history and API keys"),
+    ]
+
+    private func scanExposedAIServers(findings: inout [Finding], errors: inout [String]) {
+        // lsof -iTCP -sTCP:LISTEN gives just the listening sockets — cheap and precise.
+        let result = ShellRunner.run("/usr/sbin/lsof", arguments: [
+            "-nP", "-iTCP", "-sTCP:LISTEN", "+c", "0"
+        ], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        let aiPortSet = Set(aiInferencePorts.map { $0.port })
+        var alreadyReported = Set<Int>()  // one finding per port
+
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            if lineStr.hasPrefix("COMMAND") { continue }
+
+            // lsof LISTEN line format:
+            //   ollama    1234 user   3u  IPv4 ... TCP *:11434 (LISTEN)
+            //   ollama    1234 user   3u  IPv4 ... TCP 127.0.0.1:11434 (LISTEN)
+            //   ollama    1234 user   3u  IPv6 ... TCP [::1]:11434 (LISTEN)
+            guard let nameRange = lineStr.range(of: "TCP ") else { continue }
+            let addr = String(lineStr[nameRange.upperBound...])
+                .replacingOccurrences(of: "(LISTEN)", with: "")
+                .trimmingCharacters(in: .whitespaces)
+
+            // Split address from port at the last colon (handles IPv6 brackets).
+            guard let colon = addr.range(of: ":", options: .backwards) else { continue }
+            let host = String(addr[..<colon.lowerBound])
+                .trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
+            let portStr = String(addr[colon.upperBound...])
+            guard let port = Int(portStr), aiPortSet.contains(port),
+                  !alreadyReported.contains(port) else { continue }
+
+            // 127.0.0.1, ::1, localhost are safe — only flag when bound to * or a real interface.
+            let isLoopback = host == "127.0.0.1" || host == "::1" || host == "localhost" ||
+                             host.hasPrefix("127.")
+            guard !isLoopback else { continue }
+
+            let meta = aiInferencePorts.first { $0.port == port }!
+            let parts = lineStr.split(separator: " ", omittingEmptySubsequences: true)
+            let command = parts.first.map { String($0) } ?? "?"
+
+            findings.append(Finding(
+                severity: .high, category: .networkActivity,
+                title: "AI server (\(meta.product)) exposed on the network",
+                detail: "Process \(command) is listening on \(host):\(port). \(meta.notes).",
+                path: nil,
+                remediation: "Bind to 127.0.0.1 only. For Ollama: set OLLAMA_HOST=127.0.0.1; for LM Studio / Open WebUI disable \"Serve on local network\"."
+            ))
+            alreadyReported.insert(port)
         }
     }
 

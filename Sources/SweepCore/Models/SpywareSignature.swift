@@ -434,6 +434,156 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" / FERRET family (2024-2025). Distributed via fake job
+        // interview portals that ask candidates to install a bogus video-conferencing app.
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FerretMain", "FerretHelper"],
+            bundleIdentifiers: ["com.flexibleferret.app"],
+            filePaths: [
+                "/private/var/tmp/.ferret",
+                "~/Library/Application Support/.flexibleferret",
+            ],
+            launchAgentLabels: ["com.flexibleferret.helper"]
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "frostyferret", "FrostyHelper", "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.frostyferret.agent"],
+            filePaths: ["/private/var/tmp/.frosty"],
+            launchAgentLabels: ["com.frostyferret.service"]
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["FriendlyFerret", "friendlyferret", "FFHelper"],
+            bundleIdentifiers: ["com.friendlyferret.helper"],
+            filePaths: ["~/Library/Application Support/.friendlyferret"],
+            launchAgentLabels: ["com.friendlyferret.service"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK ContagiousInterview)",
+            processNames: ["BeaverTail", "beavertail", "chromeupdate_helper", "node_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+                "~/.n2/",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK ContagiousInterview)",
+            processNames: ["InvisibleFerret", "invisibleferret", "ssh_helper", "npayload"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ifpy",
+                "~/Library/Application Support/.invisibleferret",
+                "~/.npl/",
+            ],
+            launchAgentLabels: []
+        ),
+        // NimDoor — Nim-compiled DPRK backdoor reported 2025. Abuses Zoom-update lures.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "installer", "zoom_sdk_support", "a.sh"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "/private/var/tmp/.nimdoor",
+                "~/Library/Trash/CoreSpotlight",
+            ],
+            launchAgentLabels: ["com.zoom.support.helper"]
+        ),
+        // FrigidStealer (Feb 2025) — distributed via fake browser-update prompts on hijacked sites.
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "Install", "SafariUpdater"],
+            bundleIdentifiers: ["com.frigidstealer.app"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigidstealer",
+                "~/Downloads/Safari.dmg",
+                "~/Downloads/Chrome.dmg",
+            ],
+            launchAgentLabels: []
+        ),
+        // Odyssey Stealer — AMOS successor seen late 2024 / 2025.
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "OdysseyHelper", "DolphinInstaller"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        // Tiny FUD (2025) — stealthy Objective-C macOS backdoor.
+        SpywareSignature(
+            name: "Tiny FUD",
+            processNames: ["TinyFUD", "tinyfud", "tfud_agent"],
+            bundleIdentifiers: ["com.tinyfud.agent"],
+            filePaths: [
+                "/private/var/tmp/.tfud",
+                "~/Library/Application Support/.tinyfud",
+            ],
+            launchAgentLabels: ["com.tinyfud.service"]
+        ),
+        // AppleProcessHub stealer (2025) — mimics Apple's own daemon naming.
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_daemon"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        // PSEUDOMANUSCRYPT / Manuscrypt — Lazarus multi-platform implant with macOS variants.
+        SpywareSignature(
+            name: "Manuscrypt (Lazarus)",
+            processNames: ["manuscrypt", "Manuscrypt", "pseudomanuscrypt", "sysmon_darwin"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.manuscrypt",
+                "/Library/Application Support/.sysmon",
+            ],
+            launchAgentLabels: ["com.apple.sysmond"]
+        ),
+        // XLoader macOS (2023+ persistent; still active) — cross-platform infostealer.
+        SpywareSignature(
+            name: "XLoader (macOS)",
+            processNames: ["xloader", "XLoader", "OfficeV", "wordHelper"],
+            bundleIdentifiers: ["com.xloader.mac", "com.microsoft.office.helper"],
+            filePaths: [
+                "/private/tmp/.xloader",
+                "~/Library/Application Support/.xloader",
+            ],
+            launchAgentLabels: ["com.xloader.service"]
+        ),
+        // Trojan-Proxy via cracked apps (2024-2025): unsigned cracked installers bundle a proxy daemon.
+        SpywareSignature(
+            name: "Trojan-Proxy (cracked-app loader)",
+            processNames: ["WindowServer_legacy", "proxy_agent", "cfprefsd_mac", "SourceService"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/.proxy",
+                "~/Library/Application Support/.proxy",
+            ],
+            launchAgentLabels: ["com.apple.cfprefsd.mac", "com.apple.windowserver.legacy"]
+        ),
+        // RustDoor / GateDoor (Feb 2024, ALPHV-linked) — still seen in 2025 follow-ons.
+        SpywareSignature(
+            name: "RustDoor / GateDoor",
+            processNames: ["RustDoor", "rustdoor", "GateDoor", "gatedoor", "Visual Studio Updater"],
+            bundleIdentifiers: ["com.microsoft.vsupdate"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+            ],
+            launchAgentLabels: ["com.microsoft.vsupdate"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
