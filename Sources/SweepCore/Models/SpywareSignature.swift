@@ -434,7 +434,267 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / APT-linked macOS malware (2024-2026)
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIe LLC", "GoogleDrive", "ZoomClient", "ZoomUpdate"],
+            bundleIdentifiers: ["com.nimdoor.agent"],
+            filePaths: [
+                "/private/var/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/LaunchAgents/com.google.keystone.agent.plist",
+                "/tmp/.GoogIe",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent", "com.zoom.zcsd"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node-win", "nvidiaGPUDetector"],
+            bundleIdentifiers: ["com.beavertail.agent"],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/var/tmp/.beaver",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            // "bow" / "pay" / "mclip" are the documented filenames for this DPRK dropper but
+            // too short to match as process names without false positives; kept only as file IOCs.
+            processNames: ["InvisibleFerret", "invisibleferret"],
+            bundleIdentifiers: ["com.ferret.agent"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "/private/tmp/p.py",
+                "/private/tmp/pay",
+                "/private/tmp/bow",
+                "/private/tmp/mclip",
+                "/private/var/tmp/.invisibleferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustDoor / GateDoor",
+            processNames: ["RustDoor", "rustdoor", "gatedoor", "zshrc_aliases", "zsh_updater", "zshrc2"],
+            bundleIdentifiers: ["com.rustdoor.agent"],
+            filePaths: [
+                "~/.zshrc_aliases",
+                "~/.zsh_updater",
+                "/private/var/tmp/.rustdoor",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ToDoSwift",
+            processNames: ["ToDoSwift", "todoswift", "TodoTasks"],
+            bundleIdentifiers: ["com.todoswift.agent"],
+            filePaths: [
+                "/private/var/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.service"]
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (DPRK)",
+            processNames: ["HiddenRisk", "hiddenrisk", "growth_hack", "Hidden Risk Behind New Surge"],
+            bundleIdentifiers: ["com.hiddenrisk.agent"],
+            filePaths: [
+                "/private/var/tmp/.hiddenrisk",
+                "~/Library/Application Support/.HiddenRisk",
+            ],
+            launchAgentLabels: ["com.apple.helper.plist"]
+        ),
+        SpywareSignature(
+            name: "FERRET (DPRK)",
+            processNames: ["FERRET", "ferret_installer", "ChromeUpdate", "FromChatGPT"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.ferret",
+                "/tmp/.ChromeUpdate",
+            ],
+            launchAgentLabels: ["com.google.chrome.update"]
+        ),
+        // Commercial mercenary / govt spyware
+        SpywareSignature(
+            name: "Paragon Graphite",
+            processNames: ["Graphite", "paragon_agent", "graphite_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.graphite",
+                "~/Library/Caches/.graphite",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "QuaDream Reign",
+            processNames: ["Reign", "quadream_agent"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.reign"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Candiru / DevilsTongue",
+            processNames: ["DevilsTongue", "candiru_agent", "devilstongue"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.candiru",
+                "/Library/.devilstongue",
+            ],
+            launchAgentLabels: []
+        ),
+        // Modern stealers (2024-2026)
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault", "shvault"],
+            bundleIdentifiers: ["com.shadowvault.agent"],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.ShadowVault",
+            ],
+            launchAgentLabels: ["com.shadowvault.service"]
+        ),
+        SpywareSignature(
+            name: "Koi Stealer",
+            processNames: ["KoiStealer", "koi_stealer", "koiloader"],
+            bundleIdentifiers: ["com.koi.stealer"],
+            filePaths: [
+                "/private/tmp/.koi",
+                "~/Library/Application Support/.Koi",
+            ],
+            launchAgentLabels: ["com.koi.service"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "WindowServerHelper", "ChromeUpdate.app"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "/Users/Shared/.update",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "Crocodilus (macOS variant)",
+            processNames: ["Crocodilus", "crocodilus", "croc_agent"],
+            bundleIdentifiers: ["com.crocodilus.agent"],
+            filePaths: [
+                "/private/tmp/.crocodilus",
+                "~/Library/Application Support/.Crocodilus",
+            ],
+            launchAgentLabels: ["com.crocodilus.service"]
+        ),
+        SpywareSignature(
+            name: "CherryPie / Gh0stPie",
+            processNames: ["CherryPie", "gh0stpie", "cherrypie_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cherrypie",
+                "~/Library/Application Support/.CherryPie",
+            ],
+            launchAgentLabels: []
+        ),
+        // Persistent adware/loaders still seen in 2024-2026 incident reports
+        SpywareSignature(
+            name: "AdLoad",
+            processNames: ["AdLoad", "adload", "ProgressSnapshotSearch", "ElementarySignalSearch",
+                           "MainActivitySearch", "RecordMapperSearch", "SkilledObjectSearch"],
+            bundleIdentifiers: ["com.adload.agent"],
+            filePaths: [
+                "~/Library/Application Support/com.ProgressSnapshot",
+                "~/Library/Application Support/com.ElementarySignal",
+                "~/Library/Application Support/com.MainActivity",
+                "~/Library/LaunchAgents/com.ProgressSnapshot.plist",
+            ],
+            launchAgentLabels: ["com.ProgressSnapshot", "com.ElementarySignal",
+                                "com.MainActivity", "com.RecordMapper"]
+        ),
+        SpywareSignature(
+            name: "Shlayer",
+            // "Installer" alone would collide with Apple's Installer.app — we rely on Shlayer's
+            // specific dropper names and file paths instead.
+            processNames: ["Shlayer", "shlayer", "FlashPlayer_install"],
+            bundleIdentifiers: ["com.shlayer.installer"],
+            filePaths: [
+                "/private/tmp/.shlayer",
+                "/Users/Shared/.AdobePlayer",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Silver Sparrow",
+            processNames: ["silver_sparrow", "verx", "agentupd"],
+            bundleIdentifiers: ["com.silversparrow.agent"],
+            filePaths: [
+                "~/Library/._insu",
+                "/tmp/agent.sh",
+                "/tmp/version.json",
+                "/tmp/version.plist",
+            ],
+            launchAgentLabels: ["init_verx", "agent.plist"]
+        ),
+        SpywareSignature(
+            name: "UpdateAgent",
+            processNames: ["UpdateAgent", "updateagent", "WizardUpdate"],
+            bundleIdentifiers: ["com.adobe.fp.updater"],
+            filePaths: [
+                "~/Library/Application Support/.updateAgent",
+                "/Library/Application Support/.wizardupdate",
+            ],
+            launchAgentLabels: ["com.adobe.fp.updater"]
+        ),
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["JokerSpy", "jokerspy", "xcc", "sh.py", "shared.dat"],
+            bundleIdentifiers: ["com.apple.xcc"],
+            filePaths: [
+                "/Users/Shared/xcc",
+                "/Users/Shared/sh.py",
+                "/private/tmp/.jokerspy",
+            ],
+            launchAgentLabels: ["com.apple.xcc.plist"]
+        ),
+        // ClickFix / fake-captcha droppers (widespread 2024-2026 delivery vector)
+        SpywareSignature(
+            name: "ClickFix / FakeCaptcha dropper",
+            processNames: ["clickfix", "FakeCaptcha", "captcha_helper", "VerifyHuman"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.clickfix",
+                "/Users/Shared/.captcha",
+            ],
+            launchAgentLabels: []
+        ),
     ]
+
+    // MARK: - Cryptominer Database
+
+    /// Known cryptomining process names. These are frequently dropped by compromised
+    /// installers, pirated software, and drive-by downloads. They burn CPU/GPU and battery,
+    /// and their presence almost always means the host has been tampered with.
+    public static let cryptominerProcessNames: Set<String> = [
+        // Monero (XMR) — most common on compromised Macs
+        "xmrig", "xmrig-notls", "xmr-stak", "xmr-stak-cpu", "xmr-stak-rx",
+        "minergate", "MinerGate", "minergate-cli", "minerd",
+        // Generic CPU/GPU miners
+        "cpuminer", "cpuminer-multi", "ccminer", "ethminer",
+        "t-rex", "teamredminer", "lolminer", "nbminer",
+        "phoenixminer", "claymore", "gminer", "srbminer",
+        // NiceHash and pool agents
+        "nicehash", "nicehash-miner", "excavator",
+        // macOS-specific / hidden variants
+        "mac-miner", "macminer", "osx_miner", "mdworker_miner",
+        "com.apple.mdworker_shared_helper",  // Often used as cover by miners
+        "kdevtmpfsi", "kinsing",  // Linux-origin but cross-compiled to macOS in some campaigns
+        // Recent campaigns (2024-2026)
+        "cpuhog", "minerbot", "xmrig2", "xmrigMiner", "hiddenminer",
+    ]
+
+    public static func isCryptominer(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return cryptominerProcessNames.contains(where: { $0.lowercased() == lower })
+    }
 
     // MARK: - Heuristic Detection Patterns
 
@@ -450,6 +710,24 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed 2024-2026 campaigns — DPRK, AMOS, RustDoor, etc.
+        "com.apple.xcc",                    // JokerSpy
+        "com.apple.helper",                 // HiddenRisk
+        "com.apple.WebKit.Networking.agent",
+        "com.apple.systempreferences.helper",
+        "com.apple.coreservices.helper",
+        "com.apple.mdworker_shared_helper",
+        "com.apple.launchd.helper",
+        "com.apple.audio.coreaudiod.helper",
+        "com.apple.spotlight.indexer",
+        "com.apple.metadata.mdflagwriter",
+        "com.apple.itunes.helper",          // Old iTunes is gone — any "helper" here is suspicious
+        "com.apple.quicktime.helper",
+        "com.apple.preferences.helper",
+        "com.apple.google.keystone.agent",  // NimDoor disguise
+        // Fake "Google" bundle IDs that malware uses (not Apple but same pattern)
+        "com.google.chrome.update",         // Fake — Chrome updater is com.google.keystone
+        "com.google.drive.helper",          // NimDoor style
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +752,24 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Observed 2024-2026 process masquerading campaigns
+        "mdworker_shared_helper", // AMOS/miners — real is mdworker_shared
+        "WindowServerHelper",    // FrigidStealer — no such Apple process
+        "WindowServerd",         // There's no WindowServer daemon with 'd' suffix
+        "launchdd",              // Typo-squat of launchd
+        "coreservicesd",         // Masquerade of coreservicesd (real is lsd/coreservicesd)
+        "nsurld",                // Fake — real is nsurlsessiond
+        "bluetoothed",           // Fake — real is bluetoothd
+        "iCloudDrive",           // Not a real process (real is bird)
+        "ZoomUpdate",            // NimDoor — no legitimate background Zoom updater
+        "GoogIe LLC",            // Unicode homoglyph ("GoogIe" with capital-I not lower-l)
+        "Google LLc",            // Case-mangled to evade checks
+        "ChromeUpdate.app",      // Real Chrome updater is GoogleSoftwareUpdate
+        "MicrosoftUpdate",       // Fake (real is Microsoft AutoUpdate)
+        "AdobeUpdate",           // Fake (real is AdobeUpdater, etc.)
+        "AdobePlayer",           // Flash Player is dead — any "AdobePlayer" today is malware
+        "FlashPlayer_install",   // Shlayer family
+        "FlashPlayer",           // Flash EOL 2020 — binaries named this are stealers
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

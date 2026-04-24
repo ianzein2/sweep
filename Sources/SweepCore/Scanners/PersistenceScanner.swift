@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking shell history for ClickFix patterns")
+        scanShellHistory(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -103,6 +106,44 @@ public final class PersistenceScanner: Scanner {
             executablePath = program
         } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
             executablePath = first
+        }
+
+        // DYLD injection via LaunchAgent EnvironmentVariables is a documented persistence
+        // technique — the attacker ships a legitimate-looking plist that launches any binary
+        // with DYLD_INSERT_LIBRARIES pointing at an injected payload. Flag this on sight; no
+        // mainstream macOS software ships DYLD_* env vars in its LaunchAgents.
+        if let envVars = plist["EnvironmentVariables"] as? [String: Any] {
+            let dyldKeys = envVars.keys.filter { $0.hasPrefix("DYLD_") }
+            if !dyldKeys.isEmpty {
+                let injectedPath = (envVars["DYLD_INSERT_LIBRARIES"] as? String) ?? ""
+                findings.append(Finding(
+                    severity: .high,
+                    category: .persistence,
+                    title: "LaunchAgent/Daemon injects dylib via EnvironmentVariables",
+                    detail: "Label: \(label), DYLD vars: \(dyldKeys.joined(separator: ", "))" +
+                        (injectedPath.isEmpty ? "" : ", DYLD_INSERT_LIBRARIES=\(injectedPath)"),
+                    path: path,
+                    remediation: "Inspect and remove: cat \"\(path)\" — DYLD_INSERT_LIBRARIES in a launchd plist is a classic injection backdoor"
+                ))
+                return
+            }
+        }
+
+        // LimitLoadToSessionType: LoginWindow is rarely set legitimately by third-party software
+        // and is used by DPRK-linked persistence (NimDoor, ToDoSwift) to fire during the brief
+        // pre-login window when fewer security checks are active.
+        if let sessionType = plist["LimitLoadToSessionType"] as? String,
+           sessionType == "LoginWindow",
+           !label.hasPrefix("com.apple.") {
+            findings.append(Finding(
+                severity: .medium,
+                category: .persistence,
+                title: "LaunchAgent runs in LoginWindow session",
+                detail: "Label: \(label) — fires before user login, an unusual scheduling choice for third-party software",
+                path: path,
+                remediation: "Review this plist — LoginWindow-scoped agents are used by recent DPRK-linked macOS malware"
+            ))
+            // fall through — keep checking other indicators
         }
 
         // Check against known spyware labels
@@ -675,6 +716,75 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Shell History (ClickFix / fake-captcha patterns)
+
+    private func scanShellHistory(findings: inout [Finding], errors: inout [String]) {
+        // ClickFix / fake-captcha / fake-install pages trick the user into pasting a shell
+        // command (usually one-line curl | bash, osascript with admin privileges, or
+        // base64-decoded blob) into Terminal. The paste leaves a fingerprint in shell history
+        // that survives even after the dropper removes itself, so this is one of the most
+        // reliable post-compromise indicators on macOS in 2024-2026.
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+            "\(home)/.sh_history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Each pattern is paired with a short explanation for the finding
+        let patterns: [(needle: String, why: String)] = [
+            ("curl -s | sh",          "inline curl | sh — common ClickFix installer"),
+            ("curl -s | bash",        "inline curl | bash — common ClickFix installer"),
+            ("curl -fsSL | sh",       "curl | sh pattern — drive-by installer"),
+            ("curl -fsSL | bash",     "curl | bash pattern — drive-by installer"),
+            ("wget -qO- | sh",        "wget | sh pattern — drive-by installer"),
+            ("wget -qO- | bash",      "wget | bash pattern — drive-by installer"),
+            ("pbpaste | sh",          "pbpaste | sh — pastes clipboard into shell (fake-captcha pattern)"),
+            ("pbpaste | bash",        "pbpaste | bash — pastes clipboard into shell (fake-captcha pattern)"),
+            ("| base64 -d | sh",      "base64-decoded shell command — obfuscation technique"),
+            ("| base64 -d | bash",    "base64-decoded shell command — obfuscation technique"),
+            ("echo \"Z",              "base64 blob starting with Z (common ClickFix payload)"),
+            ("osascript -e 'do shell script", "osascript admin escalation — often abused by AMOS, Atomic, Cuckoo"),
+            ("do shell script \"curl", "AppleScript bridge to curl — AMOS / Atomic installer pattern"),
+            ("chmod +x /tmp/",        "making a /tmp binary executable — stage-2 payload"),
+            ("chmod 777 /tmp/",       "granting world permissions in /tmp — stage-2 payload"),
+            ("xattr -d com.apple.quarantine /tmp/", "quarantine-bit stripping on /tmp — bypasses Gatekeeper"),
+            ("xattr -r -d com.apple.quarantine", "recursive quarantine strip — common in AMOS / Atomic installers"),
+            ("sudo spctl --master-disable", "Gatekeeper globally disabled — only legitimate on throwaway dev machines"),
+        ]
+
+        for historyPath in historyFiles {
+            guard let content = try? String(contentsOfFile: historyPath, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: historyPath).lastPathComponent
+            let lines = content.components(separatedBy: "\n")
+
+            // Report at most one finding per pattern so we don't spam history files
+            var reportedNeedles: Set<String> = []
+            for line in lines {
+                let lineLower = line.lowercased()
+                for pattern in patterns {
+                    let needle = pattern.needle.lowercased()
+                    if !lineLower.contains(needle) { continue }
+                    if reportedNeedles.contains(needle) { continue }
+                    reportedNeedles.insert(needle)
+
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    let snippet = String(trimmed.prefix(140))
+
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious command in \(fileName)",
+                        detail: "\(pattern.why) — \(snippet)",
+                        path: historyPath,
+                        remediation: "Review \(historyPath): grep -n \"\(pattern.needle)\" \(historyPath). If you didn't run this, assume compromise and rotate browser/keychain secrets."
+                    ))
+                }
+            }
         }
     }
 

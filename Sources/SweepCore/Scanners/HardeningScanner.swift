@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking sudo version for known CVEs")
+        checkSudoCVEs(findings: &findings, errors: &errors)
+
+        progress?.update("checking third-party cryptominer LaunchAgents")
+        checkCryptominerPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -467,6 +473,106 @@ public final class HardeningScanner: Scanner {
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
+            }
+        }
+    }
+
+    // MARK: - sudo CVEs
+
+    private func checkSudoCVEs(findings: inout [Finding], errors: inout [String]) {
+        // CVE-2025-32462 and CVE-2025-32463 (the "chwoot" family) were disclosed in June 2025
+        // and affect sudo 1.8.8 through 1.9.17p0. The chwoot bug lets a local unprivileged user
+        // escalate to root via `sudo -R` / chroot when sudoers uses Host_Alias.
+        //
+        // Apple backports fixes to /usr/bin/sudo without bumping the upstream version string,
+        // so we can't reliably flag the system sudo. We focus on Homebrew-installed sudo where
+        // the version number is authoritative.
+        let fm = FileManager.default
+        let homebrewSudoPaths = ["/opt/homebrew/bin/sudo", "/usr/local/bin/sudo"]
+
+        for sudoPath in homebrewSudoPaths where fm.fileExists(atPath: sudoPath) {
+            let result = ShellRunner.run(sudoPath, arguments: ["--version"], timeout: 5)
+            guard result.success else { continue }
+
+            // First line looks like: "Sudo version 1.9.17p1"
+            let firstLine = result.stdout.split(separator: "\n").first.map(String.init) ?? ""
+            guard let versionStr = extractSudoVersion(firstLine) else { continue }
+            guard let parsed = parseSudoVersion(versionStr) else { continue }
+
+            // Fixed version per Todd Miller's advisory: 1.9.17p1
+            let fixed = (1, 9, 17, 1)
+            if compareSudoVersion(parsed, fixed) < 0 {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Homebrew sudo is vulnerable to CVE-2025-32462 / CVE-2025-32463",
+                    detail: "sudo at \(sudoPath) is version \(versionStr). The 'chwoot' family allows local privilege escalation. Fixed in 1.9.17p1.",
+                    path: sudoPath,
+                    remediation: "Run: brew upgrade sudo — or uninstall the Homebrew sudo and use /usr/bin/sudo"
+                ))
+            }
+        }
+    }
+
+    private func extractSudoVersion(_ line: String) -> String? {
+        // Find the token after "version"
+        let parts = line.split(separator: " ").map(String.init)
+        for (i, p) in parts.enumerated() where p.lowercased() == "version" && i + 1 < parts.count {
+            return parts[i + 1].trimmingCharacters(in: CharacterSet(charactersIn: " ,\n"))
+        }
+        return nil
+    }
+
+    /// Parses "1.9.17p1" → (1, 9, 17, 1). "p0" and missing patch letter treated as 0.
+    private func parseSudoVersion(_ v: String) -> (Int, Int, Int, Int)? {
+        // Split on 'p' first, so "1.9.17p1" → ["1.9.17", "1"]
+        let pSplit = v.split(separator: "p", maxSplits: 1).map(String.init)
+        let base = pSplit.first ?? v
+        let patch = pSplit.count >= 2 ? Int(pSplit[1]) ?? 0 : 0
+        let parts = base.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 3 else { return nil }
+        return (parts[0], parts[1], parts[2], patch)
+    }
+
+    private func compareSudoVersion(_ a: (Int, Int, Int, Int), _ b: (Int, Int, Int, Int)) -> Int {
+        if a.0 != b.0 { return a.0 < b.0 ? -1 : 1 }
+        if a.1 != b.1 { return a.1 < b.1 ? -1 : 1 }
+        if a.2 != b.2 { return a.2 < b.2 ? -1 : 1 }
+        if a.3 != b.3 { return a.3 < b.3 ? -1 : 1 }
+        return 0
+    }
+
+    // MARK: - Cryptominer Persistence
+
+    private func checkCryptominerPersistence(findings: inout [Finding], errors: inout [String]) {
+        // Cryptomining malware almost always ships a LaunchAgent / LaunchDaemon that points at
+        // an xmrig-style binary or a wrapper script in /tmp, /Users/Shared, or a hidden dir in
+        // ~/Library. We scan the plist file contents for miner process names to catch the ones
+        // that aren't running at scan time (e.g. throttled or scheduled for off-hours).
+        let fm = FileManager.default
+        let dirs = [
+            "\(ShellRunner.realUserHome)/Library/LaunchAgents",
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
+        ]
+
+        for dir in dirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for file in contents where file.hasSuffix(".plist") {
+                let path = "\(dir)/\(file)"
+                guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+                let contentLower = content.lowercased()
+                for miner in SpywareSignature.cryptominerProcessNames {
+                    if contentLower.contains(miner.lowercased()) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "LaunchAgent/Daemon references cryptominer",
+                            detail: "Plist: \(file) references miner binary '\(miner)'",
+                            path: path,
+                            remediation: "Unload and remove: sudo launchctl unload \"\(path)\" && sudo rm \"\(path)\""
+                        ))
+                        break
+                    }
+                }
             }
         }
     }

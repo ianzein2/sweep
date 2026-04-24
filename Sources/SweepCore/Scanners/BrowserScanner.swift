@@ -4,18 +4,31 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
+    // Recent campaigns (late 2024 / 2025 / 2026) have weaponized VSCode/Cursor marketplace extensions
     // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // reported malicious extension families and IOCs published by ReversingLabs, Aikido,
+    // Phylum, and Checkmarx.
     private let suspiciousEditorExtKeywords: [String] = [
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 ReversingLabs reports: VSCode Marketplace ransomware proof-of-concept family
+        // published under these publisher.ext identifiers and pulled by Microsoft in April 2025.
+        "ahban.shiba", "ahban.cychelloworld",
+        // "Shai-Hulud" self-replicating npm worm whose extension dropper surfaced late 2025
+        "shai-hulud",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        "clipper", "drainer", "infostealer", "c2-", "backdoor",
     ]
+
+    // Chrome/Brave/Edge extension IDs that have been confirmed malicious by a published
+    // advisory. Intentionally small — false positives on real IDs would mis-flag legitimate
+    // extensions, so only add IDs backed by concrete IOCs (LayerX, Secure Annex, Aikido, etc.).
+    // Name-pattern heuristics below fire even when this set is empty.
+    private let knownMaliciousExtensionIds: Set<String> = []
 
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
@@ -123,14 +136,34 @@ public final class BrowserScanner: Scanner {
             "\(home)/Library/Application Support/Google/Chrome",
             "\(home)/Library/Application Support/Brave Software/Brave-Browser",
             "\(home)/Library/Application Support/Microsoft Edge",
+            // Arc Browser (The Browser Company) — Chromium-based, same extension layout
+            "\(home)/Library/Application Support/Arc/User Data",
+            // Vivaldi — Chromium-based
+            "\(home)/Library/Application Support/Vivaldi",
+            // Opera / Opera GX — Chromium-based
+            "\(home)/Library/Application Support/com.operasoftware.Opera",
+            "\(home)/Library/Application Support/com.operasoftware.OperaGX",
+            // Chromium / Ungoogled Chromium
+            "\(home)/Library/Application Support/Chromium",
+            // Yandex and 360 browsers — seen in targeted intrusions
+            "\(home)/Library/Application Support/Yandex/YandexBrowser",
         ]
 
         // Collect extensions across all profiles, deduplicate by (browser, extId)
         var seenExtensions: [String: ChromeExtensionInfo] = [:] // key: "browserName:extId"
 
         for browserPath in chromePaths {
-            let browserName = browserPath.contains("Chrome") ? "Chrome" :
-                              browserPath.contains("Brave") ? "Brave" : "Edge"
+            let browserName: String = {
+                if browserPath.contains("Arc/User Data") { return "Arc" }
+                if browserPath.contains("Vivaldi") { return "Vivaldi" }
+                if browserPath.contains("OperaGX") { return "Opera GX" }
+                if browserPath.contains("Opera") { return "Opera" }
+                if browserPath.contains("Chromium") { return "Chromium" }
+                if browserPath.contains("Yandex") { return "Yandex" }
+                if browserPath.contains("Brave") { return "Brave" }
+                if browserPath.contains("Edge") { return "Edge" }
+                return "Chrome"
+            }()
 
             let fm = FileManager.default
             guard fm.fileExists(atPath: browserPath),
@@ -143,6 +176,18 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-bad extension IDs from 2024-2026 threat intel: flag regardless of manifest.
+                    if knownMaliciousExtensionIds.contains(extId) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known malicious ID",
+                            detail: "Extension ID: \(extId) (profile: \(profile)) — reported as credential/cookie stealer",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately in \(browserName) > Extensions, then rotate browser-stored passwords"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
@@ -256,11 +301,20 @@ public final class BrowserScanner: Scanner {
 
     private func scanFirefoxExtensions(findings: inout [Finding], errors: inout [String]) {
         let home = ShellRunner.realUserHome
-        let firefoxPath = "\(home)/Library/Application Support/Firefox/Profiles"
+        // Firefox plus Firefox-derived browsers (Tor, Zen, LibreWolf, Waterfox) that ship
+        // the same extension storage layout.
+        let firefoxFamilyPaths: [(name: String, base: String)] = [
+            ("Firefox", "\(home)/Library/Application Support/Firefox/Profiles"),
+            ("Tor Browser", "\(home)/Library/Application Support/TorBrowser-Data/Browser"),
+            ("Zen Browser", "\(home)/Library/Application Support/zen/Profiles"),
+            ("LibreWolf", "\(home)/Library/Application Support/LibreWolf/Profiles"),
+            ("Waterfox", "\(home)/Library/Application Support/Waterfox/Profiles"),
+        ]
         let fm = FileManager.default
 
+        for (browserName, firefoxPath) in firefoxFamilyPaths {
         guard fm.fileExists(atPath: firefoxPath),
-              let profiles = try? fm.contentsOfDirectory(atPath: firefoxPath) else { return }
+              let profiles = try? fm.contentsOfDirectory(atPath: firefoxPath) else { continue }
 
         for profile in profiles {
             let addonsPath = "\(firefoxPath)/\(profile)/extensions.json"
@@ -287,21 +341,22 @@ public final class BrowserScanner: Scanner {
                 if isSpyLike {
                     findings.append(Finding(
                         severity: .high, category: .keylogging,
-                        title: "Firefox extension with suspicious name",
+                        title: "\(browserName) extension with suspicious name",
                         detail: "Extension: \(addonName), ID: \(id)",
                         path: addonsPath,
-                        remediation: "Remove in Firefox > Add-ons (about:addons)"
+                        remediation: "Remove in \(browserName) > Add-ons (about:addons)"
                     ))
                 } else if hasAllUrls && perms.contains(where: { ["webRequest", "webRequestBlocking"].contains($0) }) {
                     findings.append(Finding(
                         severity: .medium, category: .permission,
-                        title: "Firefox extension with broad permissions",
+                        title: "\(browserName) extension with broad permissions",
                         detail: "Extension: \(addonName), ID: \(id) — can intercept all web traffic",
                         path: addonsPath,
-                        remediation: "Verify this extension in Firefox > Add-ons"
+                        remediation: "Verify this extension in \(browserName) > Add-ons"
                     ))
                 }
             }
+        }
         }
     }
 
@@ -315,6 +370,10 @@ public final class BrowserScanner: Scanner {
             ("Cursor", "\(home)/.cursor/extensions"),
             ("Windsurf", "\(home)/.windsurf/extensions"),
             ("VSCodium", "\(home)/.vscode-oss/extensions"),
+            // 2024-2026 AI-editor ecosystem (all VSCode extension layout)
+            ("Trae", "\(home)/.trae/extensions"),
+            ("Void", "\(home)/.void/extensions"),
+            ("Zed", "\(home)/.zed/extensions"),
         ]
 
         let fm = FileManager.default

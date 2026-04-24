@@ -96,6 +96,21 @@ public final class ProcessScanner: Scanner {
                 }
             }
 
+            // Cryptominers: flag by name regardless of path. A legitimate Mac user is not running
+            // xmrig or ccminer outside of a conscious opt-in, and these are a reliable indicator
+            // of compromised installers, pirated software, or drive-by malware.
+            if SpywareSignature.isCryptominer(proc.name) {
+                findings.append(Finding(
+                    severity: .high,
+                    category: .suspiciousProcess,
+                    title: "Cryptominer process detected: \"\(proc.name)\"",
+                    detail: "PID \(proc.pid), running from: \(proc.path ?? "unknown path"), UID: \(proc.uid)",
+                    path: proc.path,
+                    remediation: "Terminate (kill \(proc.pid)) and remove the source binary. Cryptominers are usually dropped by trojanized installers."
+                ))
+                continue
+            }
+
             // Skip whitelisted process names
             if whitelistedProcessNames.contains(proc.name) { continue }
 
