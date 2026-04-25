@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking pending macOS updates")
+        checkPendingUpdates(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version support")
+        checkOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking encrypted DNS profile")
+        checkEncryptedDNS(findings: &findings, errors: &errors)
+
+        progress?.update("checking developer-mode AMFI relaxations")
+        checkAMFIBootArgs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +483,165 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Pending macOS Updates
+
+    /// Reads the cached `LastRecommendedUpdatesAvailable` plist used by
+    /// `softwareupdate(8)`. Pending security/critical updates that have been
+    /// available for more than 14 days are surfaced because attackers routinely
+    /// weaponize Apple security advisories within hours of publication.
+    private func checkPendingUpdates(findings: inout [Finding], errors: inout [String]) {
+        let plistPath = "/Library/Preferences/com.apple.SoftwareUpdate.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        // RecommendedUpdates is an array of dicts with keys "Display Name", "Display Version", "Identifier"
+        guard let recommended = plist["RecommendedUpdates"] as? [[String: Any]],
+              !recommended.isEmpty else { return }
+
+        // LastRecommendedUpdatesAvailable / LastFullSuccessfulDate gives us a date anchor
+        let lastSeen = plist["LastRecommendedUpdatesAvailable"] as? Date
+            ?? plist["LastFullSuccessfulDate"] as? Date
+
+        let names = recommended.compactMap { $0["Display Name"] as? String }
+        let preview = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? ", …" : "")
+
+        let staleness: String
+        let severity: Severity
+        if let last = lastSeen {
+            let days = Int(-last.timeIntervalSinceNow / 86_400)
+            staleness = "first reported \(days) day\(days == 1 ? "" : "s") ago"
+            severity = days > 14 ? .high : (days > 3 ? .medium : .low)
+        } else {
+            staleness = "available now"
+            severity = .medium
+        }
+
+        findings.append(Finding(
+            severity: severity,
+            category: .hardening,
+            title: "\(recommended.count) pending macOS update\(recommended.count == 1 ? "" : "s") (\(staleness))",
+            detail: "Recommended updates not yet installed: \(preview)",
+            path: plistPath,
+            remediation: "Install: System Settings > General > Software Update, or: sudo softwareupdate -ia --restart"
+        ))
+    }
+
+    // MARK: - macOS Version Support
+
+    /// Maps the running macOS major version to Apple's rolling support window
+    /// (current + previous two majors receive security patches). Anything older
+    /// is unsupported and almost certainly missing critical fixes.
+    private func checkOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Update yearly: as of macOS 15 (Sequoia), Apple ships security updates for 13/14/15.
+        // We treat <= 12 as unsupported, 13 as nearing end-of-life.
+        let oldestSupported = 13
+
+        if major < oldestSupported {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major) no longer receives security updates",
+                detail: "Apple stopped patching macOS \(major) — known kernel and Safari vulnerabilities remain exploitable",
+                path: nil,
+                remediation: "Upgrade via: System Settings > General > Software Update. If hardware blocks the upgrade, consider OpenCore Legacy Patcher only as a stopgap."
+            ))
+        } else if major == oldestSupported {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(major) is in the final year of security support",
+                detail: "Plan an upgrade — Apple typically drops the oldest supported major within ~12 months of the next release",
+                path: nil,
+                remediation: "Check upgrade eligibility: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    /// iCloud Private Relay (paid iCloud+) hides the originating IP and DNS
+    /// requests from network observers. We only flag if the user has signed in
+    /// to iCloud but explicitly disabled the feature.
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // PrivateRelayDisabled lives in com.apple.networkserviceproxy and
+        // com.apple.applesync; either being set true is enough to disable it.
+        let probes: [(domain: String, key: String)] = [
+            ("com.apple.networkserviceproxy", "PrivateRelayDisabled"),
+            ("com.apple.networkserviceproxy", "kPrivateRelayDisabled"),
+        ]
+        for probe in probes {
+            let r = ShellRunner.run("/usr/bin/defaults",
+                                    arguments: ["read", probe.domain, probe.key], timeout: 5)
+            guard r.success else { continue }
+            let value = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Browsing IP and DNS lookups are visible to your ISP and network operator",
+                    path: nil,
+                    remediation: "Enable (iCloud+ required): System Settings > Apple ID > iCloud > Private Relay"
+                ))
+                return
+            }
+        }
+    }
+
+    // MARK: - Encrypted DNS
+
+    /// Looks for a system-wide DNS-over-HTTPS or DNS-over-TLS configuration
+    /// profile. macOS supports these via `Network/NEDNSSettings` profiles —
+    /// without one, the resolver falls back to plaintext UDP/53, exposing every
+    /// domain lookup to anyone on the path.
+    private func checkEncryptedDNS(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/profiles", arguments: ["show", "-type", "configuration"], timeout: 10)
+        let haystack = result.success ? result.stdout : ""
+        let usesEncryptedDNS = haystack.contains("DNSSettings") &&
+            (haystack.contains("HTTPS") || haystack.contains("TLS"))
+        if usesEncryptedDNS { return }
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "No encrypted DNS (DoH / DoT) profile installed",
+            detail: "DNS lookups go out as plaintext — any device on the network can see which sites you visit",
+            path: nil,
+            remediation: "Install a DoH profile from a trusted resolver (Cloudflare, Quad9, NextDNS) or enable encrypted DNS via a managed configuration profile"
+        ))
+    }
+
+    // MARK: - AMFI / Boot-Args Relaxations
+
+    /// Detects `boot-args` or `nvram` flags that disable Apple Mobile File
+    /// Integrity (AMFI) — the runtime that enforces code signature checks for
+    /// every Mach-O the kernel loads. Disabling AMFI is the standard prerequisite
+    /// for loading unsigned kexts/dylibs and is a near-certain compromise marker
+    /// outside of an active developer's workstation.
+    private func checkAMFIBootArgs(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/nvram", arguments: ["boot-args"], timeout: 5)
+        guard result.success else { return }
+        let lower = result.stdout.lowercased()
+
+        let dangerous: [(needle: String, label: String)] = [
+            ("amfi_get_out_of_my_way", "AMFI fully disabled (amfi_get_out_of_my_way=1)"),
+            ("amfi=0", "AMFI disabled (amfi=0)"),
+            ("cs_enforcement_disable", "Code-signing enforcement disabled"),
+            ("rootless=0", "SIP disabled via boot-args (rootless=0)"),
+        ]
+
+        for entry in dangerous where lower.contains(entry.needle) {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: entry.label,
+                detail: "boot-args = \(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) — code-signing protections are weakened, allowing any unsigned binary to load",
+                path: nil,
+                remediation: "Remove the flag from recovery: csrutil clear-boot-args (or: sudo nvram -d boot-args). Then reboot."
+            ))
         }
     }
 }

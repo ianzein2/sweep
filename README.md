@@ -1,6 +1,6 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 14 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## Download
 
@@ -64,7 +64,7 @@ sudo sweep --json
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+`process`, `permission`, `persistence`, `extpersistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
 
 ## What it checks
 
@@ -73,6 +73,7 @@ sudo sweep --json
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
 | **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
+| **Extended Persistence** | Plug-in classes that auto-load outside the LaunchAgent path: Spotlight importers, Quick Look generators, color pickers, authorization plug-ins, Folder Action scripts, Core Audio HAL drivers, screen savers, system extensions, Background Task Management items (`sfltool dumpbtm`), `at(1)` jobs, `Application Scripts/` AppleScript handlers |
 | **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
@@ -82,7 +83,7 @@ sudo sweep --json
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, pending updates / EOL macOS warnings, iCloud Private Relay, encrypted DNS, AMFI / SIP boot-args |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
