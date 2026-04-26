@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook generators")
+        scanQuickLookGenerators(findings: &findings, errors: &errors)
+
+        progress?.update("checking dynamic linker hijacks")
+        scanDyldHijacks(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript additions")
+        scanScriptingAdditions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +687,172 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Spotlight Importers
+
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        // .mdimporter bundles are loaded by Spotlight (mds/mdworker) when files of matching
+        // types are indexed. They run inside the Spotlight worker process — a stealthy
+        // persistence channel that does not require launchd, login items, or visible UI.
+        // Only Apple-signed importers should live in /Library/Spotlight; user-installed
+        // ones in ~/Library/Spotlight are rare and worth surfacing.
+        let home = ShellRunner.realUserHome
+        let importerDirs = [
+            "/Library/Spotlight",
+            "\(home)/Library/Spotlight",
+        ]
+        let fm = FileManager.default
+
+        for dir in importerDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let bundle = "\(dir)/\(entry)"
+                let infoPlist = "\(bundle)/Contents/Info.plist"
+                guard fm.fileExists(atPath: infoPlist) else { continue }
+
+                let signed = checkIsSigned(path: bundle)
+                if !signed {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned Spotlight importer (.mdimporter)",
+                        detail: "Spotlight importers run inside mdworker whenever matching files are indexed — an unsigned importer is a stealth persistence channel",
+                        path: bundle,
+                        remediation: "Inspect bundle, then remove if unexpected: rm -rf \"\(bundle)\""
+                    ))
+                } else if dir.hasPrefix(home) {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "User-installed Spotlight importer",
+                        detail: "Importer: \(entry) — runs whenever Spotlight indexes matching files in your home directory",
+                        path: bundle,
+                        remediation: "Verify this importer is from a trusted application"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - QuickLook Generators
+
+    private func scanQuickLookGenerators(findings: inout [Finding], errors: inout [String]) {
+        // .qlgenerator bundles run inside the QuickLook process (qlmanage / quicklookd) every
+        // time the user previews a matching file in Finder — even just by selecting it. This
+        // makes them a high-impact persistence and execution surface, especially when paired
+        // with social engineering (a "preview my resume" lure).
+        let home = ShellRunner.realUserHome
+        let qlDirs = [
+            "/Library/QuickLook",
+            "\(home)/Library/QuickLook",
+        ]
+        let fm = FileManager.default
+
+        for dir in qlDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let bundle = "\(dir)/\(entry)"
+                let signed = checkIsSigned(path: bundle)
+
+                if !signed {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned QuickLook generator (.qlgenerator)",
+                        detail: "QuickLook generators execute when a user previews a matching file in Finder — an unsigned generator can run arbitrary code on every preview",
+                        path: bundle,
+                        remediation: "Inspect bundle, then remove if unexpected: rm -rf \"\(bundle)\""
+                    ))
+                } else if dir.hasPrefix(home) {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "User-installed QuickLook generator",
+                        detail: "Generator: \(entry) — executes when previewing matching files in Finder",
+                        path: bundle,
+                        remediation: "Verify this generator is from a trusted application"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - DYLD Insert / Hijack Files on Disk
+
+    private func scanDyldHijacks(findings: inout [Finding], errors: inout [String]) {
+        // ProcessScanner already inspects *running* processes for DYLD_INSERT_LIBRARIES.
+        // This check looks for the on-disk *configuration* that re-arms the same trick at
+        // login: launchctl-managed environment variables and shell rc lines that export
+        // DYLD_* variables. Static persistence is invisible to a process-time-only scan.
+
+        let dyldVars = ["DYLD_INSERT_LIBRARIES", "DYLD_FRAMEWORK_PATH",
+                        "DYLD_LIBRARY_PATH", "DYLD_FORCE_FLAT_NAMESPACE"]
+
+        // 1. launchctl-managed environment (per-user persistence on macOS Big Sur+)
+        let launchEnv = ShellRunner.run("/bin/launchctl",
+                                        arguments: ["getenv", "DYLD_INSERT_LIBRARIES"], timeout: 5)
+        if launchEnv.success {
+            let value = launchEnv.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "DYLD_INSERT_LIBRARIES is set in launchctl environment",
+                    detail: "Library path: \(value) — every new GUI process inherits this and loads the library, a classic injection persistence",
+                    path: nil,
+                    remediation: "Clear: launchctl unsetenv DYLD_INSERT_LIBRARIES — and reboot. Investigate \(value)."
+                ))
+            }
+        }
+
+        // 2. /etc/launchd.conf (very rare, deprecated since 10.10, but malware still uses it)
+        if let content = try? String(contentsOfFile: "/etc/launchd.conf", encoding: .utf8) {
+            for varName in dyldVars where content.contains(varName) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Deprecated /etc/launchd.conf sets \(varName)",
+                    detail: "launchd.conf is deprecated since 10.10; presence + DYLD env injection is a strong persistence indicator",
+                    path: "/etc/launchd.conf",
+                    remediation: "Inspect contents, then remove: sudo rm /etc/launchd.conf — and reboot"
+                ))
+                break
+            }
+        }
+    }
+
+    // MARK: - AppleScript Scripting Additions (OSAX)
+
+    private func scanScriptingAdditions(findings: inout [Finding], errors: inout [String]) {
+        // .osax bundles in ScriptingAdditions are loaded into every AppleScript-using
+        // process (Mail, Finder, Photos, Music, etc.) on first script execution. A
+        // malicious .osax sees keystrokes routed through scripts, automation events,
+        // and user data inside those processes. Apple ships exactly one (.osax = StandardAdditions);
+        // anything else here warrants review.
+        let home = ShellRunner.realUserHome
+        let osaxDirs = [
+            "/Library/ScriptingAdditions",
+            "\(home)/Library/ScriptingAdditions",
+        ]
+        let fm = FileManager.default
+
+        for dir in osaxDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".osax") {
+                // Skip Apple's StandardAdditions (the only legitimate OSAX in /Library)
+                if entry == "StandardAdditions.osax" { continue }
+
+                let bundle = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Third-party AppleScript Scripting Addition (.osax)",
+                    detail: "OSAX: \(entry) — loaded into every AppleScript-using app and a high-trust execution context",
+                    path: bundle,
+                    remediation: "Inspect, then remove if unexpected: rm -rf \"\(bundle)\""
+                ))
+            }
         }
     }
 

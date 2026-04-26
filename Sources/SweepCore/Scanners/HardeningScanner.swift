@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking Terminal secure keyboard entry")
+        checkSecureKeyboardEntry(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join open networks")
+        checkOpenNetworkAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo timeout")
+        checkSudoTimestampTimeout(findings: &findings, errors: &errors)
+
+        progress?.update("checking firewall logging")
+        checkFirewallLogging(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,212 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is the principal recovery channel for stolen devices and the gating
+        // factor for Activation Lock. Without it, a thief can wipe the disk, reinstall macOS,
+        // and resell the Mac. The token lives in a SystemConfiguration plist when active.
+        let plistPath = "/Library/Preferences/com.apple.FindMyMac.plist"
+        let exists = FileManager.default.fileExists(atPath: plistPath)
+        if !exists {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is not enabled",
+                detail: "Without Find My Mac, the Mac cannot be remotely located, locked, or wiped if stolen, and Activation Lock is disabled",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
+            return
+        }
+
+        // The plist exists but check for the actual FMMToken key
+        if let data = FileManager.default.contents(atPath: plistPath),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           plist["FMMToken"] == nil && plist["Token"] == nil {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is configured but inactive",
+                detail: "The Find My Mac preference exists but has no auth token — feature is not actively enrolled",
+                path: plistPath,
+                remediation: "Re-enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // Time Machine backups can contain everything FileVault protects on disk, including
+        // keychain items, mail, and documents. An unencrypted external Time Machine drive
+        // defeats FileVault — a thief who steals the drive gets the data.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Output blocks are separated by "====". For each destination, look for "Encryption: Off"
+        let blocks = result.stdout.components(separatedBy: "====")
+        for block in blocks {
+            let lines = block.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+
+            // Only care about destinations actually configured (Name + ID present)
+            guard lines.contains(where: { $0.hasPrefix("Name") }) else { continue }
+
+            let nameLine = lines.first { $0.hasPrefix("Name") } ?? ""
+            let name = nameLine.replacingOccurrences(of: "Name", with: "")
+                .trimmingCharacters(in: CharacterSet(charactersIn: " :")).trimmingCharacters(in: .whitespaces)
+
+            // tmutil reports "Encryption: Off" or "Encryption: On" (older macOS uses "Encrypted: Yes/No")
+            let encryptionOff = lines.contains { $0.contains("Encryption") && $0.lowercased().contains(" off") } ||
+                                lines.contains { $0.contains("Encrypted") && $0.lowercased().contains(": no") }
+            if encryptionOff {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine destination is unencrypted",
+                    detail: "Backup destination \"\(name)\" stores backups without encryption — anyone with physical access to the drive can read your data, defeating FileVault",
+                    path: nil,
+                    remediation: "Re-add the destination as encrypted: System Settings > General > Time Machine > Add Backup Disk > Encrypt Backup"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Terminal Secure Keyboard Entry
+
+    private func checkSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        // Terminal.app and iTerm2 ship a "Secure Keyboard Entry" mode that prevents other
+        // processes (including event-tap based keyloggers) from reading keystrokes typed
+        // into the terminal. It's off by default. Enabling it dramatically reduces the
+        // impact of a stealth keylogger sitting in the user session.
+        let terminals: [(label: String, domain: String, key: String, defaultOn: Bool)] = [
+            ("Terminal", "com.apple.Terminal", "SecureKeyboardEntry", false),
+            ("iTerm2", "com.googlecode.iterm2", "Secure Input", false),
+        ]
+
+        let fm = FileManager.default
+        let home = ShellRunner.realUserHome
+
+        for term in terminals {
+            // Only check apps the user actually has installed
+            let plistPath = "\(home)/Library/Preferences/\(term.domain).plist"
+            guard fm.fileExists(atPath: plistPath) else { continue }
+
+            let result = ShellRunner.run("/usr/bin/defaults",
+                                         arguments: ["read", term.domain, term.key], timeout: 5)
+            // If the key is missing or set to 0, secure entry is disabled
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let enabled = result.success && (value == "1" || value.uppercased() == "YES" || value.uppercased() == "TRUE")
+            if !enabled {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "\(term.label) Secure Keyboard Entry is disabled",
+                    detail: "Without Secure Keyboard Entry, processes with Input Monitoring or active event taps can capture keys typed into \(term.label) — including passwords typed into sudo and ssh prompts",
+                    path: nil,
+                    remediation: term.label == "Terminal"
+                        ? "Enable: Terminal > Secure Keyboard Entry (menu bar)"
+                        : "Enable: iTerm2 > Secure Keyboard Entry (menu bar)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join Open Networks
+
+    private func checkOpenNetworkAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // macOS can be configured to auto-join *unsecured* (open) Wi-Fi networks without
+        // prompting. This is a classic eavesdropping / SSID-spoofing vector — an attacker
+        // can set up an open AP with a popular SSID name and the Mac silently joins.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.wifi.message-tracer", "JoinModeFallback"
+        ], timeout: 5)
+
+        // The user-facing setting lives in com.apple.wifi.airport-prefs but key naming
+        // varies between macOS versions; the most reliable cross-version check is via
+        // `networksetup -getairportnetwork` plus the airport-prefs domain.
+        let prefs = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.plist"
+        ], timeout: 5)
+
+        // Pattern: "JoinModeFallback = ... DoNotJoin" or "Prompt" → safe.
+        // "JoinModeFallback = JoinOpen" or absent on a stricter OS → unsafe.
+        let combined = (result.stdout + "\n" + prefs.stdout).lowercased()
+        if combined.contains("joinopen") || combined.contains("auto-join open") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Wi-Fi is set to auto-join open networks",
+                detail: "Mac will silently connect to unencrypted Wi-Fi networks — a common phishing/eavesdropping vector (rogue APs with familiar SSIDs)",
+                path: nil,
+                remediation: "Disable: System Settings > Wi-Fi > Advanced > Ask to join networks > Ask, and turn off \"Auto-Join Hotspot\" for unknown networks"
+            ))
+        }
+    }
+
+    // MARK: - Sudo Timestamp Timeout
+
+    private func checkSudoTimestampTimeout(findings: inout [Finding], errors: inout [String]) {
+        // After running sudo once, macOS caches the auth for `timestamp_timeout` minutes
+        // (default 5). Some users disable this entirely with `Defaults timestamp_timeout=-1`,
+        // which means once they sudo once in a terminal, that terminal can run sudo forever
+        // without a password — a major risk if any local malware can spawn into that session.
+        let sudoersPaths = ["/etc/sudoers"]
+        var paths = sudoersPaths
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                paths.append("/etc/sudoers.d/\(entry)")
+            }
+        }
+
+        for path in paths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            for line in content.split(separator: "\n") {
+                let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                // Catch both "timestamp_timeout=-1" and "timestamp_timeout = -1"
+                let normalized = trimmed.replacingOccurrences(of: " ", with: "")
+                if normalized.contains("timestamp_timeout=-1") {
+                    findings.append(Finding(
+                        severity: .high, category: .hardening,
+                        title: "sudo timestamp_timeout is set to -1 (never expires)",
+                        detail: "Once you authenticate with sudo, the credential cache never expires — local malware spawning into your shell could escalate to root without prompting",
+                        path: path,
+                        remediation: "Edit with: sudo visudo -f \(path) — set timestamp_timeout to 5 (default) or remove the line"
+                    ))
+                } else if let range = normalized.range(of: "timestamp_timeout=") {
+                    let valueStr = String(normalized[range.upperBound...]
+                        .prefix(while: { $0.isNumber || $0 == "-" }))
+                    if let v = Int(valueStr), v > 15 {
+                        findings.append(Finding(
+                            severity: .medium, category: .hardening,
+                            title: "sudo timestamp_timeout is unusually long (\(v) minutes)",
+                            detail: "Long sudo grace windows widen the blast radius of any local code that runs in your shell session",
+                            path: path,
+                            remediation: "Edit with: sudo visudo -f \(path) — reduce timestamp_timeout to 5 or 15"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Firewall Logging
+
+    private func checkFirewallLogging(findings: inout [Finding], errors: inout [String]) {
+        // Firewall logging records blocked/allowed connection attempts. Without it, you have
+        // no after-the-fact record of network activity if an investigation is needed.
+        let result = ShellRunner.run("/usr/libexec/ApplicationFirewall/socketfilterfw",
+                                     arguments: ["--getloggingmode"], timeout: 5)
+        if result.success && result.stdout.lowercased().contains("disabled") {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Firewall logging is disabled",
+                detail: "macOS firewall is not recording connection events — limits forensic visibility if you suspect an intrusion",
+                path: nil,
+                remediation: "Enable: sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setloggingmode on"
+            ))
         }
     }
 

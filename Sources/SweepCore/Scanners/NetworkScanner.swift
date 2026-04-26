@@ -40,6 +40,8 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // Ports observed in 2024-2025 macOS malware C2 infrastructure
+        4040, 4140, 5050, 6661, 6680, 8010, 8765, 13337, 50050,
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -66,6 +68,11 @@ public final class NetworkScanner: Scanner {
         //    infostealers and enterprise monitoring tools that redirect browser traffic.
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
+
+        // 4. Check for unusual VPN / tunnel configurations — backdoor VPNs and reverse-tunneled
+        //    SSH sessions are a recurring 2024-2025 stalkerware persistence technique.
+        progress?.update("checking VPN / tunnel configurations")
+        scanVPNConfigurations(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -360,6 +367,67 @@ public final class NetworkScanner: Scanner {
                     remediation: isLoopback
                         ? "Expected if you're using Proxyman/Charles/mitmproxy — otherwise disable in Network settings"
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
+                ))
+            }
+        }
+    }
+
+    // MARK: - VPN / Tunnel Configurations
+
+    private func scanVPNConfigurations(findings: inout [Finding], errors: inout [String]) {
+        // Configured VPN services live in SystemConfiguration. A surprising VPN pre-configured
+        // by an attacker (or a parental-control / managed configuration) routes all traffic
+        // through their server — equivalent to a network-level keylogger.
+        let result = ShellRunner.run("/usr/sbin/networksetup",
+                                     arguments: ["-listallnetworkservices"], timeout: 5)
+        guard result.success else { return }
+
+        let services = result.stdout.split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.contains("denoted") && !$0.hasPrefix("*") }
+
+        // Names that hint at VPN. The list is intentionally conservative — we only want
+        // to surface VPNs the user might not realise are installed.
+        let vpnHints = ["vpn", "ipsec", "l2tp", "pptp", "wireguard", "openvpn", "tunnel"]
+
+        for service in services {
+            let lower = service.lowercased()
+            guard vpnHints.contains(where: { lower.contains($0) }) else { continue }
+
+            // Confirm it's actually a VPN by looking up its hardware port
+            let infoResult = ShellRunner.run("/usr/sbin/networksetup",
+                                             arguments: ["-getinfo", service], timeout: 5)
+            let combined = infoResult.stdout + infoResult.stderr
+
+            // Many enterprise / consumer VPN apps surface here; we list rather than alarm
+            findings.append(Finding(
+                severity: .low, category: .networkActivity,
+                title: "VPN / tunnel network service configured: \(service)",
+                detail: "\(service) is registered as a network service. " +
+                    (combined.isEmpty ? "" : "Verify the server endpoint is one you set up."),
+                path: nil,
+                remediation: "Review in System Settings > Network. Remove if you didn't add it: networksetup -removenetworkservice \"\(service)\""
+            ))
+        }
+
+        // Also surface running ssh reverse-tunnel sessions on the local box (ssh -R / autossh).
+        // These are a classic backdoor mechanism used to keep a foothold from inside the LAN.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-Ao", "pid,command"], timeout: 5)
+        if psResult.success {
+            for line in psResult.stdout.split(separator: "\n") {
+                let l = String(line)
+                let lc = l.lowercased()
+                guard (lc.contains("ssh ") || lc.contains("autossh ")) && l.contains(" -R") else { continue }
+                // Skip our own ssh invocations from interactive shells (rough heuristic)
+                let trimmed = l.trimmingCharacters(in: .whitespaces)
+                let parts = trimmed.split(separator: " ", maxSplits: 1)
+                let pid = parts.first.map(String.init) ?? "?"
+                findings.append(Finding(
+                    severity: .high, category: .networkActivity,
+                    title: "SSH reverse tunnel detected (PID \(pid))",
+                    detail: "Process arguments include `-R` reverse port forwarding: \(String(trimmed.prefix(160))) — a recurring backdoor pattern",
+                    path: nil,
+                    remediation: "Verify this tunnel is intentional. To terminate: kill \(pid)"
                 ))
             }
         }

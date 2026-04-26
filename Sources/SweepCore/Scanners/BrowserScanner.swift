@@ -11,10 +11,33 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // Patterns reported in 2024-2025 marketplace takedowns (Reversinglabs, Aikido, Snyk).
+        // These are typo-squats of popular extensions and were used to deliver infostealers.
+        "material-icon-themes", "material-theme-icons", "material-icons-pro",
+        "prettier-formatter", "eslint-plus", "nodejs-extension-pack",
+        "claude-code-helper", "cursor-tools-helper", "ai-copilot-tools",
+        "solidity-extension", "ethereum-helper", "near-pickaxe",
+        "open-vsix-installer", "ahbot",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
+    // Patterns commonly seen in fake crypto wallet / fake AI assistant browser extensions
+    // (a major 2024-2025 attack vector — typo-squatted names targeting Web3/AI users).
+    // A real wallet/AI extension still scores legitimate against these patterns; the
+    // detection only fires alongside other signals (broad permissions, etc.).
+    private let cryptoWalletKeywords: [String] = [
+        "metamask", "phantom wallet", "rainbow wallet", "trust wallet",
+        "coinbase wallet", "ledger live", "exodus", "atomic wallet",
+        "wallet connect",
+    ]
+
+    private let fakeAIAssistantKeywords: [String] = [
+        "chatgpt for", "free chatgpt", "chatgpt premium", "gpt-4 free",
+        "claude assistant", "copilot for", "free copilot",
+        "ai search", "ai assistant",
     ]
 
     // Extensions that are well-known and safe
@@ -213,6 +236,23 @@ public final class BrowserScanner: Scanner {
                     detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — can intercept all web traffic",
                     path: ext.extDir,
                     remediation: "Verify this extension is legitimate in \(ext.browserName) > Extensions"
+                ))
+            }
+
+            // Wallet/AI typo-squat detection: an extension claiming to be a major wallet
+            // or AI assistant with broad host permissions but not in our trusted list is
+            // a high-confidence sign of a phishing/drainer extension.
+            let nameLC = ext.name.lowercased()
+            let claimsToBeWallet = cryptoWalletKeywords.contains(where: { nameLC.contains($0) })
+            let claimsToBeAI = fakeAIAssistantKeywords.contains(where: { nameLC.contains($0) })
+            if (claimsToBeWallet || claimsToBeAI) && ext.hasAllUrls {
+                let kind = claimsToBeWallet ? "crypto wallet" : "AI assistant"
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension impersonates a \(kind) (broad permissions)",
+                    detail: "Extension: \(ext.name) (\(ext.extId))\(profileNote) — claims to be a \(kind) and requests <all_urls>. Common 2024-2025 drainer/stealer pattern.",
+                    path: ext.extDir,
+                    remediation: "Verify the publisher in \(ext.browserName)'s store before continuing to use. Remove if not the official version."
                 ))
             }
         }

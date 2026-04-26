@@ -37,6 +37,18 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Modern login items (macOS Ventura+ Background Tasks Management — sfltool/btmtool).
+        //    Many 2024-2025 adware/stealer families have shifted from LaunchAgents to
+        //    SMAppService-registered login items because they're easier to bury under app
+        //    bundle IDs and don't appear under traditional persistence directories.
+        progress?.update("checking modern login items")
+        scanBackgroundTaskItems(findings: &findings, errors: &errors)
+
+        // 7. Check for swap and sleepimage exposure — when FileVault is off, these on-disk
+        //    artifacts may contain decrypted memory contents including keys/passwords.
+        progress?.update("checking swap / sleepimage exposure")
+        scanSwapExposure(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -276,6 +288,73 @@ public final class DeepScanner: Scanner {
                 detail: "This file is owned by root in your user directory — unusual for user apps",
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
+            ))
+        }
+    }
+
+    // MARK: - Modern Login Items (Background Tasks Management)
+
+    private func scanBackgroundTaskItems(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura+ exposes login items registered via SMAppService through `sfltool`.
+        // The output enumerates managed background items per developer team. We compare each
+        // against our spyware signature DB and flag anything matching.
+        let result = ShellRunner.run("/usr/bin/sfltool",
+                                     arguments: ["dumpbtm"], timeout: 10)
+        // dumpbtm requires elevated privileges — silently skip if we can't read it.
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Each item block contains lines like "Bundle identifier: com.foo.bar" and "URL: file://..."
+        let blocks = result.stdout.components(separatedBy: "\n\n")
+        for block in blocks {
+            let lines = block.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+            guard let bundleLine = lines.first(where: { $0.hasPrefix("Bundle identifier:") }) else { continue }
+            let bundleId = bundleLine.replacingOccurrences(of: "Bundle identifier:", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if bundleId.isEmpty || bundleId == "(null)" { continue }
+
+            // Match against known spyware bundle IDs / fake Apple labels
+            if let sig = SpywareSignature.match(bundleId: bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as Login Item: \(sig.name)",
+                    detail: "Bundle: \(bundleId) — registered via Background Tasks Management (Ventura+)",
+                    path: nil,
+                    remediation: "Remove in System Settings > General > Login Items. To disable from terminal: sfltool resetbtm (requires admin)"
+                ))
+                continue
+            }
+
+            if SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple Login Item registered (Background Tasks Management)",
+                    detail: "Bundle: \(bundleId) — registered as a managed login item but uses a fake Apple naming pattern",
+                    path: nil,
+                    remediation: "Remove in System Settings > General > Login Items"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Swap / Sleepimage Exposure
+
+    private func scanSwapExposure(findings: inout [Finding], errors: inout [String]) {
+        // /var/vm/swapfile* and /var/vm/sleepimage may contain raw memory contents. When
+        // FileVault is on and the volume is encrypted at rest these are protected. When
+        // FileVault is off, anyone with disk access can recover credentials from them.
+        let fdeStatus = ShellRunner.run("/usr/bin/fdesetup", arguments: ["status"], timeout: 5)
+        let fileVaultOff = fdeStatus.success && fdeStatus.stdout.contains("FileVault is Off")
+
+        guard fileVaultOff else { return }
+
+        let exposurePaths = ["/private/var/vm/sleepimage", "/private/var/vm/swapfile0"]
+        for path in exposurePaths where FileManager.default.fileExists(atPath: path) {
+            findings.append(Finding(
+                severity: .medium, category: .systemIntegrity,
+                title: "Memory image exposed without disk encryption",
+                detail: "\(path) exists and FileVault is disabled — recovered memory may contain encryption keys, passwords, and session tokens",
+                path: path,
+                remediation: "Enable FileVault: System Settings > Privacy & Security > FileVault. As a stopgap you can also disable hibernation: sudo pmset -a hibernatemode 0"
             ))
         }
     }

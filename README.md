@@ -2,6 +2,8 @@
 
 A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
+Tracks 70+ named threat families, including 2024-2026 stalkerware, infostealers (AMOS, Banshee, Cuckoo, Poseidon, FrigidStealer, Crystal, Beast, GoldDigger), DPRK/Lazarus payloads (BeaverTail, InvisibleFerret, FlexibleFerret, NimDoor, RustDoor, HZ RAT), and APT spyware (Pegasus, Predator, QuaDream Reign, LightSpy, Triangulation).
+
 ## Download
 
 Grab the latest `.dmg` from [**Releases**](https://github.com/ianzein2/sweep/releases), open it, and drag **Sweep.app** to your Applications folder. No terminal required.
@@ -72,17 +74,17 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, Spotlight importers, QuickLook generators, AppleScript additions (.osax), and on-disk DYLD hijack configuration |
 | **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy/PAC hijacking, VPN configurations, SSH reverse-tunnel detection |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions; flags fake crypto-wallet and AI-assistant extensions; scans VS Code / Cursor / Windsurf editor extensions for shell-exec and remote-code patterns |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, modern Login Items (Background Tasks Management on Ventura+), swap/sleepimage exposure when FileVault is off |
+| **Hardening** | CIS benchmark checks — firewall + logging, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Find My Mac, Time Machine encryption, Terminal/iTerm Secure Keyboard Entry, Wi-Fi auto-join open networks, sudo timeout, Lockdown Mode, Rapid Security Response |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
