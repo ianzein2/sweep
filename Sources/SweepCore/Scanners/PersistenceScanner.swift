@@ -1,5 +1,8 @@
 import Foundation
 import Security
+#if canImport(Darwin)
+import Darwin
+#endif
 
 public final class PersistenceScanner: Scanner {
     public let name = "Persistence Scan"
@@ -57,6 +60,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking shell config files")
         scanShellConfigs(findings: &findings, errors: &errors)
 
+        progress?.update("checking system-wide shell hooks")
+        scanSystemShellConfigs(findings: &findings, errors: &errors)
+
         progress?.update("checking cron jobs")
         scanCronJobs(findings: &findings, errors: &errors)
 
@@ -77,6 +83,9 @@ public final class PersistenceScanner: Scanner {
 
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Tasks (SMAppService) registry")
+        scanBackgroundTasksManagement(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -395,6 +404,105 @@ public final class PersistenceScanner: Scanner {
         }
     }
 
+    // MARK: - System-wide shell hooks
+
+    /// System-wide shell init files run for *every* user (and, in the case of zshenv,
+    /// for every zsh invocation including non-interactive ones). Modifying them gives
+    /// malware a reliable persistence channel that fires before the user logs in.
+    /// NimDoor (DPRK, 2025) is the highest-profile recent abuser of /etc/zshenv.
+    private func scanSystemShellConfigs(findings: inout [Finding], errors: inout [String]) {
+        // /etc/zshenv has NO default install on macOS — its existence alone is suspicious.
+        // The other files here ship by default; we inspect their contents for known IOCs.
+        let configs: [(path: String, hasDefault: Bool)] = [
+            ("/etc/zshenv", false),       // not shipped by Apple — existence is suspicious
+            ("/etc/bash.bashrc", false),  // not shipped by Apple
+            ("/etc/zshrc", true),
+            ("/etc/zprofile", true),
+            ("/etc/zlogin", true),
+            ("/etc/zlogout", true),
+            ("/etc/profile", true),
+            ("/etc/bashrc", true),
+        ]
+
+        let suspiciousPatterns: [(pattern: String, description: String)] = [
+            ("curl", "downloads remote content"),
+            ("wget", "downloads remote content"),
+            ("eval ", "evaluates dynamic code"),
+            ("eval(", "evaluates dynamic code"),
+            ("base64 -d", "decodes hidden payload"),
+            ("base64 --decode", "decodes hidden payload"),
+            ("/tmp/", "references temp directory"),
+            ("/private/tmp/", "references temp directory"),
+            ("osascript", "invokes AppleScript (common stealer pattern)"),
+            ("nohup", "background-detaches a process"),
+            ("python -c", "runs inline Python"),
+            ("python3 -c", "runs inline Python"),
+            ("/dev/tcp/", "opens raw TCP socket (reverse shell)"),
+        ]
+
+        for (configPath, hasDefault) in configs {
+            // /etc/zshenv specifically: bare existence is HIGH severity. Only com.apple.*
+            // pkg installers create /etc files, and Apple does not ship this one.
+            guard FileManager.default.fileExists(atPath: configPath) else { continue }
+            guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
+
+            let nonCommentLines = content.split(separator: "\n").filter { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+            }
+
+            if !hasDefault && !nonCommentLines.isEmpty {
+                // /etc/zshenv with any non-comment line — very likely malicious persistence.
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "System-wide shell hook present (\(URL(fileURLWithPath: configPath).lastPathComponent))",
+                    detail: "macOS does not ship this file by default. \(nonCommentLines.count) non-comment line(s). " +
+                            "/etc/zshenv runs for every zsh invocation, including pre-login scripts.",
+                    path: configPath,
+                    remediation: "Inspect contents (sudo cat \(configPath)). If unexpected, delete it: sudo rm \(configPath)"
+                ))
+                continue
+            }
+
+            // For files Apple does ship by default, scan for malicious-looking lines.
+            let lines = content.components(separatedBy: "\n")
+            for (lineNum, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+                let lc = trimmed.lowercased()
+                for (pattern, description) in suspiciousPatterns {
+                    if lc.contains(pattern.lowercased()) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Suspicious command in system shell config \(URL(fileURLWithPath: configPath).lastPathComponent)",
+                            detail: "Line \(lineNum + 1): \(description) — \(String(trimmed.prefix(120)))",
+                            path: configPath,
+                            remediation: "Review and restore the stock file: sudo nano \(configPath)"
+                        ))
+                        break
+                    }
+                }
+            }
+
+            // Spyware signature match against the file body
+            let contentLC = content.lowercased()
+            for sig in SpywareSignature.known {
+                for name in sig.processNames {
+                    if contentLC.contains(name.lowercased()) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware reference in \(URL(fileURLWithPath: configPath).lastPathComponent): \(sig.name)",
+                            detail: "System shell config contains reference to '\(name)' — runs for every shell invocation",
+                            path: configPath,
+                            remediation: "Remove the malicious lines from \(configPath)"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Cron Jobs
 
     private func scanCronJobs(findings: inout [Finding], errors: inout [String]) {
@@ -675,6 +783,150 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Background Tasks Management (Login Items v2)
+
+    /// macOS 13 introduced SMAppService and the Background Tasks Management (BTM)
+    /// registry, the canonical source for login items and background services.
+    /// Many recent threats (ChillyHell, FrigidStealer, Atomic forks) register here
+    /// instead of dropping a /Library/LaunchAgents plist, so a filesystem-only scan
+    /// misses them. `sfltool dumpbtm` (root) prints the full BTM database.
+    private func scanBackgroundTasksManagement(findings: inout [Finding], errors: inout [String]) {
+        // Requires root — silently skip otherwise (filesystem scan still covers
+        // legacy LaunchAgents, and the user gets a hint to re-run with sudo).
+        guard getuid() == 0 else { return }
+
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard result.success && !result.stdout.isEmpty else {
+            if !result.stderr.isEmpty {
+                errors.append("BTM: \(result.stderr.prefix(200))")
+            }
+            return
+        }
+
+        // Parse record-by-record. The format groups each entry as a block of
+        // "Key: Value" lines separated by blank lines or "Record" headers.
+        // We extract the few fields we care about and evaluate them.
+        struct BTMRecord {
+            var path: String = ""
+            var url: String = ""
+            var label: String = ""
+            var teamIdentifier: String = ""
+            var developerName: String = ""
+            var disposition: String = ""
+            var typeFlags: String = ""
+        }
+
+        var records: [BTMRecord] = []
+        var current = BTMRecord()
+
+        let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: false)
+        for rawLine in lines {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+
+            // Record boundary: blank line or new "Records:" / "- record" / "uuid:" header.
+            let isBoundary = line.isEmpty
+                || line.hasPrefix("Records:")
+                || line.hasPrefix("- record")
+                || line.hasPrefix("UUID:")
+                || line.hasPrefix("uuid:")
+
+            if isBoundary {
+                if !current.path.isEmpty || !current.url.isEmpty || !current.label.isEmpty {
+                    records.append(current)
+                    current = BTMRecord()
+                }
+                continue
+            }
+
+            // Match "Key: Value" — keys are case-stable across macOS 13/14/15.
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
+            let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+
+            switch key {
+            case "path", "executable path":      current.path = value
+            case "url":                          current.url = value
+            case "name", "label":                current.label = value
+            case "team identifier", "team id":   current.teamIdentifier = value
+            case "developer name":               current.developerName = value
+            case "disposition":                  current.disposition = value
+            case "type":                         current.typeFlags = value
+            default: break
+            }
+        }
+        if !current.path.isEmpty || !current.url.isEmpty || !current.label.isEmpty {
+            records.append(current)
+        }
+
+        for rec in records {
+            let target = !rec.path.isEmpty ? rec.path : rec.url
+            if target.isEmpty { continue }
+
+            // 1. Match against the spyware DB by label or path
+            if !rec.label.isEmpty, let sig = SpywareSignature.match(label: rec.label) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware in Background Tasks registry: \(sig.name)",
+                    detail: "BTM record — Label: \(rec.label), Path: \(target)",
+                    path: target,
+                    remediation: "Remove via System Settings > General > Login Items, then: sudo sfltool resetbtm"
+                ))
+                continue
+            }
+
+            // 2. Hidden / temp paths — strong indicator
+            let lower = target.lowercased()
+            let isHidden = target.contains("/.")
+            let isTemp = lower.hasPrefix("/tmp/") || lower.hasPrefix("/private/tmp/") ||
+                         lower.hasPrefix("/var/tmp/")
+            if isHidden || isTemp {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background item launches from \(isTemp ? "temp" : "hidden") path",
+                    detail: "BTM record — Label: \(rec.label.isEmpty ? "(none)" : rec.label), " +
+                            "Developer: \(rec.developerName.isEmpty ? "unknown" : rec.developerName), " +
+                            "Path: \(target)",
+                    path: target,
+                    remediation: "Remove in System Settings > General > Login Items. Items registered " +
+                                 "via SMAppService are invisible to plist-based scanners — investigate this binary."
+                ))
+                continue
+            }
+
+            // 3. Items claiming to be from "Apple Inc." but missing Apple's team ID
+            //    (Apple's TeamID is "0000000000" for system, or never user-installable).
+            let claimsApple = rec.developerName.lowercased().contains("apple")
+            let appleTeamIDs: Set<String> = ["", "0000000000"]
+            if claimsApple && !appleTeamIDs.contains(rec.teamIdentifier) &&
+               !target.hasPrefix("/System/") && !target.hasPrefix("/Applications/") {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background item impersonates Apple",
+                    detail: "BTM record claims developer \"\(rec.developerName)\" but Team ID is " +
+                            "\"\(rec.teamIdentifier)\" — Apple's items are signed with the platform identity. Path: \(target)",
+                    path: target,
+                    remediation: "Investigate this background item. If unexpected, remove via Login Items."
+                ))
+                continue
+            }
+
+            // 4. Disabled / disposition flags can reveal items the user thinks are gone
+            //    but the registry still tracks them (enabled=false but present).
+            //    We only flag when the executable still exists and looks abnormal.
+            if !rec.developerName.isEmpty && rec.teamIdentifier.isEmpty &&
+               !target.hasPrefix("/System/") && !target.hasPrefix("/Applications/") {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Background item without Team ID",
+                    detail: "BTM record — Developer: \(rec.developerName), Path: \(target)",
+                    path: target,
+                    remediation: "Verify this background item is expected. Missing Team IDs " +
+                                 "indicate ad-hoc signing — common in dev tools but also in malware."
+                ))
+            }
         }
     }
 

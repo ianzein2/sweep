@@ -434,6 +434,205 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS threats — DPRK and infostealer families
+        // Reported by Objective-See, JAMF, Sentinel One, Volexity, Kandji.
+        SpywareSignature(
+            // NimDoor: DPRK Nim-language backdoor with signal-handler persistence,
+            // installs via a malicious zsh helper. Uses fake "Zoom SDK update" lures.
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIe", "CoreKitAgent",
+                           "InjectWithDyldArm64", "trojan_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.NimDoor",
+                "~/.zshenv",  // NimDoor's persistence pivot — flagged additionally by shell-config scan
+                "/private/tmp/installer.scpt",
+            ],
+            launchAgentLabels: ["com.google.update.agent"]
+        ),
+        SpywareSignature(
+            // BeaverTail: JS/Node-based stealer dropped during DPRK "Contagious
+            // Interview" recruiter scam. Pulled in InvisibleFerret as second stage.
+            // We only list specific lure-app names — generic "node_helper" omitted
+            // to avoid colliding with legitimate Node.js helpers.
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail",
+                           "MiroTalk", "FCCCall", "FreeConference"],
+            bundleIdentifiers: ["com.mirotalk.helper", "com.freeconference.app"],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.beaver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // InvisibleFerret: Python-based DPRK backdoor delivered as second stage
+            // by BeaverTail. Uses pip-install lures; persists via cron and zshenv.
+            // Generic IOCs ("pay", "ssid") intentionally omitted — they collide with
+            // legitimate dev binaries. We rely on file-path and label matches instead.
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.npl",
+                "~/Library/Application Support/.iferret",
+                "/private/tmp/.invisible",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // OtterCookie: DPRK JS/Node stealer, observed late-2024 through 2025.
+            // Variants v2/v3 added crypto-wallet scraping and clipboard hijacking.
+            name: "OtterCookie",
+            processNames: ["OtterCookie", "ottercookie", "ottersvc"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.otter",
+                "~/Library/Application Support/.OtterCookie",
+            ],
+            launchAgentLabels: ["com.otter.service"]
+        ),
+        SpywareSignature(
+            // FrigidStealer: distributed via fake "browser update" SocGholish-style
+            // landing pages in 2025. AppleScript-driven keychain/wallet scraper.
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "frigid",
+                           "ChromeUpdater", "SafariUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            // AppleProcessHub Stealer: Feb 2025 stealer that disguised itself as
+            // "AppleProcessHub" to look like a system service.
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "AppleProcHub"],
+            bundleIdentifiers: ["com.apple.processhub"],  // fake Apple bundle ID
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        SpywareSignature(
+            // Crystal Stealer (a.k.a. Crystal): 2025 macOS infostealer sold as MaaS,
+            // targets browser cookies, Notes.app, Keychain export.
+            name: "Crystal Stealer",
+            processNames: ["Crystal", "crystal_stealer", "crystalmac"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.service"]
+        ),
+        SpywareSignature(
+            // Odyssey Stealer: 2025 Atomic-fork rebranded for crypto wallet draining.
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odystealer"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            // TrollStealer: 2024-2025 Korean-language infostealer attributed to
+            // Kimsuky / DPRK. Steals keychain, GPG keys, SSH config.
+            name: "TrollStealer",
+            processNames: ["TrollStealer", "trollstealer", "troll_mac"],
+            bundleIdentifiers: ["com.troll.stealer"],
+            filePaths: [
+                "/private/tmp/.troll",
+                "~/Library/Application Support/.TrollStealer",
+            ],
+            launchAgentLabels: ["com.troll.service"]
+        ),
+        SpywareSignature(
+            // HZ RAT macOS: Tencent QQ-targeting RAT ported from Windows in 2024.
+            name: "HZ RAT (macOS)",
+            processNames: ["HZRat", "hzrat", "hz_helper", "qqhelper"],
+            bundleIdentifiers: ["com.tencent.qqhelper.fake", "com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.tencent.qq.helper", "com.hzrat.service"]
+        ),
+        SpywareSignature(
+            // NotLockBit: Oct 2024 LockBit-themed Mac ransomware (first
+            // cross-platform LockBit variant). Encrypts and exfils to S3.
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_mac"],
+            bundleIdentifiers: ["com.lockbit.mac", "com.notlockbit.agent"],
+            filePaths: [
+                "/private/tmp/.lockbit",
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.lockbit",
+            ],
+            launchAgentLabels: ["com.lockbit.service"]
+        ),
+        SpywareSignature(
+            // PasivRobber: 2025 DPRK-attributed Mac surveillance suite, exfiltrates
+            // browser data, iMessage, WeChat. Disguises as "WeChat helper."
+            name: "PasivRobber",
+            processNames: ["PasivRobber", "pasivrobber", "WeChatHelper",
+                           "ChatExtractor"],
+            bundleIdentifiers: ["com.pasiv.agent", "com.wechat.helper.fake"],
+            filePaths: [
+                "/private/tmp/.pasiv",
+                "~/Library/Application Support/.PasivRobber",
+            ],
+            launchAgentLabels: ["com.wechat.helper", "com.pasiv.service"]
+        ),
+        SpywareSignature(
+            // ChillyHell (a.k.a. ChillBacon): 2025 modular backdoor distributed via
+            // pirated app installers; persists via login items + zshenv.
+            name: "ChillyHell",
+            processNames: ["ChillyHell", "chillyhell", "ChillBacon", "chillbacon"],
+            bundleIdentifiers: ["com.chilly.hell", "com.chill.bacon"],
+            filePaths: [
+                "/private/tmp/.chilly",
+                "~/Library/Application Support/.ChillyHell",
+            ],
+            launchAgentLabels: ["com.chilly.service", "com.chillbacon.agent"]
+        ),
+        SpywareSignature(
+            // FullHouse / TouchMove: DPRK 2025 cluster targeting macOS dev machines.
+            name: "FullHouse (DPRK)",
+            processNames: ["FullHouse", "fullhouse", "TouchMove", "touchmove"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.fullhouse",
+                "~/Library/Caches/.touchmove",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Tylocker: 2025 macOS file-locker / wiper using rust-crypto.
+            name: "Tylocker",
+            processNames: ["Tylocker", "tylocker", "tycrypt"],
+            bundleIdentifiers: ["com.tylocker.agent"],
+            filePaths: ["/private/tmp/.tylocker"],
+            launchAgentLabels: ["com.tylocker.service"]
+        ),
+        SpywareSignature(
+            // GhostStealer: 2025 commodity stealer sold via Telegram, MaaS model.
+            name: "GhostStealer",
+            processNames: ["GhostStealer", "ghoststealer", "ghost_mac"],
+            bundleIdentifiers: ["com.ghost.stealer"],
+            filePaths: [
+                "/private/tmp/.ghost",
+                "~/Library/Application Support/.Ghost",
+            ],
+            launchAgentLabels: ["com.ghost.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +649,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed 2024-2025 fake-Apple bundle IDs
+        "com.apple.processhub",        // AppleProcessHub Stealer (2025)
+        "com.apple.swcd.agent",        // NimDoor variants
+        "com.apple.coregraphics.agent",
+        "com.apple.iphone.sync",
+        "com.apple.hidd.helper",
+        "com.apple.cloudd.sync",
+        "com.apple.activitymonitor.helper",
+        "com.apple.notificationcenterui.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

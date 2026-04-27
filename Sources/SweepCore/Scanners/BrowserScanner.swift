@@ -17,6 +17,30 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome/Edge/Brave extension IDs that are known to have shipped malicious code
+    // through supply-chain compromise (the Dec 2024 phishing wave that tampered with
+    // Cyberhaven's signing key affected ~36 extensions). Reinstalling a clean version
+    // does not always overwrite the compromised build, so we flag these by ID.
+    // Sources: Cyberhaven incident report (Dec 2024), Secure Annex roundup.
+    private let knownCompromisedExtensionIds: [String: String] = [
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (Dec 2024 supply-chain compromise)",
+        "cphpdomjdfjhpojdpoeckiglbmkcgocb": "Internxt VPN (Dec 2024 wave)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "VPNCity (Dec 2024 wave)",
+        "paodjlmfbidpknldmhcekokmlhcekgkk": "Bookmark Favicon Changer (Dec 2024 wave)",
+        "lnedcnepmplnjmfdiclhbfhneconamoj": "Castorus (Dec 2024 wave)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice (Dec 2024 wave)",
+        "kpilcoblaaolmdndcohbjenbmlolelad": "ParrotTalks (Dec 2024 wave)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "Reader Mode (Dec 2024 wave)",
+        "eaijffijbobmnonfhilihbejadplhddo": "Visual Effects for Google Meet (Dec 2024 wave)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "AI Assistant (ChatGPT) (Dec 2024 wave)",
+        "ndlbedplllcgconngcnfmkadhokfaaln": "Wayin AI (Dec 2024 wave)",
+        "nnpljppamoaalgkieeciijbcccohlpoh": "Search Copilot AI Assistant (Dec 2024 wave)",
+        "mlbmkoenclnokonejhlfakkeabdlmpek": "Tackker — online keylogger tool (Dec 2024 wave)",
+        "fbmlcbhdmilaggedifpihjgkkmdgeljh": "Vidnoz Flex (Dec 2024 wave)",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "VidHelper (Dec 2024 wave)",
+        "fopeajnnkgkcodjpdjnnbmgmjglaichn": "Bard AI Chat (Dec 2024 wave)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -142,6 +166,21 @@ public final class BrowserScanner: Scanner {
                       let extensions = try? fm.contentsOfDirectory(atPath: extPath) else { continue }
 
                 for extId in extensions {
+                    // Compromised-extension list takes priority — even if the user
+                    // believes they trust this extension, the supply-chain incident
+                    // means the on-disk build can't be assumed safe.
+                    if let reason = knownCompromisedExtensionIds[extId] {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension known to ship malicious code",
+                            detail: "Extension ID \(extId) in profile \(profile) — \(reason)",
+                            path: extDir,
+                            remediation: "Uninstall this extension in \(browserName) > Extensions and rotate any passwords or session tokens used while it was installed."
+                        ))
+                        continue
+                    }
+
                     if trustedExtensionIds.contains(extId) { continue }
 
                     let dedupeKey = "\(browserName):\(extId)"
