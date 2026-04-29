@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Remote Apple Events")
+        checkRemoteAppleEvents(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server hardening")
+        checkSSHDConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking hidden file extensions")
+        checkHiddenFileExtensions(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking accessory connections (USB Restricted Mode)")
+        checkAccessoryConnections(findings: &findings, errors: &errors)
+
+        progress?.update("checking microphone & camera global state")
+        checkCameraMicState(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,223 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Remote Apple Events
+
+    /// Remote Apple Events lets remote machines drive AppleScript on this Mac. It's almost
+    /// never enabled deliberately and is a very high-risk surface.
+    private func checkRemoteAppleEvents(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/systemsetup",
+                                     arguments: ["-getremoteappleevents"], timeout: 5)
+        if result.success && result.stdout.lowercased().contains(": on") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Remote Apple Events is enabled",
+                detail: "Remote machines can run AppleScript on this Mac — broad scripting surface, frequently abused for code execution",
+                path: nil,
+                remediation: "Disable: sudo systemsetup -setremoteappleevents off, or System Settings > General > Sharing > Remote Apple Events"
+            ))
+        }
+    }
+
+    // MARK: - SSH Daemon Hardening
+
+    /// When Remote Login is enabled, the policy in /etc/ssh/sshd_config decides who can get in
+    /// and how. Several common defaults (root login allowed, password authentication on,
+    /// PermitEmptyPasswords yes) turn a routine SSH service into a wide-open backdoor.
+    private func checkSSHDConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only audit if SSH is on — otherwise these settings don't matter.
+        let sshStatus = ShellRunner.run("/usr/sbin/systemsetup",
+                                        arguments: ["-getremotelogin"], timeout: 5)
+        guard sshStatus.success && sshStatus.stdout.lowercased().contains(": on") else { return }
+
+        let sshdCandidates = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+        var content: String?
+        for path in sshdCandidates {
+            if let c = try? String(contentsOfFile: path, encoding: .utf8) {
+                content = c
+                break
+            }
+        }
+        guard let cfg = content else { return }
+
+        // Effective values: explicitly-set lines win; otherwise sshd defaults apply.
+        // The defaults are: PermitRootLogin prohibit-password, PasswordAuthentication yes,
+        // PermitEmptyPasswords no, ChallengeResponseAuthentication yes.
+        let lines = cfg.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        func valueOf(_ key: String) -> String? {
+            for line in lines {
+                if line.hasPrefix("#") || line.isEmpty { continue }
+                let parts = line.split(separator: " ", maxSplits: 1).map { String($0) }
+                if parts.count == 2 && parts[0].lowercased() == key.lowercased() {
+                    return parts[1].trimmingCharacters(in: .whitespaces).lowercased()
+                }
+            }
+            return nil
+        }
+
+        // PermitRootLogin yes is the canonical SSH backdoor.
+        if let v = valueOf("PermitRootLogin"), v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd_config allows direct root login",
+                detail: "PermitRootLogin yes — anyone with root's password (or key) can SSH in as root",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set: PermitRootLogin no — then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        if let v = valueOf("PermitEmptyPasswords"), v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd_config permits empty passwords",
+                detail: "PermitEmptyPasswords yes — accounts without passwords can log in",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set: PermitEmptyPasswords no in /etc/ssh/sshd_config"
+            ))
+        }
+
+        // Password-only auth + internet-exposed SSH = brute-forceable.
+        if let v = valueOf("PasswordAuthentication"), v == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "PasswordAuthentication yes — SSH accepts passwords, enabling online brute-force",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Switch to keys only: PasswordAuthentication no (after adding your public key to ~/.ssh/authorized_keys)"
+            ))
+        }
+
+        // X11 forwarding adds a side channel for screen capture from compromised X11 clients.
+        if let v = valueOf("X11Forwarding"), v == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding enabled",
+                detail: "X11Forwarding yes — rarely needed on macOS; expands attack surface for compromised remote clients",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set: X11Forwarding no unless you specifically need it"
+            ))
+        }
+
+        // Allowing legacy protocol 1 or weak MACs/Ciphers — flag if explicitly downgraded.
+        if let v = valueOf("Protocol"), v.contains("1") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd configured to accept SSH protocol 1",
+                detail: "Protocol 1 is cryptographically broken and was removed from OpenSSH. Explicit re-enabling is suspicious.",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Remove the Protocol 1 line from /etc/ssh/sshd_config"
+            ))
+        }
+    }
+
+    // MARK: - Hidden File Extensions (anti-spoofing)
+
+    /// Files like `Resume.pdf.app` look like PDFs in Finder when extensions are hidden — a
+    /// classic social-engineering vector for macOS droppers (Bundlore, Shlayer, AMOS).
+    /// Forcing extensions visible neutralises the trick.
+    private func checkHiddenFileExtensions(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "NSGlobalDomain", "AppleShowAllExtensions"
+        ], timeout: 5)
+
+        // Default is 0 (hidden). Only show this if 0/missing.
+        let value = result.success
+            ? result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "0"
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "File extensions are hidden in Finder",
+                detail: "Hidden extensions let \"Resume.pdf.app\" look like a PDF — a common dropper trick",
+                path: nil,
+                remediation: "Enable: defaults write NSGlobalDomain AppleShowAllExtensions -bool true && killall Finder"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    /// Find My Mac enables remote-lock and remote-erase if the device is stolen. It also
+    /// enables Activation Lock on Apple-silicon Macs, which prevents reuse without the owner's
+    /// Apple ID. We surface it as informational because we can only positively confirm presence,
+    /// not the live cloud-side state.
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // The Find My Mac token lives under /Library/Preferences/com.apple.FindMyMac.plist
+        // and the iCloud account in ~/Library/Application Support/iCloud/Accounts.
+        let fm = FileManager.default
+        let fmmPlist = "/Library/Preferences/com.apple.FindMyMac.plist"
+        let hasFMM = fm.fileExists(atPath: fmmPlist)
+
+        let home = ShellRunner.realUserHome
+        let icloudDir = "\(home)/Library/Application Support/iCloud/Accounts"
+        let hasICloud = fm.fileExists(atPath: icloudDir)
+
+        if hasICloud && !hasFMM {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is not enabled",
+                detail: "iCloud is signed in but Find My Mac is off — remote lock/erase and Activation Lock are unavailable if stolen",
+                path: nil,
+                remediation: "Enable: System Settings > [Apple ID] > iCloud > Find My Mac"
+            ))
+        } else if !hasICloud {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "No iCloud account configured",
+                detail: "Without iCloud, Find My Mac, Activation Lock, and Lost Mode are not available",
+                path: nil,
+                remediation: "Sign in: System Settings > Apple Account"
+            ))
+        }
+    }
+
+    // MARK: - USB Accessory Restricted Mode
+
+    /// macOS 13+ added "Allow accessories to connect" to Apple-silicon Macs. Setting it to
+    /// "Always" effectively disables USB Restricted Mode — letting any USB device (including
+    /// rogue HID emulators / data exfil sticks) attach without the user explicitly approving.
+    private func checkAccessoryConnections(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.libraryvalidation",
+            "AllowedAccessories"
+        ], timeout: 5)
+        if result.success {
+            let v = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            // "always" or "alwaysallowed" disables the protection.
+            if v.contains("always") {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "USB accessory protection set to Always Allow",
+                    detail: "Any USB-C device can connect without approval — USB Restricted Mode is effectively off",
+                    path: nil,
+                    remediation: "Tighten: System Settings > Privacy & Security > Allow accessories to connect — choose \"Ask for new accessories\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Camera / Microphone Indicator State
+
+    /// macOS Sonoma+ has a hardware-style green dot when the camera is in use. Some MDM /
+    /// stalkerware tools attempt to suppress it via the SystemUIServer agent. The indicator
+    /// itself is enforced by the secure enclave on Apple-silicon, but legacy x86 Macs and
+    /// some configurations still allow disabling it via a defaults key.
+    private func checkCameraMicState(findings: inout [Finding], errors: inout [String]) {
+        // 1. Check that the universal camera/mic privacy indicators are not suppressed.
+        let suppress = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "DisableCameraIndicator"
+        ], timeout: 5)
+        if suppress.success && suppress.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Camera-in-use indicator is suppressed",
+                detail: "Control Center is configured to hide the orange/green camera dot — strong indicator of stalkerware tampering",
+                path: nil,
+                remediation: "Remove the override: defaults delete com.apple.controlcenter DisableCameraIndicator"
+            ))
         }
     }
 

@@ -17,6 +17,30 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Chromium extension IDs publicly documented as compromised during the December 2024
+    /// supply-chain campaign that started with Cyberhaven and spread through phishing of
+    /// publisher accounts on the Chrome Web Store. Sources: Secure Annex, BleepingComputer,
+    /// Cyberhaven incident write-up. The current Web Store versions of these extensions have
+    /// been re-signed by their authors, but locally cached older versions can still contain
+    /// the malicious payloads, so we still flag the IDs themselves.
+    private let knownCompromisedExtensionIds: [String: String] = [
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven",
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Internxt VPN",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "VPNCity",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Vidnoz Flex",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Bookmark Favicon Changer",
+        "fnigojmlhomofniacklehkcminblbeeo": "Castorus",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "Uvoice",
+        "jnldfbidonfeldmalbflbmlebbipcnle": "Wayin AI",
+        "fbjfihoienmhbjflbobnmimfijpngkpa": "Search Copilot AI Assistant",
+        "lkbebcjgcmobigpeffafkodonchffocl": "Bard AI Chat",
+        "njdfdhgcmkocbgbhcioffdbicglldapd": "Tackker",
+        "miglaibdlgminlepgeifekifakochlka": "AI Assistant - ChatGPT and Gemini for Chrome",
+        "iciheidpngpdnoogcdamiklbpdkogmgo": "Reader Mode",
+        "miifejebbaedlcffhmnonadfoojppmpe": "ChatGPT App",
+        "lknlkdkndilibcmlnnaapegmjjbjbjeb": "Sort by Oldest",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -82,6 +106,8 @@ public final class BrowserScanner: Scanner {
         let hasAllUrls: Bool
         let hasKeyboardInput: Bool
         let isSpyLike: Bool
+        let hasCookieAndAllUrls: Bool
+        let isManifestV2: Bool
         var profiles: [String]
         let browserName: String
         let extDir: String
@@ -142,6 +168,20 @@ public final class BrowserScanner: Scanner {
                       let extensions = try? fm.contentsOfDirectory(atPath: extPath) else { continue }
 
                 for extId in extensions {
+                    // Known compromised IDs are flagged regardless of trust list — author keys
+                    // were stolen, so a "trusted" listing on the Web Store doesn't help here.
+                    if let compromisedName = knownCompromisedExtensionIds[extId] {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension from Dec 2024 supply-chain attack",
+                            detail: "Extension ID \(extId) (\(compromisedName)) was hijacked via stolen publisher credentials and pushed cookie/credential exfiltration code",
+                            path: extDir,
+                            remediation: "Remove the extension and rotate any passwords/sessions used while it was active. Web Store: chrome://extensions"
+                        ))
+                        continue
+                    }
+
                     if trustedExtensionIds.contains(extId) { continue }
 
                     let dedupeKey = "\(browserName):\(extId)"
@@ -178,6 +218,19 @@ public final class BrowserScanner: Scanner {
                         hostPermissions.contains("*://*/*")
                     let hasKeyboardInput = permStrings.contains("input")
 
+                    // cookies + <all_urls> = the extension can read any session cookie on any
+                    // site. This is the fingerprint of session-stealing extensions used by
+                    // the Dec 2024 supply-chain campaign and many older credential thieves.
+                    let hasCookies = permStrings.contains("cookies")
+                    let hasCookieAndAllUrls = hasCookies && hasAllUrls
+
+                    // Manifest V2 is being phased out by Chrome. New malicious extensions still
+                    // ship as V2 because V2 allows blocking webRequest (the easiest way to
+                    // intercept and modify any HTTP request). Treat V2 + dangerous perms as a
+                    // separate risk category.
+                    let manifestVersion = (manifest["manifest_version"] as? Int) ?? 0
+                    let isManifestV2 = manifestVersion <= 2
+
                     let nameLC = name.lowercased()
                     let isSpyLike = ["spy", "keylog", "monitor", "track", "surveillance", "stealth"]
                         .contains(where: { nameLC.contains($0) })
@@ -186,6 +239,8 @@ public final class BrowserScanner: Scanner {
                         extId: extId, name: name, permStrings: permStrings,
                         hasDangerousPerms: hasDangerousPerms, hasAllUrls: hasAllUrls,
                         hasKeyboardInput: hasKeyboardInput, isSpyLike: isSpyLike,
+                        hasCookieAndAllUrls: hasCookieAndAllUrls,
+                        isManifestV2: isManifestV2,
                         profiles: [profile], browserName: browserName, extDir: extDir
                     )
                 }
@@ -205,6 +260,24 @@ public final class BrowserScanner: Scanner {
                     detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote), Permissions: \(ext.permStrings.joined(separator: ", "))",
                     path: ext.extDir,
                     remediation: "Remove in \(ext.browserName) > Extensions (chrome://extensions)"
+                ))
+            } else if ext.hasCookieAndAllUrls {
+                // Cookies + <all_urls> is enough to lift any logged-in session — flag it
+                // even if the extension otherwise looks normal.
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "\(ext.browserName) extension can read all cookies on every site",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — \"cookies\" + \"<all_urls>\" lets it lift any logged-in session",
+                    path: ext.extDir,
+                    remediation: "Remove if not strictly needed. Re-installs with the same ID will repeat the warning."
+                ))
+            } else if ext.isManifestV2 && ext.hasDangerousPerms {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "\(ext.browserName) Manifest V2 extension with intercepting permissions",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — uses deprecated Manifest V2 with webRequest/blocking, often used to modify or capture in-flight HTTP traffic",
+                    path: ext.extDir,
+                    remediation: "Audit and consider replacing with a Manifest V3 alternative"
                 ))
             } else if ext.hasDangerousPerms && ext.hasAllUrls {
                 findings.append(Finding(

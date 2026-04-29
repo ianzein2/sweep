@@ -70,19 +70,19 @@ sudo sweep --json
 
 | Scanner | What it does |
 |---------|-------------|
-| **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
+| **Process** | Matches running processes against known spyware signatures (incl. 2024-2025 DPRK/Lazarus families: BeaverTail, InvisibleFerret, NimDoor, Geacon, RustDoor, LightSpy, JaskaGO, HZ RAT, FrigidStealer, FERRET, TodoSwift, Macma, AMOS-Lite/Pro, XMRig miners), flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, authorization plugins, Spotlight/QuickLook/ColorPicker/screen-saver/input-method bundles, sandboxed-container LaunchAgent drops, at-jobs, Background Items (`SMAppService` BTM), legacy `launchd.conf` / dyld config files |
+| **Evidence** | Looks for stored screenshots, keystroke logs, recording artifacts, browser-credential-store copies in non-browser paths, and crypto-wallet exfiltration staging |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy / PAC URL hijacking |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions, detects December 2024 supply-chain compromised extension IDs (Cyberhaven and 14 others), session-stealing `cookies` + `<all_urls>` combinations, deprecated Manifest V2 webRequest interception, and weaponised VSCode / Cursor / Windsurf marketplace extensions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, sharing services, software updates, Lockdown Mode, Rapid Security Response, Remote Apple Events, sshd config (PermitRootLogin / PasswordAuthentication / PermitEmptyPasswords / X11Forwarding / Protocol 1), Finder hidden file extensions, Find My Mac, USB accessory restrictions, camera/mic indicator suppression |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

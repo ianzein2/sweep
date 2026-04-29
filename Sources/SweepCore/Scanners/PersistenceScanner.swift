@@ -78,6 +78,67 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking authorization plugins")
+        scanAuthorizationPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanBundlePlugins(
+            dirs: ["~/Library/Spotlight", "/Library/Spotlight"],
+            extensionFilter: "mdimporter",
+            label: "Spotlight importer",
+            severity: .medium,
+            findings: &findings
+        )
+
+        progress?.update("checking QuickLook plugins")
+        scanBundlePlugins(
+            dirs: ["~/Library/QuickLook", "/Library/QuickLook"],
+            extensionFilter: "qlgenerator",
+            label: "QuickLook generator",
+            severity: .medium,
+            findings: &findings
+        )
+
+        progress?.update("checking screen saver bundles")
+        scanBundlePlugins(
+            dirs: ["~/Library/Screen Savers", "/Library/Screen Savers"],
+            extensionFilter: "saver",
+            label: "Screen Saver",
+            severity: .medium,
+            findings: &findings
+        )
+
+        progress?.update("checking ColorPickers")
+        scanBundlePlugins(
+            dirs: ["~/Library/ColorPickers", "/Library/ColorPickers"],
+            extensionFilter: "colorPicker",
+            label: "ColorPicker",
+            severity: .medium,
+            findings: &findings
+        )
+
+        progress?.update("checking input methods / keyboard layouts")
+        scanBundlePlugins(
+            dirs: ["~/Library/Input Methods", "/Library/Input Methods",
+                   "~/Library/Keyboard Layouts", "/Library/Keyboard Layouts"],
+            extensionFilter: nil,
+            label: "Input Method / Keyboard Layout",
+            severity: .high,
+            findings: &findings
+        )
+
+        progress?.update("checking sandboxed app LaunchAgents")
+        scanSandboxedLaunchAgents(findings: &findings, errors: &errors)
+
+        progress?.update("checking at-job queue")
+        scanAtJobs(findings: &findings, errors: &errors)
+
+        progress?.update("checking modern Background Items (SMAppService)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking dynamic linker config (dyld)")
+        scanDyldConfig(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +735,263 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Authorization Plugins
+
+    /// Authorization plugins under /Library/Security/SecurityAgentPlugins are loaded by
+    /// authd / SecurityAgent at login, sudo, screensaver unlock, etc. A rogue plugin can
+    /// silently capture credentials. macOS ships with no third-party plugins by default.
+    private func scanAuthorizationPlugins(findings: inout [Finding], errors: inout [String]) {
+        let pluginDir = "/Library/Security/SecurityAgentPlugins"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: pluginDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let pluginPath = "\(pluginDir)/\(entry)"
+            // Apple plugins live under /System/Library, not /Library — anything here is third-party.
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Third-party authorization plugin: \(entry)",
+                detail: "Authorization plugins gate every login/sudo/unlock prompt and can capture credentials",
+                path: pluginPath,
+                remediation: "Remove if not deliberately installed: sudo rm -rf \"\(pluginPath)\""
+            ))
+        }
+
+        // /etc/authorization.plist (legacy) should not exist on modern macOS.
+        if fm.fileExists(atPath: "/etc/authorization") {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Legacy /etc/authorization file present",
+                detail: "Modern macOS uses authd; a stand-alone /etc/authorization is unusual and may indicate tampering",
+                path: "/etc/authorization",
+                remediation: "Inspect contents and remove if not expected"
+            ))
+        }
+    }
+
+    // MARK: - Generic Bundle-Plugin Scanner
+
+    /// macOS loads code from many user-installable plugin directories: Spotlight importers
+    /// (.mdimporter), QuickLook generators (.qlgenerator), Screen Savers (.saver), ColorPickers
+    /// (.colorPicker), and Input Methods. Each of these runs in-process inside system services
+    /// and is a known persistence channel for stalkerware.
+    private func scanBundlePlugins(
+        dirs: [String],
+        extensionFilter: String?,
+        label: String,
+        severity: Severity,
+        findings: inout [Finding]
+    ) {
+        let fm = FileManager.default
+        for dir in dirs {
+            let expanded = dir.hasPrefix("~/")
+                ? ShellRunner.realUserHome + dir.dropFirst(1)
+                : dir
+            guard let entries = try? fm.contentsOfDirectory(atPath: expanded) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                if let ext = extensionFilter, !entry.hasSuffix(".\(ext)") { continue }
+                let pluginPath = "\(expanded)/\(entry)"
+
+                // Resolve the plugin's executable to check signature
+                let infoPath = "\(pluginPath)/Contents/Info.plist"
+                var execPath: String?
+                if let data = fm.contents(atPath: infoPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let execName = plist["CFBundleExecutable"] as? String {
+                    execPath = "\(pluginPath)/Contents/MacOS/\(execName)"
+                }
+
+                let isSigned = execPath.map { checkIsSigned(path: $0) } ?? false
+                let nameLC = entry.lowercased()
+                let nameSuspicious = ["spy", "keylog", "monitor", "stealth", "track"]
+                    .contains(where: { nameLC.contains($0) })
+
+                if nameSuspicious {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(label) with spy-like name: \(entry)",
+                        detail: "Plugin runs in a system service — name suggests surveillance",
+                        path: pluginPath,
+                        remediation: "Remove if unexpected: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                } else if !isSigned {
+                    findings.append(Finding(
+                        severity: severity, category: .persistence,
+                        title: "Unsigned \(label.lowercased()): \(entry)",
+                        detail: "User-installable plugin in \(expanded) is not code-signed — runs inside a system process at login",
+                        path: pluginPath,
+                        remediation: "Verify this plugin is legitimate, otherwise remove: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Sandboxed App LaunchAgents
+
+    /// Apps installed via the App Store (sandboxed) cannot write to ~/Library/LaunchAgents,
+    /// but malware sometimes drops a plist into ~/Library/Containers/<bundle>/Data/Library/LaunchAgents
+    /// hoping it survives migrations and is overlooked by users. macOS doesn't actually load these,
+    /// but their presence is a strong tampering signal — a non-sandboxed process placed them there.
+    private func scanSandboxedLaunchAgents(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let containers = "\(home)/Library/Containers"
+        let fm = FileManager.default
+        guard let bundles = try? fm.contentsOfDirectory(atPath: containers) else { return }
+
+        for bundle in bundles where !bundle.hasPrefix(".") {
+            let agentDir = "\(containers)/\(bundle)/Data/Library/LaunchAgents"
+            guard fm.fileExists(atPath: agentDir),
+                  let plists = try? fm.contentsOfDirectory(atPath: agentDir) else { continue }
+
+            for plist in plists where plist.hasSuffix(".plist") {
+                let plistPath = "\(agentDir)/\(plist)"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent plist inside sandboxed container: \(bundle)",
+                    detail: "Container apps cannot legitimately write LaunchAgents — \(plist) suggests a non-sandboxed process tampered with this app's container",
+                    path: plistPath,
+                    remediation: "Inspect the plist and the parent app, then remove: rm \"\(plistPath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - at(1) jobs
+
+    /// `at` is a deprecated POSIX scheduler. atrun is disabled by default on macOS, but malware
+    /// occasionally re-enables it as a low-noise persistence channel. Any pending at-job is unusual.
+    private func scanAtJobs(findings: inout [Finding], errors: inout [String]) {
+        // /var/at/jobs holds pending at jobs. /var/at/spool holds running ones.
+        let atDirs = ["/var/at/jobs", "/var/at/spool"]
+        let fm = FileManager.default
+        for dir in atDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            // Apple's defaults leave a `.SEQ` and a `.lockfile` — anything else is a real job.
+            let realJobs = entries.filter { !$0.hasPrefix(".") }
+            for job in realJobs {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "at-job present (deprecated, disabled by default)",
+                    detail: "File: \(dir)/\(job) — atrun is off on stock macOS, so a queued at-job is unexpected",
+                    path: "\(dir)/\(job)",
+                    remediation: "Inspect and remove: sudo cat \"\(dir)/\(job)\" then sudo rm \"\(dir)/\(job)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Items (modern SMAppService persistence)
+
+    /// macOS 13+ replaced the LaunchAgent prompt with a unified "Login Items & Extensions" pane
+    /// backed by `backgrounditems.btm` (a Codable plist managed by backgroundtaskmanagementagent).
+    /// The file is binary and not user-readable, but its existence + size and ItemRecords paths
+    /// give us a fingerprint. Many stalkerware families now register here instead of writing
+    /// LaunchAgents directly.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let candidates = [
+            "/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v8.btm",
+            "/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v4.btm",
+        ]
+        let fm = FileManager.default
+
+        // Use sfltool if available — it dumps registered items in plain text.
+        let result = ShellRunner.run("/usr/bin/sfltool",
+                                     arguments: ["dumpbtm"], timeout: 10)
+        if result.success && !result.stdout.isEmpty {
+            // Each item record has a "URL" line — flag any non-Apple, non-/Applications entry.
+            let lines = result.stdout.split(separator: "\n").map(String.init)
+            var currentURL: String?
+            var currentName: String?
+            for line in lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("Name:") {
+                    currentName = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                }
+                if trimmed.hasPrefix("URL:") {
+                    currentURL = String(trimmed.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+                    if let url = currentURL {
+                        let lower = url.lowercased()
+                        let trustedRoot = lower.contains("/applications/") ||
+                                          lower.contains("/system/") ||
+                                          lower.contains("file:///library/apple/") ||
+                                          lower.contains("/library/printers/")
+                        let suspiciousLocation = lower.contains("/tmp/") ||
+                                                 lower.contains("/private/tmp/") ||
+                                                 lower.contains("/.") ||
+                                                 lower.contains("/users/shared/")
+                        if suspiciousLocation || (!trustedRoot && lower.hasPrefix("file:///users/")) {
+                            let display = currentName ?? url
+                            findings.append(Finding(
+                                severity: suspiciousLocation ? .high : .medium,
+                                category: .persistence,
+                                title: "Background Login Item from unusual location",
+                                detail: "Item: \(display) → \(url) — registered via SMAppService/backgroundtaskmanagementagent",
+                                path: nil,
+                                remediation: "Review in System Settings > General > Login Items & Extensions, or: sfltool dumpbtm | less"
+                            ))
+                        }
+                    }
+                    currentName = nil
+                }
+            }
+            return
+        }
+
+        // Fallback — sfltool not available or restricted. Just note the BTM database is large.
+        for candidate in candidates {
+            guard let attrs = try? fm.attributesOfItem(atPath: candidate),
+                  let size = attrs[.size] as? Int else { continue }
+            if size > 50_000 {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Background Login Items database is large",
+                    detail: "BTM file size: \(size) bytes — many registered login items, review in System Settings",
+                    path: candidate,
+                    remediation: "Open System Settings > General > Login Items & Extensions and remove unfamiliar entries"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Dynamic Linker Configuration
+
+    /// The dyld(1) loader honors several configuration files when SIP doesn't block them.
+    /// Their presence on a normal Mac is unusual and indicates either developer activity or
+    /// targeted dyld-injection persistence.
+    private func scanDyldConfig(findings: inout [Finding], errors: inout [String]) {
+        // /etc/launchd.conf: deprecated on macOS 10.10+, still loaded by some forks.
+        // /etc/man.conf and /etc/paths.d entries are safe; skip those.
+        let dyldPaths = [
+            "/etc/launchd.conf",
+            "/etc/launchd-user.conf",
+        ]
+        let fm = FileManager.default
+        for path in dyldPaths where fm.fileExists(atPath: path) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Legacy launchd config present: \(URL(fileURLWithPath: path).lastPathComponent)",
+                detail: "launchd.conf was deprecated in OS X 10.10 and is no longer read by Apple's launchd. Its presence may indicate tampering.",
+                path: path,
+                remediation: "Inspect contents, then: sudo rm \"\(path)\""
+            ))
+        }
+
+        // ~/.dyld and /etc/dyld_*.conf are non-standard dyld config drops used by some loaders.
+        let home = ShellRunner.realUserHome
+        let extras = ["\(home)/.dyld", "/etc/dyld.conf", "/etc/dyld_inject.conf"]
+        for path in extras where fm.fileExists(atPath: path) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Unusual dyld configuration file: \(path)",
+                detail: "dyld config files outside SIP-protected paths can force every launched binary to load attacker-supplied dylibs",
+                path: path,
+                remediation: "Inspect and remove: sudo rm \"\(path)\""
             ))
         }
     }

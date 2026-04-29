@@ -434,6 +434,248 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threats — APT, RAT, and stealer families documented by
+        // Apple, Kaspersky, JAMF, SentinelOne, Bitdefender, Proofpoint, ESET.
+        SpywareSignature(
+            name: "RustDoor (BlackBasta-linked backdoor)",
+            processNames: ["rustdoor", "RustDoor", "Visual Studio Updater", "vsupdate"],
+            bundleIdentifiers: ["com.microsoft.vsupdate"],
+            filePaths: [
+                "/private/var/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "/private/tmp/zsh.hidden",
+            ],
+            launchAgentLabels: ["com.apple.systemkeychain", "com.microsoft.vsupdate"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK Lazarus / Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "p.zip", "p2.zip", "node_modules_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/test.json",
+                "/tmp/.npl",
+                "~/Library/Application Support/.npl",
+                "~/Library/Application Support/Programs/InvisibleFerret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK follow-on backdoor)",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyp", "python_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/Library/Application Support/.n2",
+                "/tmp/.n2",
+            ],
+            launchAgentLabels: ["com.python.helper"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS variant)",
+            processNames: ["LightSpy", "lightspy", "macircloader", "FrameworkLoader", "system_extension_helper"],
+            bundleIdentifiers: ["com.apple.lightspy"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Caches/com.apple.cache.helper",
+            ],
+            launchAgentLabels: ["com.apple.cache.helper"]
+        ),
+        SpywareSignature(
+            name: "Geacon (Go Cobalt Strike beacon)",
+            processNames: ["geacon", "Geacon", "geacon_plus", "geacon_pro", "SecureLink", "SourceTreeUpdater"],
+            bundleIdentifiers: ["com.atlassian.sourcetree.update"],
+            filePaths: [
+                "/private/tmp/.geacon",
+                "~/Library/Application Support/.SecureLink",
+            ],
+            launchAgentLabels: ["com.atlassian.sourcetree.update"]
+        ),
+        SpywareSignature(
+            name: "JaskaGO (Go infostealer)",
+            processNames: ["JaskaGO", "jaskago", "CapCut_Installer"],
+            bundleIdentifiers: ["com.jaskago.installer"],
+            filePaths: [
+                "/private/tmp/.jaska",
+                "~/Library/Application Support/.JaskaGO",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS variant)",
+            // Avoid OpenVPNConnect / WeChatHelper here — those collide with the real apps.
+            // The real HZ RAT samples drop process names "hzrat" and a fake Tencent helper.
+            processNames: ["hzrat", "HZRAT", "QQHelperHZ", "tencent_helper_hz"],
+            bundleIdentifiers: ["com.tencent.qq.helperhz"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.tencent.qq.helperhz"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK BlueNoroff dropper)",
+            processNames: ["TodoSwift", "todoswift", "Todo:1.app", "TodoTasks"],
+            bundleIdentifiers: ["com.todoswift.app", "com.bluenoroff.todoswift"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: ["com.todoswift.helper"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer (mac-targeted stealer)",
+            processNames: ["FrigidStealer", "frigidstealer", "DesktopUtility", "MacUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.stealer"]
+        ),
+        SpywareSignature(
+            name: "FERRET / FrostyFerret (DPRK)",
+            processNames: ["FrostyFerret", "ferret", "ChromeUpdate", "ChromeUpdater_helper"],
+            bundleIdentifiers: ["com.google.chrome.helper.updater"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.ChromeUpdate",
+            ],
+            launchAgentLabels: ["com.google.chrome.helper.updater"]
+        ),
+        SpywareSignature(
+            name: "Lazarus FullHouse.Doored / VanaModular",
+            processNames: ["fullhouse", "FullHouse", "vanamodular", "VanaModular", "TableLoader", "TableSettings"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.tableSettings",
+                "/private/tmp/.fullhouse",
+            ],
+            launchAgentLabels: ["com.apple.tablesettings"]
+        ),
+        SpywareSignature(
+            name: "ToddyCat / Macma (Hacking Team-style RAT)",
+            processNames: ["macma", "Macma", "toddycat", "WindowServerHelper", "client.app"],
+            bundleIdentifiers: ["com.apple.windowserverhelper"],
+            filePaths: [
+                "/private/tmp/.macma",
+                "~/Library/Application Support/.macma",
+            ],
+            launchAgentLabels: ["com.apple.windowserverhelper", "com.UserAgent.va.plist"]
+        ),
+        SpywareSignature(
+            name: "ThiefQuest / EvilQuest (legacy ransomware/infostealer)",
+            processNames: ["thiefquest", "ThiefQuest", "evilquest", "questd", "CrashReporter_helper"],
+            bundleIdentifiers: ["com.apple.questd"],
+            filePaths: [
+                "~/Library/AppQuest",
+                "/Library/AppQuest",
+                "/private/var/root/Library/AppQuest",
+            ],
+            launchAgentLabels: ["com.apple.questd", "com.apple.questd.plist"]
+        ),
+        SpywareSignature(
+            name: "OSX.Shlayer / Bundlore (adware-malware loader)",
+            processNames: ["Shlayer", "shlayer", "bundlore", "Bundlore", "PlayerInstaller", "AdobeFlashPlayer.app"],
+            bundleIdentifiers: ["com.adobe.flashplayer.installer"],
+            filePaths: [
+                "/private/tmp/Installer.app",
+                "/private/tmp/.shlayer",
+                "~/Library/LaunchAgents/com.adobe.flashplayer.plist",
+            ],
+            launchAgentLabels: ["com.adobe.flashplayer", "com.macsearch.helper"]
+        ),
+        SpywareSignature(
+            name: "OSX.Pirrit (adware injector)",
+            processNames: ["Pirrit", "pirrit", "wssync", "Mughthesec", "spigot_search"],
+            bundleIdentifiers: ["com.pirrit.adware"],
+            filePaths: [
+                "~/Library/Application Support/.pirrit",
+                "/Library/Application Support/Pirrit",
+            ],
+            launchAgentLabels: ["com.pirrit.helper"]
+        ),
+        SpywareSignature(
+            name: "OSX.Adload (signed adware)",
+            processNames: ["Adload", "adload", "ResultsExtension", "MainSearch", "AdEngine"],
+            bundleIdentifiers: ["com.adload.installer"],
+            filePaths: [
+                "~/Library/Application Support/.Adload",
+                "/Library/Application Support/Adload",
+            ],
+            launchAgentLabels: ["com.adload.update"]
+        ),
+        SpywareSignature(
+            name: "OSX.KeRanger (ransomware)",
+            processNames: ["keranger", "KeRanger", "kernel_service", "General.rtf"],
+            bundleIdentifiers: ["com.apple.keranger"],
+            filePaths: [
+                "~/Library/kernel_service",
+                "/Library/kernel_service",
+                "/Applications/Transmission.app/Contents/Resources/General.rtf",
+            ],
+            launchAgentLabels: ["com.apple.keranger"]
+        ),
+        SpywareSignature(
+            name: "OSX.Coldroot (legacy RAT)",
+            processNames: ["coldroot", "Coldroot", "com.apple.audio.driver"],
+            bundleIdentifiers: ["com.apple.audio.driver2"],
+            filePaths: [
+                "/private/etc/com.apple.audio.driver2.app",
+                "/Library/LaunchDaemons/com.apple.audio.driver.plist",
+            ],
+            launchAgentLabels: ["com.apple.audio.driver2"]
+        ),
+        SpywareSignature(
+            name: "OSX.Hydromac",
+            processNames: ["hydromac", "Hydromac", "MacOSUpdater"],
+            bundleIdentifiers: ["com.hydromac.updater"],
+            filePaths: [
+                "/private/tmp/.hydromac",
+                "~/Library/Application Support/.Hydromac",
+            ],
+            launchAgentLabels: ["com.hydromac.service"]
+        ),
+        SpywareSignature(
+            name: "Atomic Stealer 2025 variants (AMOS-Lite / Amos.Pro)",
+            processNames: ["amos_lite", "Amos.Pro", "amospro", "AMOSLite", "atomicpro", "ledger_live_updater"],
+            bundleIdentifiers: ["com.atomic.lite", "com.atomic.pro"],
+            filePaths: [
+                "/private/tmp/.amospro",
+                "~/Library/Application Support/.AMOSLite",
+            ],
+            launchAgentLabels: ["com.atomic.lite", "com.atomic.pro"]
+        ),
+        SpywareSignature(
+            name: "macOS.NimDoor (DPRK Nim-based backdoor)",
+            processNames: ["nimdoor", "NimDoor", "GoogleChromeFramework_Helper", "ZoomBackgroundHelper"],
+            bundleIdentifiers: ["com.zoom.background.helper"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.zoombackground",
+            ],
+            launchAgentLabels: ["com.zoom.background.helper"]
+        ),
+        SpywareSignature(
+            name: "macOS.HiddenLotus (CryptoMiner-malware hybrid)",
+            processNames: ["HiddenLotus", "hiddenlotus", "macupdater", "AppleSyncNotifier"],
+            bundleIdentifiers: ["com.apple.syncnotifier"],
+            filePaths: [
+                "/Library/Application Support/.hiddenlotus",
+                "~/Library/Application Support/.hiddenlotus",
+            ],
+            launchAgentLabels: ["com.apple.syncnotifier"]
+        ),
+        SpywareSignature(
+            name: "OSX.XMRig CryptoJacker",
+            processNames: ["xmrig", "XMRig", "minerd", "kdevtmpfsi", "kinsing", "minegate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.xmrig",
+                "/private/tmp/.xmrig",
+                "~/Library/Application Support/.xmrig",
+            ],
+            launchAgentLabels: ["com.apple.miner", "com.miner.xmrig"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
