@@ -17,6 +17,32 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Known malicious or compromised Chrome/Edge/Brave extension IDs reported in 2024-2025
+    // (Cyberhaven supply-chain compromise + sundry stealer/ad-injector extensions).
+    // Matches are flagged HIGH regardless of permissions.
+    private let knownMaliciousExtensionIds: [(id: String, name: String, reason: String)] = [
+        // Cyberhaven supply-chain compromise (Dec 2024) — multiple legitimate extensions
+        // were trojanized via a phishing attack on developers. Affected versions exfiltrated
+        // session tokens. Even after takedown, locally cached copies remain dangerous.
+        ("nnpnnpemnckcfdebeekibpiijlicmpom", "Cyberhaven (compromised)",
+         "trojanized v24.10.4 — Dec 2024 supply-chain attack, exfiltrated session cookies"),
+        ("dkbghhdamfilhgojfojkbfogjieaakbo", "Internxt VPN (compromised)",
+         "compromised in same Dec 2024 wave"),
+        ("oaikpkmjciadfpddlpjjdapglcihgdle", "VPNCity (compromised)",
+         "compromised in same Dec 2024 wave"),
+        ("pajkjnmeojmbapicmbpliphjmcekeaac", "Uvoice (compromised)",
+         "compromised in same Dec 2024 wave"),
+        ("ekpkdmohpdnebfedjjfklhpefgpgaaji", "ParrotTalks (compromised)",
+         "compromised in same Dec 2024 wave"),
+        ("jiofmdifioeejeilfkpegipdjiopiekl", "HiAI Hi (compromised)",
+         "compromised in same Dec 2024 wave"),
+        ("acmfnomgphggonodopogfbmkneepfgnh", "Vidnoz Flex (compromised)",
+         "compromised in same Dec 2024 wave"),
+        // 2024 cookie-stealer extensions removed from Chrome Web Store
+        ("kkodiihpgodmdankclfibbiphjkfdenh", "Reader Mode (cookie stealer)",
+         "removed by Google for credential theft"),
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -82,6 +108,7 @@ public final class BrowserScanner: Scanner {
         let hasAllUrls: Bool
         let hasKeyboardInput: Bool
         let isSpyLike: Bool
+        let manifestVersion: Int
         var profiles: [String]
         let browserName: String
         let extDir: String
@@ -166,6 +193,7 @@ public final class BrowserScanner: Scanner {
 
                     let permissions = (manifest["permissions"] as? [Any]) ?? []
                     let hostPermissions = (manifest["host_permissions"] as? [String]) ?? []
+                    let manifestVersion = (manifest["manifest_version"] as? Int) ?? 2
 
                     let permStrings = permissions.compactMap { $0 as? String }
 
@@ -186,6 +214,7 @@ public final class BrowserScanner: Scanner {
                         extId: extId, name: name, permStrings: permStrings,
                         hasDangerousPerms: hasDangerousPerms, hasAllUrls: hasAllUrls,
                         hasKeyboardInput: hasKeyboardInput, isSpyLike: isSpyLike,
+                        manifestVersion: manifestVersion,
                         profiles: [profile], browserName: browserName, extDir: extDir
                     )
                 }
@@ -197,6 +226,18 @@ public final class BrowserScanner: Scanner {
             let profileNote = ext.profiles.count > 1
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
+
+            // Known-malicious ID match always wins — these are publicly disclosed IOCs.
+            if let bad = knownMaliciousExtensionIds.first(where: { $0.id == ext.extId }) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension on public IOC list: \(bad.name)",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — \(bad.reason)",
+                    path: ext.extDir,
+                    remediation: "Remove immediately in \(ext.browserName) > Extensions, then rotate any session cookies / saved passwords this extension could read"
+                ))
+                continue
+            }
 
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(
@@ -213,6 +254,22 @@ public final class BrowserScanner: Scanner {
                     detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — can intercept all web traffic",
                     path: ext.extDir,
                     remediation: "Verify this extension is legitimate in \(ext.browserName) > Extensions"
+                ))
+            }
+
+            // Manifest V2 has been deprecated by Google through 2024-2025. Chrome is
+            // disabling MV2 extensions (forced off by ExtensionManifestV2Availability).
+            // A still-loaded MV2 extension on a current Chrome means either an
+            // enterprise override or an extension whose author has abandoned updates.
+            // Either way, MV2's blocking webRequest API can intercept requests in ways
+            // MV3 cannot, so it deserves a heads-up.
+            if ext.manifestVersion == 2 && ext.hasAllUrls {
+                findings.append(Finding(
+                    severity: .low, category: .permission,
+                    title: "\(ext.browserName) extension still using deprecated Manifest V2",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — MV2 with <all_urls> can intercept and modify requests via blocking webRequest. Chrome is phasing MV2 out.",
+                    path: ext.extDir,
+                    remediation: "Check if the developer has shipped an MV3 version, or remove the extension"
                 ))
             }
         }

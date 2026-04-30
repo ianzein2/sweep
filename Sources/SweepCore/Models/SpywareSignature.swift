@@ -434,6 +434,157 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / Lazarus campaigns (2024-2025): npm supply-chain ("Contagious Interview"),
+        // fake job lures, and xattr-hidden payloads. Process names mirror published IOCs.
+        SpywareSignature(
+            name: "BeaverTail (DPRK)",
+            processNames: ["beavertail", "BeaverTail", "node_modules_helper", "npm-cache-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.beaver",
+                "~/.npm/_cacache/.bv",
+            ],
+            launchAgentLabels: ["com.npm.helper", "com.node.cache"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["invisibleferret", "InvisibleFerret", "ssh_agent_helper", "anydeskmon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisible",
+                "~/.ssh/.cache",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: ["com.ssh.agent.helper"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "todos_helper", "PDFViewerHelper"],
+            bundleIdentifiers: ["com.todos.app", "com.bluenoroff.todos"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todos",
+            ],
+            launchAgentLabels: ["com.todos.helper"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (DPRK)",
+            processNames: ["rustyattr", "RustyAttr", "InstallerCheck", "PDFViewerHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rusty",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (DPRK)",
+            processNames: ["hiddenrisk", "HiddenRisk", "growth_factors", "RustySupplement"],
+            bundleIdentifiers: ["com.growth.factors"],
+            filePaths: [
+                "/private/tmp/.hiddenrisk",
+                "~/Library/Application Support/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.growth.factors.service"]
+        ),
+        SpywareSignature(
+            name: "FullHouse.Doored (DPRK)",
+            processNames: ["fullhouse", "FullHouse", "doored_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.fullhouse"],
+            launchAgentLabels: []
+        ),
+        // Chinese APT — HZ RAT macOS port (Kaspersky, Sept 2024) and LightSpy 2024 variant
+        SpywareSignature(
+            name: "HZ RAT (China APT)",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect_helper", "iTunesHelper2"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpnconnect.helper"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "BHCoreSync", "iconfilesync"],
+            bundleIdentifiers: ["com.lightspy.macos"],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+                "~/Library/Caches/.bhcore",
+            ],
+            launchAgentLabels: ["com.lightspy.service", "com.bhcore.sync"]
+        ),
+        // 2024-2025 infostealers / RATs not yet covered above
+        SpywareSignature(
+            name: "JaskaGo",
+            processNames: ["JaskaGo", "jaskago", "CapCut_helper", "AppCleaner_pro"],
+            bundleIdentifiers: ["com.jaskago.stealer"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.JaskaGo",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "FrigidUpdate", "WindowServerHelper"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "process_hub"],
+            bundleIdentifiers: ["com.apple.processhub"],  // fake Apple bundle ID
+            filePaths: [
+                "/private/tmp/.applehub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "macOS.Lumma",
+            processNames: ["Lumma", "lumma", "lummac2", "LummaC2"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.Lumma",
+            ],
+            launchAgentLabels: ["com.lumma.service"]
+        ),
+        SpywareSignature(
+            name: "SparkRAT (macOS)",
+            processNames: ["SparkRAT", "sparkrat", "spark_helper"],
+            bundleIdentifiers: ["com.sparkrat.client"],
+            filePaths: [
+                "/private/tmp/.spark",
+                "~/Library/Application Support/.SparkRAT",
+            ],
+            launchAgentLabels: ["com.sparkrat.service"]
+        ),
+        SpywareSignature(
+            name: "Geacon (Cobalt Strike)",
+            processNames: ["geacon", "Geacon", "geacon_pro", "csbeacon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.geacon",
+                "~/Library/Application Support/.geacon",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "macOS.NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macos"],
+            bundleIdentifiers: ["com.notlockbit.agent"],
+            filePaths: ["/private/tmp/.notlockbit"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +601,13 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Recent (2024-2025) campaigns observed using these
+        "com.apple.processhub",
+        "com.apple.WebKit.support",
+        "com.apple.coreservicesd.helper",
+        "com.apple.iCloudSyncHelper",
+        "com.apple.spotlightd.agent",
+        "com.apple.notificationd.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

@@ -37,6 +37,12 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for code hidden inside extended attributes (RustyAttr, DPRK, Nov 2024).
+        //    Attackers embed the real payload in an xattr while the on-disk binary looks
+        //    benign — defenders inspecting only the file content miss it entirely.
+        progress?.update("checking for xattr-hidden payloads")
+        scanXattrPayloads(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -278,6 +284,118 @@ public final class DeepScanner: Scanner {
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
         }
+    }
+
+    // MARK: - Extended Attribute Payload Scan (RustyAttr / DPRK)
+    //
+    // Background: macOS extended attributes are intended for small file metadata
+    // (Finder tags, quarantine flags, ~256 bytes typical). RustyAttr (DPRK, Nov 2024)
+    // stashed an entire shell-script stage-2 inside a custom xattr on a benign-looking
+    // app, defeating defenders who only inspect the on-disk binary.
+    //
+    // Heuristic: walk the same dirs as other scanners, flag any file with a non-Apple
+    // xattr whose value is unusually large (>1KB) or whose name matches known IOCs.
+
+    private func scanXattrPayloads(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        // Hot paths where stage-2 droppers tend to land.
+        let scanDirs = [
+            "\(home)/Downloads",
+            "\(home)/Library/Application Support",
+            "/private/tmp",
+            "/var/tmp",
+        ]
+
+        // Apple-defined xattr names that are expected to be present on user files.
+        // Anything else over a kilobyte deserves a look.
+        let benignAttrPrefixes = [
+            "com.apple.",
+            "user.",
+            "system.",
+        ]
+
+        // Names actually used by RustyAttr-family payloads in published reports.
+        let knownBadAttrNames: Set<String> = [
+            "test",                 // RustyAttr (Nov 2024, Group-IB)
+            "encrypted",
+            "_payload",
+            "config",
+            "data",
+        ]
+
+        for dir in scanDirs {
+            // -lr lists xattrs recursively with their values. Cap output to keep this fast.
+            let result = ShellRunner.run("/usr/bin/xattr",
+                                         arguments: ["-lr", dir], timeout: 15)
+            guard result.success, !result.stdout.isEmpty else { continue }
+
+            // xattr -lr emits stanzas like:
+            //   <path>: <attr-name>:
+            //   00000000  ... hex dump ...
+            // Walk lines looking for header lines, then size up the dump that follows.
+            let lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: false)
+            var i = 0
+            while i < lines.count {
+                let line = String(lines[i])
+                guard let lastColon = line.range(of: ":", options: .backwards) else { i += 1; continue }
+                let beforeColon = line[..<lastColon.lowerBound]
+                guard let pathColon = beforeColon.range(of: ": ") else { i += 1; continue }
+
+                let filePath = String(beforeColon[..<pathColon.lowerBound])
+                let attrName = String(line[pathColon.upperBound..<lastColon.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+
+                // Estimate attribute size by counting following hex-dump lines (until next header
+                // or blank line). Each hex line carries 16 bytes.
+                var dumpLines = 0
+                var j = i + 1
+                while j < lines.count {
+                    let nxt = String(lines[j])
+                    // Hex dump lines start with an 8-digit offset.
+                    if nxt.count >= 8, nxt.prefix(8).allSatisfy({ $0.isHexDigit }) {
+                        dumpLines += 1
+                        j += 1
+                    } else {
+                        break
+                    }
+                }
+                let estimatedBytes = dumpLines * 16
+                i = max(j, i + 1)
+
+                // Skip benign Apple/user attrs unless they're abnormally large.
+                let isBenignPrefix = benignAttrPrefixes.contains(where: { attrName.hasPrefix($0) })
+                let nameMatchesIOC = knownBadAttrNames.contains(attrName)
+
+                if nameMatchesIOC && estimatedBytes >= 256 {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Extended attribute matches known IOC: \"\(attrName)\"",
+                        detail: "File: \(filePath), xattr size: ~\(estimatedBytes) bytes — RustyAttr-family payloads stage shell code in xattrs with these exact names",
+                        path: filePath,
+                        remediation: "Inspect: xattr -px \(shellQuote(attrName)) \"\(filePath)\". If unexpected, remove with: xattr -d \(shellQuote(attrName)) \"\(filePath)\""
+                    ))
+                } else if !isBenignPrefix && estimatedBytes >= 1024 {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "Unusually large non-Apple extended attribute",
+                        detail: "File: \(filePath), xattr: \(attrName), size: ~\(estimatedBytes) bytes — xattrs aren't meant to hold kilobytes of data; this can indicate hidden code (RustyAttr-style)",
+                        path: filePath,
+                        remediation: "Inspect: xattr -px \(shellQuote(attrName)) \"\(filePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    private func shellQuote(_ s: String) -> String {
+        // Quote an attribute name for inclusion in a shell command in a remediation hint.
+        // We can't trust the name to be free of metacharacters.
+        if s.range(of: "[^A-Za-z0-9._-]", options: .regularExpression) == nil {
+            return s
+        }
+        let escaped = s.replacingOccurrences(of: "'", with: "'\\''")
+        return "'\(escaped)'"
     }
 
     // MARK: - Process Environment Inspection

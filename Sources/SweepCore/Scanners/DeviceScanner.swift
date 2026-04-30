@@ -29,12 +29,92 @@ public final class DeviceScanner: Scanner {
         progress?.update("checking microphone access")
         checkMicrophoneAccess(findings: &findings, errors: &errors)
 
+        // 3. Check for installed audio loopback / virtual driver plug-ins.
+        //    Stealthy alternative to microphone-tap surveillance: these drivers route
+        //    *system audio* (calls, meeting playback, music) into a virtual input that
+        //    any process can record without triggering the Microphone TCC prompt.
+        progress?.update("checking audio capture drivers")
+        checkAudioCaptureDrivers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
             errors: errors,
             duration: Date().timeIntervalSince(start)
         )
+    }
+
+    // MARK: - Audio Loopback / Virtual Drivers
+
+    /// Driver bundle name → (display name, severity).
+    /// Severity captures how often the driver is used by malware vs. legitimately.
+    /// `.medium` = legitimate but powerful; `.high` = strong indicator if user didn't install it.
+    private let knownAudioDrivers: [(bundle: String, display: String, severity: Severity, note: String)] = [
+        ("BlackHole2ch.driver",    "BlackHole (2ch)",    .medium,
+         "free virtual loopback used to record system audio into apps like OBS or Audio Hijack"),
+        ("BlackHole16ch.driver",   "BlackHole (16ch)",   .medium,
+         "free virtual loopback used to record system audio into apps like OBS or Audio Hijack"),
+        ("BlackHole64ch.driver",   "BlackHole (64ch)",   .medium,
+         "free virtual loopback used to record system audio into apps like OBS or Audio Hijack"),
+        ("Soundflower.driver",     "Soundflower",       .high,
+         "abandonware loopback driver — frequently bundled with macOS surveillance kits"),
+        ("Loopback.driver",        "Rogue Amoeba Loopback", .medium,
+         "commercial multi-channel audio router — legitimate but powerful audio capture"),
+        ("LoopbackAudio.driver",   "Rogue Amoeba Loopback", .medium,
+         "commercial multi-channel audio router — legitimate but powerful audio capture"),
+        ("ACE.driver",             "Rogue Amoeba ACE",   .medium,
+         "Audio Capture Engine — Audio Hijack / Loopback / Piezo backend"),
+        ("iShowU Audio Capture.driver", "iShowU Audio Capture", .medium,
+         "screen-recorder audio loopback — legitimate but routes system audio"),
+        ("WavTap.driver",          "WavTap",            .high,
+         "abandoned audio capture driver — not from a current vendor"),
+        ("EasyAudioOutput.driver", "EasyAudio",         .high,
+         "obscure audio loopback driver — uncommon outside of malware"),
+        ("VBCABLE_A.driver",       "VB-Audio Cable",    .medium,
+         "free virtual audio cable from VB-Audio — legitimate but routes system audio"),
+        ("VBCABLE_B.driver",       "VB-Audio Cable B",  .medium,
+         "free virtual audio cable from VB-Audio — legitimate but routes system audio"),
+        ("Hush.driver",            "Hush",              .high,
+         "obscure capture driver — not from a current vendor"),
+    ]
+
+    private func checkAudioCaptureDrivers(findings: inout [Finding], errors: inout [String]) {
+        // CoreAudio HAL plug-ins live in two well-known locations.
+        let pluginDirs = [
+            "/Library/Audio/Plug-Ins/HAL",
+            "\(ShellRunner.realUserHome)/Library/Audio/Plug-Ins/HAL",
+        ]
+        let fm = FileManager.default
+
+        for dir in pluginDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".driver") {
+                let path = "\(dir)/\(entry)"
+
+                if let known = knownAudioDrivers.first(where: { $0.bundle == entry }) {
+                    findings.append(Finding(
+                        severity: known.severity,
+                        category: .deviceAccess,
+                        title: "Audio loopback driver installed: \(known.display)",
+                        detail: "\(entry) — \(known.note). Loopback drivers let any app record system audio without triggering Microphone permission prompts.",
+                        path: path,
+                        remediation: "Verify you installed this. To remove: sudo rm -rf \"\(path)\" (then reboot)."
+                    ))
+                } else {
+                    // Unknown HAL plug-in — not on Apple-or-named-vendor list.
+                    findings.append(Finding(
+                        severity: .medium,
+                        category: .deviceAccess,
+                        title: "Unknown audio driver plug-in",
+                        detail: "\(entry) — third-party CoreAudio plug-in not from a recognized vendor. Plug-ins here can intercept or route system audio.",
+                        path: path,
+                        remediation: "Investigate: ls -la \"\(path)\" and inspect the bundle's Info.plist. Remove if unexpected."
+                    ))
+                }
+            }
+        }
     }
 
     private func checkCameraAccess(findings: inout [Finding], errors: inout [String]) {

@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version support status")
+        checkMacOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server hardening")
+        checkSSHServerHardening(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +452,101 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version Support Status
+    //
+    // Apple supports the current macOS plus the previous two; older releases stop
+    // receiving security updates and are silently vulnerable to public CVEs. Running
+    // an unsupported macOS is one of the highest-impact, lowest-visibility risks.
+
+    private func checkMacOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let major = v.majorVersion
+
+        // Supported window slides forward each fall. Encode the EOL boundary as data
+        // so the check stays accurate as Apple ships new majors.
+        // - oldestSupported: receives security updates today
+        // - oldestGettingPatches: still gets some updates but is on its last legs
+        let oldestSupported = 14    // Sonoma — bumped to 14 once Apple stops shipping Ventura RSRs
+        let oldestGettingPatches = 15
+
+        // sw_vers gives the exact marketing string ("14.7.2") for the user-facing message
+        let swVers = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        let versionStr = swVers.success
+            ? swVers.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+
+        if major < oldestSupported {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(versionStr) is no longer receiving security updates",
+                detail: "This Mac is running an unsupported macOS major. Apple has stopped shipping security patches — known CVEs in the kernel, Safari, and core frameworks will never be fixed.",
+                path: nil,
+                remediation: "Upgrade to macOS \(oldestGettingPatches) or later: System Settings > General > Software Update. If hardware is incompatible, consider OpenCore Legacy Patcher or replacing the Mac."
+            ))
+        } else if major == oldestSupported {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS \(versionStr) is on its last year of security support",
+                detail: "Apple's support window covers the current macOS and the previous two. This release will stop receiving security updates within the next year.",
+                path: nil,
+                remediation: "Plan to upgrade to macOS \(oldestGettingPatches) or later within the next 12 months."
+            ))
+        }
+    }
+
+    // MARK: - SSH Server Hardening
+    //
+    // If Remote Login is enabled, the SSH daemon's configuration matters: weak
+    // ciphers/MACs and password authentication are common entry points. We only
+    // emit findings when sshd is actually exposed.
+
+    private func checkSSHServerHardening(findings: inout [Finding], errors: inout [String]) {
+        // Only check when Remote Login is on — otherwise sshd config is dormant.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        guard sshState.success && sshState.stdout.lowercased().contains(": on") else { return }
+
+        guard let conf = try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8) else { return }
+
+        // Effective directive lookup: take the *last* uncommented occurrence (sshd uses last-wins
+        // for most options; a more rigorous read would also walk Include directives).
+        func lookup(_ key: String) -> String? {
+            let want = key.lowercased()
+            var value: String?
+            for raw in conf.split(separator: "\n") {
+                let line = String(raw).trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2,
+                      String(parts[0]).lowercased() == want else { continue }
+                value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+            }
+            return value
+        }
+
+        // Password auth: brute-forceable; key-based auth is the modern default.
+        if let pw = lookup("PasswordAuthentication"), pw.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "Remote Login is enabled and sshd accepts passwords — exposed sshd is brute-forceable",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Switch to key-based auth: set 'PasswordAuthentication no' in /etc/ssh/sshd_config and reload sshd"
+            ))
+        }
+
+        // Direct root login is rarely needed and removes a layer of accountability.
+        if let pr = lookup("PermitRootLogin"), pr.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login",
+                detail: "sshd is configured with 'PermitRootLogin yes' while Remote Login is on",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Change to 'PermitRootLogin no' (or 'prohibit-password') in /etc/ssh/sshd_config and reload sshd"
+            ))
         }
     }
 
