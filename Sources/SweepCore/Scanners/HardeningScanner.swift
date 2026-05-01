@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version support")
+        checkMacOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +450,63 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - macOS Version Support
+
+    private func checkMacOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        // Apple only ships security updates for the current macOS and the two prior majors.
+        // Anything older is unmaintained: a Mac on macOS 13 in 2026 misses every CVE patched
+        // since the cutoff, including kernel + WebKit zero-days.
+        let result = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        guard result.success else { return }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let major = Int(version.split(separator: ".").first.map(String.init) ?? "") ?? 0
+        guard major > 0 else { return }
+
+        // Lower bound for "still receiving updates" — bumped over time as Apple drops support.
+        // As of 2026, macOS 14 (Sonoma) is the oldest version still in Apple's update train.
+        let oldestSupportedMajor = 14
+
+        if major < oldestSupportedMajor {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(version) no longer receives security updates",
+                detail: "Apple only patches the current and two prior macOS releases. macOS \(major) is past that window — known kernel and WebKit CVEs will remain unpatched on this Mac.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS (System Settings > General > Software Update). If the Mac doesn't support a newer macOS, treat the device as untrusted for sensitive work."
+            ))
+        } else if major == oldestSupportedMajor {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(version) is on Apple's oldest-supported track",
+                detail: "macOS \(major) still gets security patches but typically lags the current release by several emergency fixes",
+                path: nil,
+                remediation: "Plan an upgrade to the current macOS for the most timely patches"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My / Activation Lock makes a stolen Mac unusable. It's an iCloud-tied feature, so
+        // we check the local hint preference; absence is informational, not a forced HIGH.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "Without Find My, a stolen Mac can be wiped and reused — and you can't remotely lock or locate it",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
                 ))
             }
         }

@@ -99,10 +99,43 @@ public final class PersistenceScanner: Scanner {
 
         // Get executable path
         var executablePath: String?
+        let programArguments = plist["ProgramArguments"] as? [String] ?? []
         if let program = plist["Program"] as? String {
             executablePath = program
-        } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
+        } else if let first = programArguments.first {
             executablePath = first
+        }
+
+        // Interpreter-based persistence: a launchd plist whose ProgramArguments shells out to
+        // osascript / bash / curl / python3 to fetch + execute remote code is a stealer-loader
+        // pattern (NimDoor, AppleProcessHub, FrigidStealer all use this). The check fires before
+        // path-trust checks because the *interpreter* itself lives in a trusted system path.
+        if !programArguments.isEmpty && !label.hasPrefix("com.apple.") {
+            let combined = programArguments.joined(separator: " ").lowercased()
+            let firstArgName = (programArguments.first.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "").lowercased()
+            let isInterpreter = ["osascript", "bash", "sh", "zsh", "python", "python3", "ruby", "perl", "node"]
+                .contains(where: { firstArgName == $0 || firstArgName.hasPrefix("\($0).") })
+            let fetchesRemote = combined.contains("curl ") || combined.contains("wget ") ||
+                                combined.contains("https://") || combined.contains("http://")
+            let pipesToShell = combined.contains("| sh") || combined.contains("| bash") ||
+                               combined.contains("| zsh") || combined.contains("|sh") || combined.contains("|bash")
+            let runsAppleScript = firstArgName == "osascript" &&
+                                  (combined.contains("do shell script") || combined.contains("-e "))
+            let evalsBase64 = combined.contains("base64") &&
+                              (combined.contains("--decode") || combined.contains(" -d") || combined.contains(" -D"))
+
+            if isInterpreter && (fetchesRemote || pipesToShell || runsAppleScript || evalsBase64) {
+                let snippet = String(combined.prefix(160))
+                findings.append(Finding(
+                    severity: .high,
+                    category: .persistence,
+                    title: "LaunchAgent runs a shell/AppleScript loader",
+                    detail: "Label: \(label) — ProgramArguments invokes \(firstArgName) with download/eval pattern: \(snippet)",
+                    path: path,
+                    remediation: "Inspect: cat \"\(path)\" — legitimate Apple plists do not pipe curl/wget into a shell"
+                ))
+                return
+            }
         }
 
         // Check against known spyware labels

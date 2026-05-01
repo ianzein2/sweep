@@ -11,10 +11,46 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 marketplace-supply-chain campaigns
+        "material-theme-icons-free",   // Reported May 2025 — backdoored
+        "ahban.shtml",                 // Ransomware-PoC family
+        "ahban.cychelloworld",         // same family
+        "evaeducation.vue-helper",     // wallet-stealer trojan
+        "solidityai.solidity",         // typosquat of Juan Blanco's Solidity ext
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
+    /// Browser extension IDs flagged by vendors / CISA as malicious in 2024-2025.
+    /// Includes both the Cyberhaven supply-chain compromise wave (Dec 2024) and assorted
+    /// ad-fraud / data-exfil extensions removed from the Chrome Web Store.
+    private let knownMaliciousExtensionIds: Set<String> = [
+        // Cyberhaven supply-chain wave (Dec 2024 / Jan 2025) — Chrome extensions whose updates
+        // were tampered with to exfiltrate cookies & session tokens.
+        "nnpnnpemnckcfdebeekibpiijlicmpom", // Cyberhaven (compromised version 24.10.4)
+        "ghcoflfomhjlhilnmgcobpmkbcioidme", // Internxt VPN (compromised)
+        "icpgjfneehieebagbmdbhnlpiopdcmna", // VPNCity
+        "pgmkebnlcfafnnnnaonigaecjjdebgld", // Bookmark Favicon Changer
+        "aclidkbfeoffmaaomdmbcmhmlbeenajl", // Castorus
+        "fbmlcbhdmilaggadffokhbpdpejakknn", // Uvoice
+        "cdnmoadhdkdhicgcfacbbidkglbbgcmf", // Reader Mode
+        "dpnemckllgcokfomeebadbngenajbgkc", // Search Copilot AI Assistant
+        "kkdoamadkcleegjdijngmaalkpcngkbm", // Parrot Talks to Me
+        "kjfopjbiblfekifapfeknhfoneoaomkb", // Primus
+        "iaiomicjabeggjcfkbimgmglanimpnae", // Tackker
+        "lbneaaedflankmgmfbmaplggbmjjmbae", // AI Assistant ChatGPT and Gemini
+        "lkfjphmkmpgkjbohlpmaadmpdaooamlc", // Bard AI Chat
+        "kgkeennflbamkjpoonjfmcdjojhakfdp", // ChatGPT Quick Access
+        "ahdfpccfheopjpcjclnbnnaccmgjkice", // ChatGPT App
+        "hodiladlefdpcbemnbbcpclbmknkiaem", // Wayin AI
+        "hihblcmlaaademjlakdpicchbjnnnkbo", // Sort by Oldest
+        "lkomkklikfioojmlfpijhopnepfdfpfg", // Earny - Up to 20% Cash Back
+        "fopeajnjpnbafbfnpmjkfpdkobpfhmlh", // VidHelper - Video Downloader
+        // 2024 ad-fraud / scam wave removed by Chrome
+        "mpfjpmdneijfcocgdaodemjjkemcoonp", // YesSearches
+        "kekljaplondegapmocedimcdaeflnnaa", // Volume Master
     ]
 
     // Extensions that are well-known and safe
@@ -143,6 +179,19 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Hard-list: extensions known to have been compromised or flagged as malicious.
+                    // Emit one finding per (browser, profile, extId) immediately — don't dedupe.
+                    if knownMaliciousExtensionIds.contains(extId) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "Known malicious \(browserName) extension installed",
+                            detail: "Extension ID \(extId) (profile: \(profile)) was flagged in a 2024-2025 supply-chain or data-exfil incident",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately in \(browserName) > Extensions, then rotate any credentials saved in this browser"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
