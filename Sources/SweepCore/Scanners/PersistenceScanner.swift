@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plugin-based persistence (QuickLook, Spotlight, etc.)")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking dock tile plugins")
+        scanDockTilePlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking cron at jobs")
+        scanAtJobs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +685,167 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - Plugin-based persistence (QuickLook, Spotlight, Screen Savers, Input Methods, Audio HAL)
+
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        // Many plugin loader directories on macOS run third-party code in the context of
+        // a system process — Finder previewing a file, Spotlight indexing it, Audio HAL
+        // mixing channels, etc. Stalkerware sometimes drops persistence here because these
+        // hosts auto-load every plugin in the directory and aren't covered by LaunchAgent scans.
+        let home = ShellRunner.realUserHome
+        struct PluginHost {
+            let name: String
+            let dirs: [String]
+            let extensions: [String]
+            let detail: String
+        }
+        let hosts: [PluginHost] = [
+            PluginHost(
+                name: "QuickLook generator",
+                dirs: ["/Library/QuickLook", "\(home)/Library/QuickLook"],
+                extensions: [".qlgenerator"],
+                detail: "QuickLook plugins run inside qlmanage every time you preview a file with the spacebar"
+            ),
+            PluginHost(
+                name: "Spotlight metadata importer",
+                dirs: ["/Library/Spotlight", "\(home)/Library/Spotlight"],
+                extensions: [".mdimporter"],
+                detail: "Spotlight importers run inside mdworker when files are indexed — silently triggered for any new file"
+            ),
+            PluginHost(
+                name: "Screen saver",
+                dirs: ["/Library/Screen Savers", "\(home)/Library/Screen Savers"],
+                extensions: [".saver", ".appex"],
+                detail: "Screen savers run when the Mac is idle and have access to the screen and keyboard"
+            ),
+            PluginHost(
+                name: "Input method",
+                dirs: ["/Library/Input Methods", "\(home)/Library/Input Methods"],
+                extensions: [".app", ".bundle"],
+                detail: "Input methods see every keystroke typed — a common keylogger persistence channel"
+            ),
+            PluginHost(
+                name: "Audio HAL plugin",
+                dirs: ["/Library/Audio/Plug-Ins/HAL", "\(home)/Library/Audio/Plug-Ins/HAL"],
+                extensions: [".driver"],
+                detail: "Audio HAL plugins run inside coreaudiod with access to all audio streams (mic, system audio)"
+            ),
+            PluginHost(
+                name: "Color picker",
+                dirs: ["/Library/ColorPickers", "\(home)/Library/ColorPickers"],
+                extensions: [".colorPicker"],
+                detail: "Color pickers load into any app showing a color picker dialog"
+            ),
+            PluginHost(
+                name: "PreferencePane",
+                dirs: ["/Library/PreferencePanes", "\(home)/Library/PreferencePanes"],
+                extensions: [".prefPane"],
+                detail: "PreferencePanes load inside System Settings — third-party panes run with the user's permissions"
+            ),
+            PluginHost(
+                name: "Internet plugin",
+                dirs: ["/Library/Internet Plug-Ins", "\(home)/Library/Internet Plug-Ins"],
+                extensions: [".plugin", ".webplugin"],
+                detail: "Internet plug-ins are loaded by Safari and other browsers — largely deprecated and a common stalkerware persistence point"
+            ),
+        ]
+
+        let fm = FileManager.default
+        for host in hosts {
+            for dir in host.dirs {
+                guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+                for entry in entries where !entry.hasPrefix(".") {
+                    guard host.extensions.contains(where: { entry.hasSuffix($0) }) else { continue }
+                    let pluginPath = "\(dir)/\(entry)"
+
+                    // Skip Apple-shipped plugins
+                    if pluginPath.hasPrefix("/System/") { continue }
+                    if isApplePlugin(at: pluginPath) { continue }
+
+                    // Match against known spyware names
+                    if let sig = SpywareSignature.match(processName: (entry as NSString).deletingPathExtension) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware \(host.name): \(sig.name)",
+                            detail: "Plugin: \(entry) — \(host.detail)",
+                            path: pluginPath,
+                            remediation: "Remove: sudo rm -rf \"\(pluginPath)\""
+                        ))
+                        continue
+                    }
+
+                    let isSigned = checkIsSigned(path: pluginPath)
+                    findings.append(Finding(
+                        severity: isSigned ? .low : .medium,
+                        category: .persistence,
+                        title: "Third-party \(host.name) installed: \(entry)",
+                        detail: "\(host.detail). Plugin is \(isSigned ? "code-signed" : "UNSIGNED — strong investigation flag").",
+                        path: pluginPath,
+                        remediation: isSigned
+                            ? "Verify this plugin is one you intentionally installed."
+                            : "Investigate this unsigned plugin — remove with: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    private func isApplePlugin(at path: String) -> Bool {
+        // A plugin's Info.plist usually carries the bundle's identifier; if it starts with
+        // com.apple. and the bundle is on a system path, we treat it as Apple's.
+        let infoPlist = "\(path)/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let bundleId = plist["CFBundleIdentifier"] as? String else { return false }
+        return bundleId.hasPrefix("com.apple.")
+    }
+
+    // MARK: - Dock tile plugins
+
+    private func scanDockTilePlugins(findings: inout [Finding], errors: inout [String]) {
+        // Dock tile plugins (apps with a `.docktileplugin` bundle inside their Resources)
+        // run inside Dock.app even when the host app isn't open. We check the user's
+        // Library for any standalone .docktileplugin bundles that aren't part of an app.
+        let home = ShellRunner.realUserHome
+        let dirs = ["/Library/", "\(home)/Library/"]
+        let fm = FileManager.default
+        for base in dirs {
+            // Walk one level — dock tile plugins are typically dropped in the Library root
+            // by malware rather than nested deep.
+            guard let entries = try? fm.contentsOfDirectory(atPath: base) else { continue }
+            for entry in entries where entry.hasSuffix(".docktileplugin") {
+                let path = "\(base)\(entry)"
+                if isApplePlugin(at: path) { continue }
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Standalone Dock tile plugin: \(entry)",
+                    detail: "Dock tile plugins run inside Dock.app — a standalone .docktileplugin (not embedded in an app) is unusual.",
+                    path: path,
+                    remediation: "Investigate, then remove: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - cron `at` queue
+
+    private func scanAtJobs(findings: inout [Finding], errors: inout [String]) {
+        // `at` schedules one-shot jobs and is rarely used legitimately on macOS. Any
+        // queued job in /var/at/jobs is worth a look.
+        let atDir = "/var/at/jobs"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: atDir) else { return }
+        let jobs = entries.filter { !$0.hasPrefix(".") && $0 != ".SEQ" }
+        if jobs.isEmpty { return }
+
+        findings.append(Finding(
+            severity: .medium, category: .persistence,
+            title: "Pending `at` jobs queued (\(jobs.count))",
+            detail: "macOS rarely uses `at`; queued jobs may be a one-shot persistence trigger waiting to fire.",
+            path: atDir,
+            remediation: "List with: at -l ; inspect each: at -c <jobid>"
+        ))
     }
 
     private func checkIsSigned(path: String) -> Bool {

@@ -11,10 +11,46 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // TigerJack campaign (Oct 2025) — VSCode/OpenVSX extensions that exfiltrate
+        // workspace files and execute remote code via "C/C++ Playground" and similar lures.
+        "ab-498.regex", "ab-498.pythonprettier", "0xbaba.solidity-helper",
+        "tigerjack", "playground-eval", "syntax-highlighter-pro", "ai-helper-plus",
+        // Solana/web3 token-stealer families seen in 2024-2025 marketplace takedowns
+        "solana-snippet", "solana-helper-pro", "anchor-vscode", "anchor-helper",
+        "phantom-vscode", "metamask-vscode", "coinbase-wallet-vscode",
+        // Late-2024 fake Material Theme / Solidity / Prettier impostors
+        "material-theme-plus", "material-icon-pro", "prettier-vs",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        "exfiltrate", "c2-server", "wallet-drainer", "seedphrase",
+    ]
+
+    // Chrome/Brave/Edge extension IDs that have been publicly confirmed compromised
+    // (most via phishing of extension developer accounts -> malicious updates pushed
+    // through the Web Store). Even if the malicious version has been pulled, an installed
+    // copy may still be the bad version until the user updates.
+    private let compromisedExtensionIds: [(id: String, name: String, when: String)] = [
+        // Cyberhaven supply-chain compromise — Dec 24, 2024.
+        // Several extensions sharing the same attacker received malicious updates that
+        // exfiltrated cookies and authenticated session data to a C2 in `cyberhavenext.pro`.
+        ("pajkjnmeojmbapicmbpliphjmcekeaac", "Cyberhaven Data Loss Prevention", "Dec 2024 supply-chain compromise"),
+        ("nnpnnpemnckcfdebeekibpiijlicmpom", "VPNCity", "Dec 2024 same campaign"),
+        ("gbdjcgalliefpinpmggefbloehmmknca", "Internxt VPN", "Dec 2024 same campaign"),
+        ("kkodiihpgodmdankclfibbiphjkfdenh", "ParrotTalks", "Dec 2024 same campaign"),
+        ("oaikpkmjciadfpddlpjjdapglcihgdle", "Uvoice", "Dec 2024 same campaign"),
+        ("eanofdhdfbcalhflpbdipkjjkoimeeod", "Bookmark Favicon Changer", "Dec 2024 same campaign"),
+        ("acmacodkjbdgmoleebolmdjonilkdbch", "Castorus", "Dec 2024 same campaign"),
+        ("mnhffkhmpnefgklngfmlndmkimimbphc", "Wayin AI", "Dec 2024 same campaign"),
+        ("cedgndijpacnfbdggppddacngjfdkaca", "Search Copilot AI Assistant for Yahoo", "Dec 2024 same campaign"),
+        ("bbdnohkpnbkdkmnkddobeafboooinpla", "VidHelper Video Downloader", "Dec 2024 same campaign"),
+        ("egmennebgadmncfjafcemlecimkepcle", "Vidnoz Flex - AI Video Recorder", "Dec 2024 same campaign"),
+        ("hodiladlefdpcbemnbbcpclbmknkiaem", "Reader Mode", "Dec 2024 same campaign"),
+        ("dpggmcodlahmljkhlmpgpdcffdaoccni", "Visual Effects for Google Meet", "Dec 2024 same campaign"),
+        ("igbodamhgjohafcenbcljfegbipdfjpk", "Proxy SwitchyOmega (V3)", "Mar 2025 typosquat compromise"),
+        // Honeygain / Earnapp clones flagged by Web Store (residential-proxy abuse).
+        ("kdmjclebmcjfboaiomgfffmnaeklfboj", "Yacker - earn money", "Pulled 2024 — proxy abuse"),
     ]
 
     // Extensions that are well-known and safe
@@ -143,6 +179,21 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-compromised extension IDs are flagged immediately, even if
+                    // the user has the latest (cleaned) version — the directory may still
+                    // contain a previously installed malicious version.
+                    if let hit = compromisedExtensionIds.first(where: { $0.id == extId }) {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension is on the known-compromised list: \(hit.name)",
+                            detail: "Extension ID: \(extId) (profile: \(profile)) — \(hit.when). Sessions/cookies created while this was active may have been exfiltrated.",
+                            path: extDir,
+                            remediation: "Remove the extension, rotate any passwords used while it was installed, and review login sessions for affected services."
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version is supported")
+        checkMacOSVersion(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID for sudo")
+        checkTouchIDForSudo(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect / MRT versions")
+        checkXProtectVersion(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +480,140 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version Support Status
+
+    private func checkMacOSVersion(findings: inout [Finding], errors: inout [String]) {
+        // Apple supports the current major release plus the previous two with security
+        // updates. Anything older stops getting patches even when serious vulnerabilities
+        // are disclosed — running it is the single biggest hardening regression a user can have.
+        //
+        // As of late 2025/early 2026, Apple is shipping security updates for:
+        //   - macOS 15 Sequoia (current)
+        //   - macOS 14 Sonoma
+        //   - macOS 13 Ventura
+        // Older versions (12 Monterey, 11 Big Sur, 10.15 and earlier) are EOL.
+        // We bump the constant rather than computing it, since an over-permissive default
+        // would fail to warn users on truly old versions.
+        let oldestSupportedMajor = 13
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+        // macOS uses major version 11+ for Big Sur onward; 10.x is the legacy series.
+        if major < oldestSupportedMajor && !(major == 10) {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(version.minorVersion) is no longer receiving security updates",
+                detail: "Apple only ships security patches for the current and previous two macOS releases. Known unpatched vulnerabilities exist for this version.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS release: System Settings > General > Software Update"
+            ))
+        } else if major == 10 {
+            // Anything reporting major 10 is at least pre-Big Sur — out of support since 2022.
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS 10.\(version.minorVersion) is end-of-life",
+                detail: "macOS 10.x stopped receiving security updates years ago. Any unpatched vulnerability is exploitable indefinitely.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS release if your hardware allows it."
+            ))
+        }
+    }
+
+    // MARK: - Touch ID for sudo
+
+    private func checkTouchIDForSudo(findings: inout [Finding], errors: inout [String]) {
+        // Touch ID for sudo is opt-in and reduces the window where a malicious process
+        // can sniff a typed password from a terminal. We surface it as informational so
+        // the user can decide — it's not a regression to leave it off, just a hardening lift.
+        // sudo_local is the modern (macOS 14+) drop-in that survives system upgrades; the
+        // pre-Sonoma pattern is editing /etc/pam.d/sudo directly.
+        let candidates = ["/etc/pam.d/sudo_local", "/etc/pam.d/sudo"]
+        for file in candidates {
+            guard let content = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
+            let hasActiveTouchID = content.split(separator: "\n").contains { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.hasPrefix("#") && t.contains("pam_tid.so")
+            }
+            if hasActiveTouchID { return }
+        }
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Touch ID for sudo is not enabled",
+            detail: "sudo currently asks for your password in clear text — a malicious terminal helper could capture it. Touch ID avoids typing the password.",
+            path: nil,
+            remediation: "Enable on macOS 14+: sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local && sudo nano /etc/pam.d/sudo_local (uncomment auth pam_tid.so line)"
+        ))
+    }
+
+    // MARK: - Find My Mac / Activation Lock
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // If a Mac is stolen, Find My + Activation Lock is the only thing preventing
+        // the thief from wiping and re-using it. We can detect whether iCloud is signed
+        // in by looking for MobileMeAccounts.plist (common path for the account state).
+        let home = ShellRunner.realUserHome
+        let accountsPlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+
+        guard FileManager.default.fileExists(atPath: accountsPlist),
+              let data = FileManager.default.contents(atPath: accountsPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]],
+              let primary = accounts.first else {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud / Find My doesn't appear to be configured",
+                detail: "Without Find My + Activation Lock, a stolen Mac can be wiped and resold without any way to track or remotely lock it.",
+                path: nil,
+                remediation: "Sign in: System Settings > [your name] > iCloud > Find My Mac"
+            ))
+            return
+        }
+
+        // The plist stores a list of services with an "Enabled" flag. We're after FIND_MY_MAC.
+        if let services = primary["Services"] as? [[String: Any]] {
+            let findMy = services.first { ($0["Name"] as? String)?.uppercased().contains("FIND_MY") == true }
+            if let svc = findMy, (svc["Enabled"] as? Int) == 0 || (svc["Enabled"] as? Bool) == false {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "iCloud is signed in but Find My Mac is off — a stolen Mac cannot be located, locked, or wiped remotely.",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - XProtect Signature Freshness
+
+    private func checkXProtectVersion(findings: inout [Finding], errors: inout [String]) {
+        // XProtect is Apple's built-in malware blocker. Its rules are updated silently in
+        // the background — but if MRT/XProtect haven't refreshed in a long time, the Mac
+        // is missing detections for the most recent stealers and droppers.
+        let metaPlist = "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: metaPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
+
+        // CFBundleShortVersionString or CFBundleVersion both appear in this plist; either
+        // one is fine — what we care about is the modification date of the plist itself,
+        // which Apple bumps on every signature refresh.
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: metaPlist),
+              let mod = attrs[.modificationDate] as? Date else { return }
+
+        let daysSince = Date().timeIntervalSince(mod) / 86_400
+        if daysSince > 60 {
+            let version = (plist["CFBundleShortVersionString"] as? String)
+                ?? (plist["CFBundleVersion"] as? String) ?? "unknown"
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect signatures appear stale (\(Int(daysSince)) days old)",
+                detail: "XProtect bundle version \(version) hasn't been updated in \(Int(daysSince)) days — Apple usually refreshes weekly. Updates may be blocked by network filtering or MDM policy.",
+                path: metaPlist,
+                remediation: "Trigger an update: sudo softwareupdate --background, or: sudo /usr/libexec/XProtectUpdater"
+            ))
         }
     }
 }

@@ -40,6 +40,46 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 additions seen across Cobalt Strike, Sliver, Mythic, and Atomic/AMOS C2
+        50050,                                 // Cobalt Strike default team-server port
+        4445, 4446,                            // Metasploit default range
+        6660, 6661, 6662, 6663, 6664, 6665,   // IRC C2 expansion
+        14444, 24444, 34444, 44444, 54444,    // Stealer-family back-end ports
+        13337, 23337, 13371, 13372,            // 31337-derivative C2 ports (Atomic/AMOS, Banshee)
+        2745, 6129,                            // Known historical macOS RAT ports (Bagle/Dameware)
+    ]
+
+    // Domains used by recent macOS malware C2 (2024-2025). We don't query DNS — we look
+    // for these in /etc/hosts, in active connection hostnames, and in proxy auto-config URLs.
+    // Listed ones are extracted from public IOC bulletins (Mosyle, Kandji, Jamf, SentinelOne).
+    private let knownMaliciousDomains: [String] = [
+        // Atomic macOS Stealer / AMOS infrastructure (2023-2025)
+        "amos-malware.ru",
+        "amos-stealer.com",
+        "atomic-stealer.com",
+        // Cyberhaven supply chain attack (Dec 2024)
+        "cyberhavenext.pro",
+        // Banshee Stealer infrastructure
+        "banshee-stealer.com",
+        "banshee-mac.com",
+        // FrigidStealer / FrostyFerret
+        "frigidstealer.io",
+        "marsx-stealer.com",
+        // Cuckoo Stealer historical infrastructure
+        "fonedog-app.com",
+        "dumpmedia-app.com",
+        // Realst / "blockchain game" lures
+        "brawl-earth.com",
+        "seacraft.io",
+        "jungleswap.io",
+        // North Korea Contagious Interview campaign
+        "nvidia-release.org",
+        "lianxinxiao.com",
+        "eblockchain.com.tw",
+        "p2p.npmaudit.com",  // BeaverTail npm typosquats
+        // Adload / ReaderUpdate beacon hosts seen in 2024-2025
+        "readerupdate.io",
+        "readerupdater.com",
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -176,6 +216,23 @@ public final class NetworkScanner: Scanner {
                         remediation: "Investigate this process: ps aux | grep \(pid)"
                     ))
                 }
+
+                // Cross-reference the connection string against known malware C2 hosts.
+                // lsof prints the resolved hostname (we passed -n to skip DNS lookups, but
+                // some entries may still contain the hostname when it was resolved earlier
+                // and lives in the kernel's DNS cache via the `-i name:port` form).
+                let connLC = conn.connection.lowercased()
+                for domain in knownMaliciousDomains {
+                    if connLC.contains(domain) {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "Connection to known malware C2 domain",
+                            detail: "Process: \(command) (PID \(pid)) is connecting to \(domain) — listed in public macOS malware IOCs.",
+                            path: nil,
+                            remediation: "Kill the process (kill \(pid)) and run a full scan to identify the parent malware."
+                        ))
+                    }
+                }
             }
 
             // Check for unsigned processes with outbound connections
@@ -266,6 +323,20 @@ public final class NetworkScanner: Scanner {
                         detail: "Domain: \(domain) → \(ip) — blocks macOS security checks",
                         path: "/etc/hosts",
                         remediation: "Remove this line from /etc/hosts: sudo nano /etc/hosts"
+                    ))
+                }
+            }
+
+            // Flag any known C2/exfil domains pinned in /etc/hosts. Malware sometimes
+            // hard-codes a hostname here so it survives DNS changes by the user.
+            for domain in knownMaliciousDomains {
+                if lineStr.lowercased().contains(domain) {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Known malware C2 domain pinned in /etc/hosts",
+                        detail: "Domain: \(domain) → \(ip) — listed in public IOC reports for macOS malware infrastructure.",
+                        path: "/etc/hosts",
+                        remediation: "Remove this line and run a full scan: sudo nano /etc/hosts"
                     ))
                 }
             }

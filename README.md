@@ -70,19 +70,19 @@ sudo sweep --json
 
 | Scanner | What it does |
 |---------|-------------|
-| **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
+| **Process** | Matches running processes against known spyware signatures (incl. 2025 stealers — ModStealer, FrigidStealer, BeaverTail, OtterCookie, NimDoor, RustyAttr, etc.), flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, `at` jobs, login/logout hooks, periodic scripts, **plugin loaders (QuickLook, Spotlight importers, Screen Savers, Input Methods, Audio HAL, Color Pickers, PreferencePanes, Internet Plug-Ins, Dock tile plugins)** |
 | **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious C2 ports (incl. Cobalt Strike / Sliver / Mythic defaults), /etc/hosts tampering, **known malware C2 domains** (Cyberhaven, AMOS, Banshee, FrigidStealer, Contagious Interview infra) |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions, flags **known-compromised extension IDs** (Cyberhaven Dec 2024 supply-chain campaign, TigerJack VSCode, Solana wallet drainers) |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, **macOS version EOL status, Touch ID for sudo, Find My Mac, XProtect signature freshness** |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

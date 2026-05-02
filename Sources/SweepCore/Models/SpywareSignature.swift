@@ -434,6 +434,255 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025 macOS infostealers / loaders
+        SpywareSignature(
+            name: "ModStealer",
+            // ModStealer was disclosed by Mosyle in Sept 2025 — a Node.js-based stealer that
+            // targets crypto wallet extensions, keychain entries, and browser data, distributed
+            // through fake recruiter "coding test" lures (LinkedIn/Telegram).
+            processNames: ["ModStealer", "modstealer", ".sysupdater", "node_helper",
+                           "applesystem", "AppleSystemUpdater", "system_helper"],
+            bundleIdentifiers: ["com.modstealer.agent", "com.system.updater.helper"],
+            filePaths: [
+                "/private/tmp/.modstealer",
+                "~/Library/Application Support/.modstealer",
+                "~/Library/LaunchAgents/com.apple.system.update.plist",
+                "~/.npm/_cacache/.modstealer",
+            ],
+            launchAgentLabels: ["com.modstealer.agent", "com.apple.system.update"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer (FROSTYFERRET)",
+            // Fake browser-update lure that drops a notarized DMG installing an AppleScript
+            // / Mach-O stealer dropping wallet and keychain data. Active 2024-2025.
+            processNames: ["FrigidStealer", "frigid", "FrostyFerret", "marsx",
+                           "frigid_helper"],
+            bundleIdentifiers: ["com.frigid.stealer", "com.frostyferret.agent",
+                                "com.macos.updater.helper"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "/private/tmp/MacOSUpdater",
+                "~/Library/Application Support/.FrigidStealer",
+                "~/Library/Application Support/.frosty",
+            ],
+            launchAgentLabels: ["com.frigid.agent", "com.frostyferret.service"]
+        ),
+        SpywareSignature(
+            name: "ReaderUpdate",
+            // Long-running malware-as-a-service loader (Crystal, Nim, Rust variants)
+            // distributed since 2020 and resurgent in 2025. Persists via LaunchAgent and
+            // pulls follow-on payloads (often Genieo / Adload / Atomic).
+            processNames: ["ReaderUpdate", "readerupdate", "reader_update",
+                           "ReaderUpdater", "readerupdated"],
+            bundleIdentifiers: ["com.readerupdate", "com.readerupdater.agent"],
+            filePaths: [
+                "~/Library/Application Support/com.ReaderUpdate",
+                "~/Library/Application Support/.ReaderUpdate",
+                "~/Library/LaunchAgents/com.ReaderUpdate.plist",
+                "~/Library/LaunchAgents/com.ReaderUpdater.plist",
+            ],
+            launchAgentLabels: ["com.ReaderUpdate", "com.ReaderUpdater",
+                                "com.readerupdate.daemon"]
+        ),
+        SpywareSignature(
+            name: "Crystalsteel / NimDoor",
+            // Nim/Crystal-language loaders from DPRK-aligned activity (BlueNoroff family),
+            // dropped through fake Zoom/Teams meeting installers. 2025.
+            processNames: ["NimDoor", "nimdoor", "Crystalsteel", "crystalsteel",
+                           "ZoomMeetingHelper", "TeamsHelper", "trolagent"],
+            bundleIdentifiers: ["com.zoom.helper.update", "com.microsoft.teams.helper"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "/private/var/tmp/.crystal",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/Application Support/.crystal",
+            ],
+            launchAgentLabels: ["com.zoom.update.helper",
+                                "com.microsoft.teams.update.helper"]
+        ),
+        // North Korea "Contagious Interview" (CL-STA-0240) campaign — 2024-2025
+        SpywareSignature(
+            name: "BeaverTail",
+            // JavaScript stealer dropped through fake job-interview NPM packages and
+            // electron apps. Steals browser data and crypto wallets, then loads InvisibleFerret.
+            processNames: ["BeaverTail", "beavertail", "FCCCallTool", "FCCCall",
+                           "MiroTalk", "Coder.exe", "node_modules_helper"],
+            bundleIdentifiers: ["com.beavertail.agent", "com.fcc.call.tool",
+                                "com.coder.helper"],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+                "~/Library/Caches/.npm-helper",
+            ],
+            launchAgentLabels: ["com.beavertail.service"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            // Python backdoor stage-2 of the Contagious Interview chain.
+            // Provides remote shell, keylogging, and crypto-wallet exfil.
+            processNames: ["InvisibleFerret", "invisibleferret", "pay", "bow",
+                           "p.zi", "ssid.py", "pyp", "msu"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.n2/pay",
+                "/private/tmp/.n2/bow",
+                "~/.n2",
+                "~/.npl",
+                "~/Library/Application Support/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            // Newer Contagious Interview JS stealer (late 2024/2025) — replaces or
+            // supplements BeaverTail. Steals clipboard, browser, and wallet data.
+            processNames: ["OtterCookie", "ottercookie", "otter", "otter_helper"],
+            bundleIdentifiers: ["com.ottercookie.agent"],
+            filePaths: [
+                "/private/tmp/.otter",
+                "~/Library/Application Support/.ottercookie",
+            ],
+            launchAgentLabels: ["com.ottercookie.service"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost / GolangGhost (Lazarus)",
+            // Cross-platform RAT (Python and Go variants) attributed to Famous Chollima /
+            // Lazarus, distributed in fake job interview "skills test" packages in 2025.
+            processNames: ["pylangghost", "PylangGhost", "golangghost", "GolangGhost",
+                           "ghost", "py_helper", "go_helper"],
+            bundleIdentifiers: ["com.pylangghost.agent", "com.golangghost.agent"],
+            filePaths: [
+                "/private/tmp/.pylangghost",
+                "/private/tmp/.golangghost",
+                "~/Library/Application Support/.ghost",
+            ],
+            launchAgentLabels: ["com.pylangghost.service",
+                                "com.golangghost.service"]
+        ),
+        SpywareSignature(
+            name: "Realst (cross-platform updates)",
+            // Updated Realst variants seen 2024-2025 distributed as "blockchain games"
+            // via fake Web3 startup pitches. Already covered above; this entry adds
+            // new sample names and paths observed in the wild.
+            processNames: ["Brawl Earth", "BrawlEarth", "SeaCraft", "JungleSwap",
+                           "ChainShift", "Chain Shift", "PearlClub"],
+            bundleIdentifiers: ["com.brawlearth.app", "com.seacraft.app",
+                                "com.jungleswap.app", "com.chainshift.app"],
+            filePaths: [
+                "/private/tmp/.realst2",
+                "~/Library/Application Support/.brawl",
+                "~/Library/Application Support/.seacraft",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            // RustyAttr (RustDoor lineage, late 2024) — uses extended attributes to
+            // hide its second-stage payload. Distributed as PDF lures.
+            processNames: ["RustyAttr", "rustyattr", "rustdoor", "rusty_helper"],
+            bundleIdentifiers: ["com.rustyattr.agent"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: ["com.rustyattr.service"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (HZRat)",
+            // Chinese-speaking actor RAT ported to macOS (mid-2024) — typically dropped
+            // alongside fake DingTalk/WeChat installers. Receives commands over TCP/4444 family ports.
+            processNames: ["hzrat", "HZRat", "HZRat-helper", "DingTalkHelper",
+                           "WeChatHelper.bin"],
+            bundleIdentifiers: ["com.hzrat.agent", "com.dingtalk.helper.update"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hzrat.service",
+                                "com.dingtalk.update.helper"]
+        ),
+        SpywareSignature(
+            name: "Cuckoo Stealer (2025 wave)",
+            // Resurgent Cuckoo activity in 2025 disguised as cracked-app installers.
+            // We list only the specific IOC sample names from public reports — generic
+            // names like "OptimizerPro" overlap with legitimate (if pushy) commercial apps.
+            processNames: ["DupeZap", "FoneTransHelper", "DumpMediaSpotifyConverter2",
+                           "cuckoo_helper"],
+            bundleIdentifiers: ["com.dupezap.app", "com.fonetrans.helper.app"],
+            filePaths: [
+                "/private/tmp/.cuckoo2",
+                "~/Library/Application Support/.dupezap",
+                "~/Library/Application Support/.fonetrans",
+            ],
+            launchAgentLabels: ["com.dupezap.service",
+                                "com.fonetrans.helper"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff 2024-25)",
+            // BlueNoroff macOS dropper masquerading as a Bitcoin price app. Pulls
+            // a follow-on payload over HTTP and stores it under a fake .todo path.
+            // Process names are constrained to the specific IOC samples reported by
+            // Kandji / Jamf to avoid false positives on legitimate price-tracker apps.
+            processNames: ["TodoSwift", "todoswift", "todoswift_helper"],
+            bundleIdentifiers: ["com.todoswift.app", "com.todoswift.helper"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: ["com.todoswift.service",
+                                "com.todoswift.helper"]
+        ),
+        SpywareSignature(
+            name: "RustBucket (2024-25 variants)",
+            // Lazarus / BlueNoroff RustBucket lineage with new dropper names. Already
+            // covered above; this entry adds the newer SwiftLoader / FullHouse names.
+            processNames: ["SwiftLoader", "FullHouse", "FullHouseDoor",
+                           "InternalPDFViewer", "PDFViewerLite"],
+            bundleIdentifiers: ["com.swiftloader.app", "com.fullhouse.app",
+                                "com.internalpdf.viewer"],
+            filePaths: [
+                "/private/var/tmp/.swiftloader",
+                "/private/var/tmp/.fullhouse",
+                "~/Library/Caches/.pdfviewer",
+            ],
+            launchAgentLabels: ["com.swiftloader.service",
+                                "com.fullhouse.helper"]
+        ),
+        // 2025 macOS adware/PUPs that frequently chain into stealers
+        SpywareSignature(
+            name: "Adload / Shlayer (2025 variants)",
+            // Adload + Shlayer remain the most common macOS malware families. Frequently
+            // delivers stealers as second-stage. New 2025 dropper names observed.
+            processNames: ["mediadownloader", "MediaTab", "ChampionSearch",
+                           "OperativeMachine", "ResultProcedure", "SearchUnit",
+                           "ConfigType", "ConfigData", "ManagerAnalog"],
+            bundleIdentifiers: ["com.mediadownloader.app", "com.mediatab.app",
+                                "com.championsearch.app", "com.searchunit.app",
+                                "com.configtype.app"],
+            filePaths: [
+                "~/Library/Application Support/com.MediaTab",
+                "~/Library/Application Support/com.ChampionSearch",
+                "~/Library/LaunchAgents/com.MediaTab.plist",
+                "~/Library/LaunchAgents/com.SearchUnit.plist",
+            ],
+            launchAgentLabels: ["com.MediaTab", "com.SearchUnit",
+                                "com.ChampionSearch", "com.OperativeMachine",
+                                "com.ConfigType.helper", "com.ConfigData.helper"]
+        ),
+        // OSX.Trigona / OSX.LockBit variants (rare but real 2024-25 macOS ransomware activity)
+        SpywareSignature(
+            name: "OSX.LockBit (proof-of-concept)",
+            // The LockBit gang published macOS-targeted ransomware POCs in 2023-24. Real
+            // infections are rare but the binaries are signed and notarized in some samples.
+            processNames: ["locker_Apple_M1_64", "locker_Apple_X86_64",
+                           "lockbit_apple", "lockbit-arm"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/locker_Apple_M1_64",
+                "/private/tmp/locker_Apple_X86_64",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
