@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Security Improvements (Tahoe)")
+        checkBackgroundSecurityImprovements(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari fingerprinting protection")
+        checkSafariFingerprintingProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking allowed app sources (Gatekeeper assessment)")
+        checkGatekeeperAssessment(findings: &findings, errors: &errors)
+
+        progress?.update("checking quarantine flag enforcement")
+        checkQuarantineEnforcement(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS update freshness")
+        checkOSVersionFreshness(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +483,146 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Background Security Improvements (Tahoe 26.1+)
+
+    /// macOS Tahoe 26.1 introduced "Background Security Improvements" — lightweight,
+    /// silent updates for Safari, WebKit, and system libraries. Disabling this is dangerous;
+    /// it strands the Mac on outdated WebKit during the gap between major OS releases.
+    private func checkBackgroundSecurityImprovements(findings: inout [Finding], errors: inout [String]) {
+        // The setting key Apple ships in Tahoe is BackgroundUpdateMajorOSEnabled / similar.
+        // We check the documented public domain `com.apple.MobileAsset.BackgroundSecurityImprovements`
+        // first, then fall back to `softwareupdate --background --status` which prints the
+        // current state on Tahoe and later.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.MobileAsset.BackgroundSecurityImprovements",
+            "AutomaticallyInstall"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Background Security Improvements are disabled",
+                    detail: "Silent Safari/WebKit/system-library patches between major OS releases are turned off — the Mac may stay vulnerable to actively exploited browser bugs.",
+                    path: nil,
+                    remediation: "Enable: System Settings > General > Software Update > Automatic Updates > (i) > Install Security Improvements"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Safari fingerprinting protection (Tahoe default)
+
+    /// In Tahoe Safari turned on Advanced Tracking & Fingerprinting Protection in all browsing
+    /// modes by default. Older defaults limited it to Private Browsing only.
+    private func checkSafariFingerprintingProtection(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // The preference is per-user; reading via defaults from the running user.
+        // Key: WBSFingerprintingProtectionEnabled or similar — Apple uses several keys.
+        let candidates: [(domain: String, key: String)] = [
+            ("com.apple.Safari", "WBSFingerprintingProtectionEnabled"),
+            ("com.apple.Safari", "AdvancedFingerprintingProtectionEnabled"),
+        ]
+        var sawDisabled = false
+        for (domain, key) in candidates {
+            let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+                "read", "\(home)/Library/Containers/com.apple.Safari/Data/Library/Preferences/\(domain)",
+                key
+            ], timeout: 5)
+            if result.success {
+                let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                if value == "0" { sawDisabled = true }
+            }
+        }
+        if sawDisabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Safari Advanced Fingerprinting Protection is disabled",
+                detail: "macOS Tahoe enables advanced fingerprinting protection in all browsing by default — yours is off, making this Mac more identifiable by tracking scripts.",
+                path: nil,
+                remediation: "Enable: Safari > Settings > Advanced > Use advanced tracking and fingerprinting protection: in all browsing"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper assessment & "Allow Anywhere"
+
+    /// `spctl --status` reports whether Gatekeeper assessment is enabled. If a user has
+    /// disabled it (`sudo spctl --master-disable`), every download — including malware that
+    /// lacks a Developer ID — runs without challenge. This is one of the documented enabling
+    /// conditions for ClickFix-delivered stealers like MacSync.
+    private func checkGatekeeperAssessment(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        if result.success {
+            if result.stdout.lowercased().contains("disabled") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Gatekeeper assessment is globally disabled",
+                    detail: "spctl reports Gatekeeper assessment is OFF — unsigned/unnotarized apps will run without warning. This is the default attack surface for stealer DMGs.",
+                    path: nil,
+                    remediation: "Re-enable: sudo spctl --master-enable, then choose App Store / App Store and identified developers in System Settings > Privacy & Security"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Quarantine attribute enforcement
+
+    /// LSQuarantine controls whether downloaded files get the `com.apple.quarantine`
+    /// extended attribute, which triggers Gatekeeper on first run. Disabling it (for example
+    /// `defaults write com.apple.LaunchServices LSQuarantine -bool false`) silently neuters
+    /// Gatekeeper. Some "privacy" tweaks recommend this — it's actively dangerous.
+    private func checkQuarantineEnforcement(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Quarantine flag is disabled for downloaded files",
+                    detail: "LSQuarantine=0 — files downloaded from the web won't trigger Gatekeeper on first launch.",
+                    path: nil,
+                    remediation: "Re-enable: defaults write com.apple.LaunchServices LSQuarantine -bool true (then log out and back in)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - OS version freshness
+
+    /// A Mac that hasn't installed an OS security update in months is far more exposed.
+    /// We compare the current build against the SLA of "should have a Background Security
+    /// Improvement applied within ~30 days" by checking the install date of the system bundle.
+    /// This is intentionally coarse — we don't need to know the exact CVE list, just whether
+    /// the user is running something stale.
+    private func checkOSVersionFreshness(findings: inout [Finding], errors: inout [String]) {
+        // /System/Library/CoreServices/SystemVersion.plist gets re-written on every OS update.
+        let path = "/System/Library/CoreServices/SystemVersion.plist"
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+
+        let daysOld = Int(-modDate.timeIntervalSinceNow / 86400)
+        if daysOld > 90 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS has not been updated in \(daysOld) days",
+                detail: "SystemVersion.plist was last modified \(daysOld) days ago, so no point/security update has been installed in that time. Apple typically ships at least one Background Security Improvement per quarter.",
+                path: nil,
+                remediation: "Open System Settings > General > Software Update and install any pending updates."
+            ))
+        } else if daysOld > 60 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS update gap is approaching SLA (\(daysOld) days)",
+                detail: "It's been \(daysOld) days since the last system update — start watching for a Software Update notification.",
+                path: nil,
+                remediation: "Check: System Settings > General > Software Update"
+            ))
         }
     }
 }

@@ -434,6 +434,167 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS infostealers and RATs (ClickFix-era).
+        // Distributed via fake browser updates, fake Visual Studio installers,
+        // recruiter-impersonation lures, and clipboard-injected curl|sh one-liners.
+        SpywareSignature(
+            // Reported by Proofpoint/Wazuh: payload registers a Wails-built Mach-O via
+            // launchservicesd as a foreground app. Distributed as fake Safari/Chrome updates.
+            name: "FrigidStealer",
+            processNames: ["ddaolimaki-daunito", "Safari Updater", "Safari-Updater", "Chrome Updater"],
+            bundleIdentifiers: ["com.wails.ddaolimaki-daunito"],
+            filePaths: [
+                "/Volumes/Safari Updater",
+                "/Volumes/Chrome Updater",
+                "~/Library/Application Support/.frigid",
+                "/private/tmp/.frigid",
+            ],
+            launchAgentLabels: ["com.wails.ddaolimaki-daunito"]
+        ),
+        SpywareSignature(
+            // Lazarus-attributed; masquerades as Visual Studio updates. Targets Safari cookies,
+            // keychains, and SSH keys.
+            name: "Koi Stealer",
+            processNames: ["Koi", "koi_stealer", "VisualStudioUpdate", "VSCodeUpdater"],
+            bundleIdentifiers: ["com.koi.stealer", "com.microsoft.visualstudio.update"],
+            filePaths: [
+                "/private/tmp/.koi",
+                "~/Library/Application Support/.Koi",
+            ],
+            launchAgentLabels: ["com.microsoft.visualstudio.update"]
+        ),
+        SpywareSignature(
+            // Multi-stage stealer disclosed late 2025 — heavy AV evasion, masquerades as utility apps.
+            name: "DigitStealer",
+            processNames: ["DigitStealer", "digit_stealer", "DigitDmg", "DigitInstaller"],
+            bundleIdentifiers: ["com.digit.stealer"],
+            filePaths: [
+                "/private/tmp/.digit",
+                "~/Library/Application Support/.Digit",
+            ],
+            launchAgentLabels: ["com.digit.stealer"]
+        ),
+        SpywareSignature(
+            // ClickFix-delivered; bypasses Gatekeeper warnings via signed-but-revoked dev IDs.
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync", "macsyncd"],
+            bundleIdentifiers: ["com.macsync.stealer", "com.macsync.helper"],
+            filePaths: [
+                "/private/tmp/.macsync",
+                "~/Library/Application Support/.MacSync",
+            ],
+            launchAgentLabels: ["com.macsync.helper", "com.macsync.stealer"]
+        ),
+        SpywareSignature(
+            // Tracked initially as NukeChain. Python/Nuitka-compiled, distributed via ClickFix.
+            name: "Infiniti Stealer",
+            processNames: ["Infiniti", "infiniti_stealer", "NukeChain", "nukechain"],
+            bundleIdentifiers: ["com.infiniti.stealer", "com.nukechain.agent"],
+            filePaths: [
+                "/private/tmp/.infiniti",
+                "/private/tmp/.nukechain",
+                "~/Library/Application Support/.Infiniti",
+            ],
+            launchAgentLabels: ["com.infiniti.stealer", "com.nukechain.agent"]
+        ),
+        SpywareSignature(
+            // Atomic-derivative stealer with persistence and remote-access capabilities (SHub v2.0).
+            name: "SHub Stealer",
+            processNames: ["SHub", "shub_stealer", "shub_v2"],
+            bundleIdentifiers: ["com.shub.stealer", "com.shub.v2"],
+            filePaths: [
+                "/private/tmp/.shub",
+                "~/Library/Application Support/.SHub",
+            ],
+            launchAgentLabels: ["com.shub.stealer", "com.shub.v2"]
+        ),
+        SpywareSignature(
+            // Lazarus-linked. Hides payloads in extended attributes of innocuous-looking
+            // Mach-O binaries. DeepScanner has dedicated xattr-payload heuristics for this family.
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "xattr_loader", "AttributeReader"],
+            bundleIdentifiers: ["com.rustyattr.agent"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.rustyattr.agent"]
+        ),
+        SpywareSignature(
+            // Rust-based macOS backdoor (BlackBasta-linked) impersonating Visual Studio updates.
+            // Reported persistence stashes include ~/Library/zsh_env / ~/Library/zshenv.
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioInstaller", "vsupdate"],
+            bundleIdentifiers: ["com.rustdoor.agent", "com.microsoft.vs.installer"],
+            filePaths: [
+                "/private/var/tmp/.rustdoor",
+                "~/Library/Application Support/.RustDoor",
+                "~/Library/zsh_env",
+                "~/Library/zshenv",
+            ],
+            launchAgentLabels: ["com.rustdoor.agent", "com.microsoft.vs.installer"]
+        ),
+        SpywareSignature(
+            // Cross-platform RAT ported to macOS in 2024/2025; persists via LaunchAgent + AppleScript.
+            name: "HZ RAT",
+            processNames: ["HZRat", "hz_rat", "HZAgent", "OpenVPNConnect.helper"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.HZRAT",
+            ],
+            launchAgentLabels: ["com.hzrat.agent"]
+        ),
+        SpywareSignature(
+            // North-Korea-linked Ferret family (FlexibleFerret, FROSTYFERRET, FRIENDLYFERRET).
+            // Delivered via fake recruiter interview lures ("Contagious Interview").
+            name: "Ferret (Contagious Interview)",
+            processNames: ["FlexibleFerret", "FROSTYFERRET", "FRIENDLYFERRET",
+                           "ChromeUpdate", "FerretUpdater", "macshareKit"],
+            bundleIdentifiers: ["com.ferret.agent", "com.flexibleferret.agent"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.Ferret",
+                "~/Library/.ChromeUpdater",
+            ],
+            launchAgentLabels: ["com.ferret.agent", "com.flexibleferret.agent"]
+        ),
+        SpywareSignature(
+            // ClickFix-delivered custom RAT (Arete IR, 2025).
+            name: "MimicRAT",
+            processNames: ["MimicRAT", "mimicrat", "mimic_helper"],
+            bundleIdentifiers: ["com.mimicrat.agent"],
+            filePaths: [
+                "/private/tmp/.mimic",
+                "~/Library/Application Support/.MimicRAT",
+            ],
+            launchAgentLabels: ["com.mimicrat.agent"]
+        ),
+        SpywareSignature(
+            // Lazarus-linked JavaScript-loader + Python backdoor pair, dropped via fake job offers.
+            // ~/.npl is the documented staging directory.
+            name: "BeaverTail / InvisibleFerret",
+            processNames: ["BeaverTail", "beavertail", "invisibleferret",
+                           "InvisibleFerret", "main99_77", "p2_77"],
+            bundleIdentifiers: ["com.beavertail.agent"],
+            filePaths: [
+                "~/.npl",
+                "~/Library/Application Support/.beavertail",
+                "/private/tmp/.invisibleferret",
+            ],
+            launchAgentLabels: ["com.beavertail.agent"]
+        ),
+        SpywareSignature(
+            // 2025 AMOS variants ship with a persistent backdoor and broader keychain enumeration.
+            name: "Atomic Stealer (AMOS) v2",
+            processNames: ["AMOSv2", "amos_v2", "amos_helper", "AppleSiliconStealer"],
+            bundleIdentifiers: ["com.amos.helper", "com.amos.v2"],
+            filePaths: [
+                "/private/tmp/.amosv2",
+                "~/Library/Application Support/.AMOSv2",
+            ],
+            launchAgentLabels: ["com.amos.helper", "com.amos.v2"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

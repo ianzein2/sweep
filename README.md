@@ -72,17 +72,24 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, PrivilegedHelperTools, DirectoryServices/SecurityAgent plugins, modern background items (SMAppService), and shell-history ClickFix indicators |
+| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk; flags browser credential / crypto wallet data staged for exfiltration |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy / PAC URL hijacking |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari and VSCode/Cursor/Windsurf extensions for dangerous permissions and known malicious families |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, RustyAttr-style xattr payload smuggling, recent risky downloads from the Quarantine database, and AppleScript drops in /tmp |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, Rapid Security Responses, Background Security Improvements (Tahoe 26.1+), Safari fingerprinting protection, Gatekeeper assessment, LSQuarantine enforcement, and macOS update freshness |
+
+### Threat coverage
+
+Built-in spyware/malware signatures include legacy stalkerware (mSpy, FlexiSpy, Refog, Spyrix, WebWatcher, KidsGuard, …),
+APT/enterprise tooling (Pegasus, Predator, DazzleSpy, CloudMensis, XCSSET, Chrysaor),
+the 2023–2025 macOS infostealer wave (AMOS, Banshee, Cthulhu, Poseidon, MetaStealer, Cuckoo, Realst, MacStealer, PureLand, Activator),
+and 2025–2026 ClickFix-era families: **FrigidStealer**, **Koi Stealer**, **DigitStealer**, **MacSync**, **Infiniti / NukeChain**, **SHub Stealer v2**, **RustyAttr**, **RustDoor**, **HZ RAT**, **Ferret / FlexibleFerret**, **MimicRAT**, **BeaverTail / InvisibleFerret**, and **AMOS v2**.
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking PrivilegedHelperTools")
+        scanPrivilegedHelperTools(findings: &findings, errors: &errors)
+
+        progress?.update("checking DirectoryServices plugins")
+        scanDirectoryServicesPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking authorization plugins")
+        scanAuthorizationPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking shell history for ClickFix indicators")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
+        progress?.update("checking modern background items")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +690,237 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Privileged Helper Tools
+
+    /// /Library/PrivilegedHelperTools is the canonical SMJobBless drop site for elevated
+    /// helpers. Each binary here runs as root on demand; spyware (e.g. RustDoor variants)
+    /// installs unsigned helpers here to keep a privileged foothold even after the user-level
+    /// LaunchAgent is removed.
+    private func scanPrivilegedHelperTools(findings: inout [Finding], errors: inout [String]) {
+        let dir = "/Library/PrivilegedHelperTools"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir),
+              let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let path = "\(dir)/\(entry)"
+            // Skip Apple-vendored helpers, which use reverse-domain Apple bundle IDs.
+            if entry.hasPrefix("com.apple.") { continue }
+
+            // Match against known spyware first.
+            if let sig = SpywareSignature.match(processName: entry) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware privileged helper: \(sig.name)",
+                    detail: "PrivilegedHelperTool runs as root on demand: \(entry)",
+                    path: path,
+                    remediation: "Remove the helper and its plist: sudo rm \"\(path)\""
+                ))
+                continue
+            }
+
+            // Unsigned privileged helpers are a red flag — Apple's tooling won't bless them.
+            if !checkIsSigned(path: path) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Unsigned privileged helper tool",
+                    detail: "Helper: \(entry) — runs as root via SMJobBless, but is not validly signed",
+                    path: path,
+                    remediation: "Inspect, then remove if unrecognized: sudo rm \"\(path)\""
+                ))
+            } else {
+                // Even legitimate helpers should be inventoried so the user can audit them.
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Privileged helper tool installed",
+                    detail: "Helper: \(entry) — runs as root on demand for some app you've installed",
+                    path: path,
+                    remediation: "Confirm this matches an app you trust"
+                ))
+            }
+        }
+    }
+
+    // MARK: - DirectoryServices plugins
+
+    /// /Library/DirectoryServices/PlugIns and /Library/OpenDirectory/Plugins are loaded by
+    /// opendirectoryd, which authenticates users. Plugins here can intercept every login.
+    /// The directories are empty by default; any non-Apple plugin is highly suspicious.
+    private func scanDirectoryServicesPlugins(findings: inout [Finding], errors: inout [String]) {
+        let dirs = [
+            "/Library/DirectoryServices/PlugIns",
+            "/Library/OpenDirectory/Plugins",
+        ]
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "DirectoryServices plugin installed",
+                    detail: "Plugin: \(entry) in \(dir) — directory plugins run inside opendirectoryd and can intercept logins",
+                    path: path,
+                    remediation: "Remove if unexpected: sudo rm -rf \"\(path)\" — these directories are empty by default"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Authorization plugins
+
+    /// /Library/Security/SecurityAgentPlugins is loaded by the SecurityAgent during login
+    /// and authorization prompts. A rogue plugin here observes (or substitutes) every macOS
+    /// password prompt — a textbook credential theft vector.
+    private func scanAuthorizationPlugins(findings: inout [Finding], errors: inout [String]) {
+        let dir = "/Library/Security/SecurityAgentPlugins"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir),
+              let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let path = "\(dir)/\(entry)"
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Authorization plugin installed (SecurityAgent)",
+                detail: "Plugin: \(entry) — runs inside the macOS authentication prompt and can capture passwords",
+                path: path,
+                remediation: "Verify this plugin is from a vendor you trust (e.g. Centrify/JumpCloud SSO). If not, remove: sudo rm -rf \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - ClickFix indicators in shell history
+
+    /// ClickFix campaigns trick users into copy-pasting a one-liner that downloads and runs
+    /// a stage-2 payload. The hallmark IOCs are:
+    /// - `osascript` invocations that read a remote URL,
+    /// - `curl ... | sh` / `curl ... | bash` chains,
+    /// - `applescript://` URL handler invocations,
+    /// - `osascript -e` blocks containing `do shell script ... with administrator privileges`.
+    /// Shell history is the most reliable place to spot these after the fact.
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+        ]
+
+        // Patterns are checked against lowercased lines for case-insensitive matching.
+        let clickFixPatterns: [(pattern: String, label: String)] = [
+            ("curl -ss",                 "curl -sS one-liner (typical of ClickFix payloads)"),
+            ("curl -fssl",               "curl -fsSL one-liner (typical of ClickFix payloads)"),
+            ("| sh",                      "pipe-to-shell"),
+            ("| bash",                    "pipe-to-bash"),
+            ("| zsh",                     "pipe-to-zsh"),
+            ("|sh -",                     "pipe-to-shell"),
+            ("|bash -",                   "pipe-to-bash"),
+            ("osascript -e",              "inline AppleScript invocation"),
+            ("with administrator privileges", "AppleScript privilege escalation"),
+            ("applescript://",            "applescript:// URL handler (ClickFix Script Editor lure)"),
+            ("base64 -d | bash",          "base64-decode-then-execute"),
+            ("base64 --decode | sh",      "base64-decode-then-execute"),
+            ("python3 -c \"import urllib", "inline Python download-and-run"),
+            ("python -c \"import urllib", "inline Python download-and-run"),
+            ("eval \"$(curl",              "eval of curl output"),
+            ("eval \"$(wget",              "eval of wget output"),
+        ]
+
+        for histPath in historyFiles {
+            guard let content = try? String(contentsOfFile: histPath, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: histPath).lastPathComponent
+            let lines = content.components(separatedBy: "\n")
+
+            // We only need to flag once per match — accumulate distinct hits per file.
+            var matched: [(line: Int, snippet: String, label: String)] = []
+            for (idx, raw) in lines.enumerated() {
+                // zsh extended history entries look like `: 1709:0;<command>` — strip the prefix
+                // so the patterns match the actual command.
+                let line: String
+                if raw.hasPrefix(":") {
+                    if let semi = raw.firstIndex(of: ";") {
+                        line = String(raw[raw.index(after: semi)...])
+                    } else { line = raw }
+                } else {
+                    line = raw
+                }
+                let lower = line.lowercased()
+
+                // Skip the obvious safe shape — package managers like Homebrew often print
+                // `curl ... | bash` in their own install instructions, but those are typed by users.
+                // We still surface them — better a false positive than a missed compromise.
+                for (pattern, label) in clickFixPatterns {
+                    if lower.contains(pattern) {
+                        matched.append((idx + 1, String(line.prefix(140)), label))
+                        break
+                    }
+                }
+                if matched.count >= 5 { break }   // cap noise per history file
+            }
+
+            for hit in matched {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "ClickFix-style command found in \(fileName)",
+                    detail: "Line \(hit.line): \(hit.label) — \(hit.snippet)",
+                    path: histPath,
+                    remediation: "If you don't recognize this command, treat the Mac as compromised: rotate browser-saved passwords, revoke OAuth tokens, and run sweep --fix to remove unsigned LaunchAgents."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Modern background items (SMAppService — macOS 13+)
+
+    /// Since macOS 13 Apple introduced "Background Items" managed by SMAppService and
+    /// surfaced in System Settings > General > Login Items & Extensions. Their state is held
+    /// in `/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v*.btm`, a
+    /// binary plist that's only readable as root. We do a coarse string scan against known
+    /// spyware identifiers — full parsing requires private SPI.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let btmPaths: [String]
+        let fm = FileManager.default
+        let btmDir = "/private/var/db/com.apple.backgroundtaskmanagement"
+        if let entries = try? fm.contentsOfDirectory(atPath: btmDir) {
+            btmPaths = entries
+                .filter { $0.hasPrefix("BackgroundItems-") && $0.hasSuffix(".btm") }
+                .map { "\(btmDir)/\($0)" }
+        } else {
+            btmPaths = []
+        }
+
+        guard !btmPaths.isEmpty else { return }
+        // Only readable as root; fail quietly otherwise so we don't spam errors.
+        guard getuid() == 0 else { return }
+
+        for path in btmPaths {
+            guard let data = fm.contents(atPath: path) else { continue }
+            // The btm file is a binary plist with embedded UTF-8/16 strings. A simple substring
+            // match against known spyware bundle IDs / labels is enough to flag them.
+            guard let asString = String(data: data, encoding: .utf8) ??
+                                 String(data: data, encoding: .utf16LittleEndian) else { continue }
+
+            for sig in SpywareSignature.known {
+                let needles = sig.bundleIdentifiers + sig.launchAgentLabels
+                for needle in needles where !needle.isEmpty {
+                    if asString.contains(needle) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware registered as background item: \(sig.name)",
+                            detail: "Identifier '\(needle)' present in BackgroundItems database",
+                            path: path,
+                            remediation: "System Settings > General > Login Items & Extensions — toggle off and uninstall \(sig.name)"
+                        ))
+                        break
+                    }
+                }
+            }
         }
     }
 
