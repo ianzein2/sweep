@@ -105,6 +105,67 @@ public final class PersistenceScanner: Scanner {
             executablePath = first
         }
 
+        // Modern macOS stealers (AMOS, Boltzmann, FrostyFerret, FrigidStealer) use
+        // ProgramArguments full of `osascript -e` / `bash -c "curl | sh"` payloads to phish
+        // the login password on every login. Inspect the joined arguments for these patterns.
+        if let args = plist["ProgramArguments"] as? [String] {
+            let joined = args.joined(separator: " ")
+            let lower = joined.lowercased()
+            let hasOsascriptPasswordPrompt = lower.contains("osascript") &&
+                (lower.contains("display dialog") || lower.contains("with hidden answer") ||
+                 lower.contains("password"))
+            let hasShellDownloadExec = (lower.contains("curl ") || lower.contains("wget ")) &&
+                (lower.contains("|") && (lower.contains(" sh") || lower.contains("bash")))
+            let hasBase64Decode = lower.contains("base64") &&
+                (lower.contains("--decode") || lower.contains(" -d ") || lower.contains(" -d\""))
+            let hasInlinePython = lower.contains("python") && lower.contains(" -c ") &&
+                (lower.contains("import") || lower.contains("__import__"))
+
+            if hasOsascriptPasswordPrompt {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent prompts for the user's password via osascript",
+                    detail: "Label: \(label), Args: \(String(joined.prefix(160))) — a hallmark of AMOS / FrostyFerret stealers",
+                    path: path,
+                    remediation: "Remove this plist immediately and rotate any password you may have entered: sudo rm \"\(path)\""
+                ))
+                return
+            }
+            if hasShellDownloadExec {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent downloads and executes a remote script",
+                    detail: "Label: \(label) — args contain a curl|sh / wget|bash chain: \(String(joined.prefix(160)))",
+                    path: path,
+                    remediation: "Remove this plist: sudo rm \"\(path)\" — then audit shell history for what was fetched"
+                ))
+                return
+            }
+            if hasBase64Decode || hasInlinePython {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent decodes/runs an obfuscated payload",
+                    detail: "Label: \(label) — \(hasBase64Decode ? "base64-decoded" : "inline python") payload: \(String(joined.prefix(160)))",
+                    path: path,
+                    remediation: "Inspect the encoded payload, then remove: sudo rm \"\(path)\""
+                ))
+                return
+            }
+
+            // RustyAttr (BlueNoroff, 2024) reads its payload back from extended attributes via
+            // `xattr -p`. A LaunchAgent that does this is reading a hidden Mach-O / script.
+            if lower.contains("xattr") && lower.contains("-p") {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent reads payload from extended attributes (RustyAttr pattern)",
+                    detail: "Label: \(label) — reads xattr metadata via `xattr -p`: \(String(joined.prefix(160)))",
+                    path: path,
+                    remediation: "Inspect the source file's xattrs (`xattr -l`) for hidden code, then remove the plist"
+                ))
+                return
+            }
+        }
+
         // Check against known spyware labels
         if let sig = SpywareSignature.match(label: label) {
             findings.append(Finding(

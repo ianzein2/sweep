@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server configuration")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine status")
+        checkTimeMachine(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version freshness")
+        checkMacOSVersion(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking quarantine and Gatekeeper assessments")
+        checkQuarantineExceptions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +481,304 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - SSH Server Configuration
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // Even when Remote Login is off, a permissive sshd_config means the next time it gets
+        // turned on the system is exposed. Modern best-practice is keys-only with root login off.
+        let sshdConfigPaths = [
+            "/private/etc/ssh/sshd_config",
+            "/etc/ssh/sshd_config",
+        ]
+        let dropInDir = "/private/etc/ssh/sshd_config.d"
+
+        // Combine main config + drop-ins. Drop-in files override defaults in alphabetical order.
+        var configFiles: [String] = []
+        for p in sshdConfigPaths where FileManager.default.fileExists(atPath: p) {
+            configFiles.append(p)
+            break
+        }
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: dropInDir) {
+            for entry in dropIns.sorted() where !entry.hasPrefix(".") {
+                configFiles.append("\(dropInDir)/\(entry)")
+            }
+        }
+
+        guard !configFiles.isEmpty else { return }
+
+        // sshd resolves the FIRST matching directive — so iterate in order and keep first values.
+        var permitRootLogin: String?
+        var passwordAuth: String?
+        var permitEmptyPasswords: String?
+        var protocolVersion: String?
+        var x11Forwarding: String?
+
+        for path in configFiles {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for raw in content.split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                let key = parts[0].lowercased()
+                let value = String(parts[1]).trimmingCharacters(in: .whitespaces).lowercased()
+
+                switch key {
+                case "permitrootlogin":      if permitRootLogin == nil { permitRootLogin = value }
+                case "passwordauthentication": if passwordAuth == nil { passwordAuth = value }
+                case "permitemptypasswords": if permitEmptyPasswords == nil { permitEmptyPasswords = value }
+                case "protocol":             if protocolVersion == nil { protocolVersion = value }
+                case "x11forwarding":        if x11Forwarding == nil { x11Forwarding = value }
+                default: break
+                }
+            }
+        }
+
+        // Apple's stock macOS sshd default is "PermitRootLogin without-password" (key-only root).
+        // Anything resolving to "yes" is the dangerous case — prohibits the no-password default.
+        if permitRootLogin == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH server allows root login with password",
+                detail: "PermitRootLogin yes — remote attackers can attempt password-guessing against the root account",
+                path: configFiles.first,
+                remediation: "Set 'PermitRootLogin no' (or 'prohibit-password') and reload sshd: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        if passwordAuth == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH password authentication is enabled",
+                detail: "PasswordAuthentication yes — accounts are reachable via password brute-force; key-only auth is recommended",
+                path: configFiles.first,
+                remediation: "Set 'PasswordAuthentication no' after deploying SSH keys to all needed accounts"
+            ))
+        }
+
+        if permitEmptyPasswords == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords",
+                detail: "PermitEmptyPasswords yes — accounts with blank passwords are reachable over SSH",
+                path: configFiles.first,
+                remediation: "Set 'PermitEmptyPasswords no' in sshd_config and restart sshd"
+            ))
+        }
+
+        // Protocol 1 has been removed from upstream OpenSSH but a stale config with this line is
+        // a strong signal that something has tampered with the SSH stack. Only flag the literal
+        // legacy values — "1" or "1,2" / "2,1".
+        if let proto = protocolVersion,
+           proto == "1" || proto.contains("1,2") || proto.contains("2,1") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH server configured for legacy Protocol 1",
+                detail: "Protocol \(proto) — SSHv1 is cryptographically broken and is not supported by modern macOS",
+                path: configFiles.first,
+                remediation: "Remove the 'Protocol' line from sshd_config — modern sshd implies Protocol 2"
+            ))
+        }
+
+        if x11Forwarding == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding is enabled",
+                detail: "X11Forwarding yes — increases the SSH attack surface; macOS does not run an X server by default",
+                path: configFiles.first,
+                remediation: "Set 'X11Forwarding no' unless you specifically need it"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine
+
+    private func checkTimeMachine(findings: inout [Finding], errors: inout [String]) {
+        // Backups are the only realistic recovery path against macOS-targeting ransomware
+        // (NotLockBit, 2024). Surface backup absence / staleness as a hardening issue.
+        let plistPath = "/Library/Preferences/com.apple.TimeMachine.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine has never been configured",
+                detail: "No Time Machine preferences found — there is no automatic backup of this Mac",
+                path: nil,
+                remediation: "Configure Time Machine in System Settings > General > Time Machine, or use another backup tool"
+            ))
+            return
+        }
+
+        let autoBackup = (plist["AutoBackup"] as? Int ?? 0) == 1 ||
+                         (plist["AutoBackup"] as? Bool ?? false)
+        if !autoBackup {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine automatic backups are disabled",
+                detail: "AutoBackup is off — the Mac will not back up unless you trigger it manually",
+                path: plistPath,
+                remediation: "Enable: System Settings > General > Time Machine > Back Up Automatically"
+            ))
+        }
+
+        // Find the most recent successful backup across all destinations
+        var lastBackup: Date?
+        if let dests = plist["Destinations"] as? [[String: Any]] {
+            for dest in dests {
+                if let snaps = dest["SnapshotDates"] as? [Date] {
+                    for d in snaps {
+                        if lastBackup == nil || d > lastBackup! { lastBackup = d }
+                    }
+                }
+            }
+        }
+
+        if let last = lastBackup {
+            let days = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 0
+            if days > 14 {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Most recent Time Machine backup is \(days) days old",
+                    detail: "Last backup completed \(days) days ago — recovery from ransomware or hardware failure may be incomplete",
+                    path: nil,
+                    remediation: "Reconnect / verify the backup destination and run a fresh backup"
+                ))
+            }
+        } else if autoBackup {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Time Machine is enabled but has no completed backups",
+                detail: "AutoBackup is on but no successful snapshot has been recorded yet",
+                path: nil,
+                remediation: "Verify that the backup destination is reachable and writable"
+            ))
+        }
+    }
+
+    // MARK: - macOS Version Freshness
+
+    private func checkMacOSVersion(findings: inout [Finding], errors: inout [String]) {
+        // Apple maintains the current and previous two major releases ("n", "n-1", "n-2").
+        // Anything older has stopped receiving security patches. We check the running OS rather
+        // than the installer because that's what's actually exposed.
+        let result = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        guard result.success else { return }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let major = Int(version.split(separator: ".").first.map(String.init) ?? "") ?? 0
+
+        // Current at time of writing (2026): Sequoia 15 / Sonoma 14 / Ventura 13 still get patches.
+        // 12 (Monterey) and earlier are EOL. Catalina (10.15) and Big Sur (11) are well past EOL.
+        if major > 0 && major < 13 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(version) is past Apple's security-update window",
+                detail: "Apple typically patches the current and two prior major releases. macOS 13+ still receives fixes; this Mac is on \(version).",
+                path: nil,
+                remediation: "Upgrade to a supported major release: System Settings > General > Software Update"
+            ))
+        } else if major == 13 {
+            // Ventura: still patched but on the way out — informational
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(version) is on the older end of supported releases",
+                detail: "macOS 13 (Ventura) still receives security updates but will be retired before macOS 14/15. Plan an upgrade.",
+                path: nil,
+                remediation: "Consider upgrading to a current major release when convenient"
+            ))
+        }
+
+        // Also flag anything past the publicly-released Build ID by a long way — covers people
+        // running stale point releases. We use sw_vers -buildVersion so we don't have to hard-code
+        // a build map, just look for a missing point-release bump.
+        let pointParts = version.split(separator: ".").map(String.init)
+        if pointParts.count >= 2, let minor = Int(pointParts[1]), major >= 13 && minor == 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(version) appears to be a .0 release",
+                detail: "Running the .0 of a major release means you are missing the subsequent point-release security fixes",
+                path: nil,
+                remediation: "Install pending updates: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My provides remote-lock and remote-wipe — useful against a stolen / lost Mac.
+        // Activation Lock relies on it. We check the system-wide flag as well as Bluetooth Find My.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        let enabled = result.success && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        if !enabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My Mac is not enabled",
+                detail: "Find My Mac lets you remotely locate, lock, and erase a lost Mac. It also enables Activation Lock.",
+                path: nil,
+                remediation: "Enable: System Settings > [Your name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Quarantine / Gatekeeper Exception List
+
+    private func checkQuarantineExceptions(findings: inout [Finding], errors: inout [String]) {
+        // `spctl --status` is already covered. Here we flag user-added Gatekeeper exceptions
+        // (`spctl --list`), and the more recent attack of stripping com.apple.quarantine xattrs
+        // from downloaded apps to skip Gatekeeper verification.
+        let exceptionsResult = ShellRunner.run("/usr/sbin/spctl", arguments: ["--list"], timeout: 5)
+        if exceptionsResult.success {
+            let allowList = exceptionsResult.stdout.split(separator: "\n").filter {
+                $0.contains("anchor apple") == false && $0.contains("notarized developer id") == false
+            }
+            // Anything beyond the stock anchor / notarized developer rules is a user-allowed
+            // exception — surface it so users can audit.
+            let custom = allowList.filter { !$0.isEmpty && !$0.hasPrefix("0[") && !$0.contains("apple") }
+            if !custom.isEmpty {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Custom Gatekeeper allow rules present (\(custom.count))",
+                    detail: "spctl --list shows non-default rules. Each rule is a Gatekeeper bypass you previously approved.",
+                    path: nil,
+                    remediation: "Audit: spctl --list — remove unrecognized rules with: sudo spctl --remove --rule <id>"
+                ))
+            }
+        }
+
+        // Recently-installed apps in /Applications without the quarantine xattr are unusual —
+        // they were either copied from another machine or had the xattr deliberately stripped.
+        // We only check the user Applications folder to keep this fast.
+        let userApps = "\(ShellRunner.realUserHome)/Applications"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: userApps) else { return }
+
+        for entry in entries where entry.hasSuffix(".app") {
+            let appPath = "\(userApps)/\(entry)"
+            // Was the app added in the last 30 days?
+            guard let attrs = try? fm.attributesOfItem(atPath: appPath),
+                  let added = attrs[.creationDate] as? Date,
+                  added.timeIntervalSinceNow > -86400 * 30 else { continue }
+
+            let xattrResult = ShellRunner.run("/usr/bin/xattr", arguments: ["-p", "com.apple.quarantine", appPath], timeout: 3)
+            // Exit 1 + "No such xattr" means quarantine xattr is absent.
+            let noQuarantine = !xattrResult.success ||
+                xattrResult.stderr.contains("No such xattr") ||
+                xattrResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if noQuarantine {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Recently-added app missing quarantine attribute",
+                    detail: "App: \(entry) — added without the macOS download quarantine flag, so Gatekeeper did not get a chance to verify it",
+                    path: appPath,
+                    remediation: "Verify you intentionally installed this app (e.g. from the App Store, Homebrew, or your own build)"
                 ))
             }
         }

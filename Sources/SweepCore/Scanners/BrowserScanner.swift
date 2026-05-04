@@ -11,10 +11,59 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2025 confirmed malicious VSCode / OpenVSX extensions (ReversingLabs, Aikido,
+        // ExtensionTotal, Phylum). Match by publisher.name fragments.
+        "ahban.shitcoin",                       // 2024 ReversingLabs report
+        "ahban.cychelloworld",                  // typo-squat dropper
+        "vscode-ext-trojanized",
+        "evaondev.evondevvscode",               // confirmed 2024
+        "linkedin.helper",                      // fake LinkedIn extension
+        "screenshot-tool-crypto",
+        "material-theme-dark-pro",              // typo-squat of legit theme
+        "darcula-theme-pro",                    // Aikido 2024 disclosure
+        "solidity-language",                    // Juan Blanco impersonator
+        "chatgpt-autocomplete-helper",          // 2024 ExtensionTotal
+        "claude-vscode-helper",                 // 2024 typo-squat (no real Anthropic ext)
+        "cursor-completion-pro",                // 2024 typo-squat
+        "react-snippets-pro",                   // typo-squat / JS injection
+        "solana-vscode",                        // wallet-drainer family
+        "ethereum-tools",                       // wallet-drainer family
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Additional 2024-2025 keywords seen in malicious editor extensions
+        "wallet-drainer", "seedphrase", "private-key", "rootkit", "backdoor",
+        "rootshell", "metamask-helper", "phantom-helper",
+    ]
+
+    /// Specific exfil-IOC strings (domains, command shells) that have been published in
+    /// indicator lists for malicious editor / browser extensions. Matched literally inside
+    /// extension JS to catch unobfuscated samples.
+    private let editorExtIOCStrings: [String] = [
+        "raw.githubusercontent.com/sandeep-001/",  // Lazarus-linked GitHub username
+        "yarn-pkg.org",                            // typo-squat npm registry IOC
+        "pastebin.com/raw/",                       // common stealer C2 stage
+        "transfer.sh/",                            // exfil endpoint family
+        "polyfill.io",                             // Polyfill supply-chain compromise
+        "/tmp/.X11-unix/",                         // Unix-y staging path on macOS
+    ]
+
+    /// Chrome extension IDs that public threat intel has tied to credential / cookie theft
+    /// campaigns. (Some are also-banned-by-Google, but stay installed if user pinned them.)
+    private let knownMaliciousChromeExtIds: Set<String> = [
+        // Cyberhaven / Lasso et al. compromise (Dec 2024 - Jan 2025) — supply-chain attack
+        // that pushed cookie-stealing builds to legitimate publishers.
+        "ndlbedplllcgconngcnfmkadhokfaaln",  // Cyberhaven
+        "pajkjnmeojmbapicmbpliphjmcekeaac",  // Internxt VPN (compromised)
+        "fbjfihoienmhbjflbobnmimfijpngkpa",  // VPNCity (compromised)
+        "kkodiihpgodmdankclfibbiphjkfdenh",  // Uvoice (compromised)
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji",  // ParrotTalks (compromised)
+        "ohnoanibjnnidhmjmjijminpnpaeohpj",  // Bookmark Favicon Changer (compromised)
+        // ExtensionTotal Dec 2024 batch
+        "acmacodkjbdgmoleebolmdjonilkdbch",  // Reader Mode (malicious build)
+        "mnhffkhmpnefgklngfmlndmkimimbphc",  // Castorus (malicious build)
+        "egmennebgadmncfjafcemlecimkepcle",  // VidHelper (malicious build)
     ]
 
     // Extensions that are well-known and safe
@@ -198,6 +247,19 @@ public final class BrowserScanner: Scanner {
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
 
+            // Hard-match against the published list of supply-chain-compromised / malicious
+            // Chromium extensions (Cyberhaven Dec-2024 wave, ExtensionTotal disclosures).
+            if knownMaliciousChromeExtIds.contains(ext.extId) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension matches known compromised extension",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — published as malicious by threat intel",
+                    path: ext.extDir,
+                    remediation: "Remove this extension immediately and rotate any credentials entered in the browser since it was installed"
+                ))
+                continue
+            }
+
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(
                     severity: .high, category: .keylogging,
@@ -375,6 +437,17 @@ public final class BrowserScanner: Scanner {
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
                 }
+
+                // Independent of the heuristic, fail-closed if a literal IOC string appears.
+                if let ioc = scriptResult.matchedIOC {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension references known-malicious IOC",
+                        detail: "Extension: \(displayName) (\(extId)) — IOC: \"\(ioc)\"",
+                        path: extPath,
+                        remediation: "Remove this extension and inspect any code it has executed"
+                    ))
+                }
             }
         }
     }
@@ -382,6 +455,7 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+        let matchedIOC: String?
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
@@ -390,6 +464,7 @@ public final class BrowserScanner: Scanner {
         let fm = FileManager.default
         var hasRemoteExec = false
         var hasShellExec = false
+        var matchedIOC: String?
 
         let candidatePaths = [
             "\(extPath)/extension.js",
@@ -415,8 +490,17 @@ public final class BrowserScanner: Scanner {
                (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
                 hasRemoteExec = true
             }
+            // Literal IOC match — short-circuit to first hit.
+            if matchedIOC == nil {
+                for ioc in editorExtIOCStrings {
+                    if lower.contains(ioc.lowercased()) {
+                        matchedIOC = ioc
+                        break
+                    }
+                }
+            }
         }
 
-        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec, matchedIOC: matchedIOC)
     }
 }
