@@ -35,11 +35,21 @@ public final class NetworkScanner: Scanner {
     ]
 
     private let suspiciousPorts: Set<Int> = [
-        4444, 5555, 6666, 7777, 8888, 9999,  // Common RAT/C2 ports
-        1337, 31337,                           // Hacker culture ports
-        4443, 8443,                            // Alt HTTPS often used by C2
-        6667, 6668, 6669, 6697,               // IRC (used by some botnets)
-        3127, 12345, 65535,                    // Known trojan ports
+        4444, 5555, 6666, 7777, 8888, 9999,    // Common RAT/C2 ports
+        1337, 31337,                            // Hacker culture ports
+        4443, 8443,                             // Alt HTTPS often used by C2
+        6667, 6668, 6669, 6697,                 // IRC (used by some botnets)
+        3127, 12345, 65535,                     // Known trojan ports
+        // Additional C2 / loader ports seen in 2023-2025 macOS campaigns
+        50050,                                  // Cobalt Strike / Geacon team-server default
+        9001, 9030,                             // Tor relay / direct (rare on workstations)
+        2323, 23,                               // Telnet (Mirai-style botnets)
+        8181, 8082, 8089,                       // Common HTTP-based loader ports
+        4040,                                   // ngrok management (used to expose local C2)
+        5985, 5986,                             // PowerShell remoting (rare on Mac, abused on hybrid)
+        3389,                                   // RDP (rare on macOS, abused via xrdp)
+        8200,                                   // Vault/Cobalt-Strike alternate
+        2222,                                   // SSH alt — often used by reverse shells
     ]
 
     private let blockedAppleDomains: Set<String> = [

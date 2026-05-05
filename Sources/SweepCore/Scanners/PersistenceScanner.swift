@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook plugins")
+        scanQuickLookPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking color picker / input method plugins")
+        scanInputAndColorPickers(findings: &findings, errors: &errors)
+
+        progress?.update("checking ssh client config")
+        scanSSHClientConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking login window banner")
+        scanLoginWindowText(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +701,176 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Spotlight Importers (mdimporter)
+
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        // mdimporters are bundles that Spotlight loads into mdworker to extract metadata from
+        // arbitrary file types. A rogue importer runs whenever Spotlight indexes a matching file
+        // — a stealthy persistence vector that doesn't appear in launchctl or login items.
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/Spotlight",
+            "\(home)/Library/Spotlight",
+        ]
+        scanPluginDir(dirs: dirs, suffix: ".mdimporter", kind: "Spotlight importer",
+                      findings: &findings)
+    }
+
+    // MARK: - QuickLook Plugins (.qlgenerator)
+
+    private func scanQuickLookPlugins(findings: inout [Finding], errors: inout [String]) {
+        // QuickLook plugins (.qlgenerator) execute when Finder previews a file. Like mdimporters,
+        // they run silently and don't appear in standard launch lists.
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/QuickLook",
+            "\(home)/Library/QuickLook",
+        ]
+        scanPluginDir(dirs: dirs, suffix: ".qlgenerator", kind: "QuickLook plugin",
+                      findings: &findings)
+    }
+
+    // MARK: - Input Methods + Color Picker Plugins
+
+    private func scanInputAndColorPickers(findings: inout [Finding], errors: inout [String]) {
+        // Custom Input Methods (.app under /Library/Input Methods) load into every text-input
+        // session — a textbook keylogging persistence vector. Color pickers (.colorPicker) load
+        // into any app that opens the color panel.
+        let home = ShellRunner.realUserHome
+        let inputDirs = [
+            "/Library/Input Methods",
+            "\(home)/Library/Input Methods",
+        ]
+        scanPluginDir(dirs: inputDirs, suffix: ".app", kind: "custom Input Method",
+                      findings: &findings, severity: .high)
+
+        let pickerDirs = [
+            "/Library/ColorPickers",
+            "\(home)/Library/ColorPickers",
+        ]
+        scanPluginDir(dirs: pickerDirs, suffix: ".colorPicker", kind: "Color Picker plugin",
+                      findings: &findings)
+    }
+
+    /// Walks each `dirs` entry and reports any non-Apple-signed bundle ending in `suffix`.
+    private func scanPluginDir(dirs: [String], suffix: String, kind: String,
+                               findings: inout [Finding], severity: Severity = .medium) {
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(suffix) && !entry.hasPrefix(".") {
+                let bundlePath = "\(dir)/\(entry)"
+
+                // Resolve the bundle's main executable to check the signature
+                let infoPath = "\(bundlePath)/Contents/Info.plist"
+                var bundleId = "unknown"
+                if let data = fm.contents(atPath: infoPath),
+                   let info = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let id = info["CFBundleIdentifier"] as? String {
+                    bundleId = id
+                }
+
+                // Skip Apple/Microsoft-shipped plugins by bundle id
+                if bundleId.hasPrefix("com.apple.") { continue }
+
+                // Verify code signature on the bundle itself
+                let isSigned = checkIsSigned(path: bundlePath)
+                let known = SpywareSignature.match(bundleId: bundleId)
+
+                if let sig = known {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware loaded as \(kind): \(sig.name)",
+                        detail: "Bundle: \(bundleId) at \(bundlePath)",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\" — \(kind)s load silently into other processes"
+                    ))
+                } else if !isSigned {
+                    findings.append(Finding(
+                        severity: severity, category: .persistence,
+                        title: "Unsigned \(kind) installed",
+                        detail: "Bundle: \(bundleId) at \(bundlePath) — \(kind)s are loaded automatically by macOS into other processes",
+                        path: bundlePath,
+                        remediation: "Inspect, then remove if unrecognized: \"\(bundlePath)\""
+                    ))
+                } else {
+                    // Signed but third-party: still surface as low — these vectors are unusual.
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Third-party \(kind) installed",
+                        detail: "Bundle: \(bundleId) at \(bundlePath)",
+                        path: bundlePath,
+                        remediation: "Verify this is software you intentionally installed"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - SSH Client Config (~/.ssh/config)
+
+    private func scanSSHClientConfig(findings: inout [Finding], errors: inout [String]) {
+        // ProxyCommand / LocalCommand / RemoteCommand in ~/.ssh/config can run arbitrary shell
+        // any time the user runs `ssh`. Attackers add these to MITM connections or harvest creds.
+        let home = ShellRunner.realUserHome
+        let path = "\(home)/.ssh/config"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        let dangerousDirectives: [(String, String)] = [
+            ("proxycommand",  "ProxyCommand runs the given shell command on every SSH invocation"),
+            ("localcommand",  "LocalCommand runs after every successful SSH connection"),
+            ("remotecommand", "RemoteCommand runs on the remote host instead of opening a shell"),
+        ]
+
+        for (idx, line) in content.split(separator: "\n").enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            let lower = trimmed.lowercased()
+            for (directive, why) in dangerousDirectives where lower.hasPrefix(directive) {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Potentially dangerous \(directive) in ~/.ssh/config",
+                    detail: "Line \(idx + 1): \(String(trimmed.prefix(120))) — \(why)",
+                    path: path,
+                    remediation: "Review: open \(path) — remove this directive if you didn't add it"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Login Window Banner Text
+
+    private func scanLoginWindowText(findings: inout [Finding], errors: inout [String]) {
+        // The LoginwindowText preference shows a banner at login. Some malware sets this to lure
+        // users (fake "macOS update required" prompts) or as ransomware payment instructions.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.loginwindow", "LoginwindowText"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return }
+
+        // Suspicious if the banner mentions any of these themes — typical ransomware/scareware
+        // vocabulary or impersonation of system update prompts.
+        let suspiciousWords = ["bitcoin", "btc", "ransom", "decrypt", "encrypted",
+                               "wallet", "pay", "your files", "update required", "apple support"]
+        let lower = text.lowercased()
+        let matchedWord = suspiciousWords.first(where: { lower.contains($0) })
+
+        let severity: Severity = matchedWord != nil ? .high : .low
+        let prefix = String(text.prefix(140))
+        findings.append(Finding(
+            severity: severity, category: .persistence,
+            title: matchedWord != nil
+                ? "Suspicious login window banner (contains \"\(matchedWord!)\")"
+                : "Custom login window banner is set",
+            detail: "Banner text: \(prefix)\(text.count > 140 ? "..." : "")",
+            path: "/Library/Preferences/com.apple.loginwindow.plist",
+            remediation: "Remove: sudo defaults delete /Library/Preferences/com.apple.loginwindow LoginwindowText"
+        ))
     }
 }

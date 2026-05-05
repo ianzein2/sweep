@@ -55,6 +55,30 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server hardening")
+        checkSSHDConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join")
+        checkWiFiAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking firmware password (Intel)")
+        checkFirmwarePassword(findings: &findings, errors: &errors)
+
+        progress?.update("checking password policy")
+        checkPasswordPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking automatic app store updates")
+        checkAppStoreAutoUpdates(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +490,261 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - SSH Server Hardening
+
+    private func checkSSHDConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only run if Remote Login (sshd) is actually enabled — otherwise these settings are inert
+        // and would be noise. The remote-login check above already warns if SSH is on.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        guard sshState.success && sshState.stdout.lowercased().contains(": on") else { return }
+
+        // The effective sshd_config can be assembled from /etc/ssh/sshd_config plus drop-ins
+        // in /etc/ssh/sshd_config.d/. Parse line-by-line, last-wins, ignoring comments.
+        var configFiles = ["/etc/ssh/sshd_config"]
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/ssh/sshd_config.d") {
+            for entry in dropIns where entry.hasSuffix(".conf") {
+                configFiles.append("/etc/ssh/sshd_config.d/\(entry)")
+            }
+        }
+
+        var settings: [String: String] = [:]
+        for file in configFiles {
+            guard let content = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                settings[String(parts[0]).lowercased()] = String(parts[1]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+
+        // PermitRootLogin: anything other than "no"/"prohibit-password" is risky.
+        if let value = settings["permitrootlogin"]?.lowercased() {
+            if value == "yes" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "SSH allows root login with password",
+                    detail: "PermitRootLogin = yes — exposes root account to password brute-force over the network",
+                    path: "/etc/ssh/sshd_config",
+                    remediation: "Change to 'PermitRootLogin no' (or 'prohibit-password' if you need root key login)"
+                ))
+            } else if value != "no" && value != "prohibit-password" && value != "without-password" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SSH PermitRootLogin set to '\(value)'",
+                    detail: "Non-default value — verify this matches policy",
+                    path: "/etc/ssh/sshd_config",
+                    remediation: "Most users want 'PermitRootLogin no'"
+                ))
+            }
+        }
+
+        // PasswordAuthentication should be off if you've migrated to keys.
+        if let value = settings["passwordauthentication"]?.lowercased(), value == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "PasswordAuthentication = yes — vulnerable to brute-force; key-based auth is recommended",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PasswordAuthentication no' once you have an SSH key configured"
+            ))
+        }
+
+        // Empty passwords must never be allowed.
+        if let value = settings["permitemptypasswords"]?.lowercased(), value == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords",
+                detail: "PermitEmptyPasswords = yes — accounts with no password can log in remotely",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitEmptyPasswords no' immediately"
+            ))
+        }
+
+        // X11 forwarding is rarely needed on a Mac and adds remote display attack surface.
+        if let value = settings["x11forwarding"]?.lowercased(), value == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding enabled",
+                detail: "X11Forwarding = yes — adds attack surface; disable if not used",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'X11Forwarding no' unless you actively forward X11 sessions"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is a lost-device recovery feature — its absence isn't a strict CIS finding,
+        // but it's a meaningful gap on a portable device, so we surface it as informational.
+        // The activation status lives in nvram on Apple Silicon and CoreLocation prefs on Intel.
+        let result = ShellRunner.run("/usr/sbin/nvram",
+                                     arguments: ["fmm-mobileme-token-FMM"], timeout: 5)
+        // nvram returns exit code 0 with the token if Find My is configured;
+        // missing variable returns "Error getting variable" on stderr / nonzero exit.
+        let configured = result.success &&
+            !result.stdout.contains("Error") &&
+            result.stdout.contains("fmm-mobileme-token-FMM")
+        if !configured {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My Mac is not enabled",
+                detail: "Find My Mac helps locate, lock, or wipe the device if it's lost or stolen",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // Time Machine destinations may store FileVault-encrypted data, but if the *backup* itself
+        // is unencrypted, anyone with the disk can read every file you've ever had on this Mac.
+        let plist = "/Library/Preferences/com.apple.TimeMachine.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let destinations = dict["Destinations"] as? [[String: Any]] else { return }
+
+        for (idx, dest) in destinations.enumerated() {
+            // The "LastKnownEncryptionState" key is "Encrypted" / "NotEncrypted" on encrypted-capable backups.
+            let state = (dest["LastKnownEncryptionState"] as? String) ?? "Unknown"
+            let name = (dest["LastKnownVolumeName"] as? String) ?? "Destination \(idx + 1)"
+            if state == "NotEncrypted" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine backup is not encrypted",
+                    detail: "Destination \"\(name)\" stores unencrypted backups — physical access to the disk reveals all data",
+                    path: plist,
+                    remediation: "In System Settings > General > Time Machine, remove and re-add the backup with 'Encrypt Backups' checked"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join Unknown Networks
+
+    private func checkWiFiAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // Joining unknown networks automatically exposes the Mac to evil-twin / captive-portal
+        // attacks at airports, cafes, etc. Apple's default ("Ask") is safe; "Automatic" is risky.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.airport.preferences",
+            "JoinMode"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Values: "Automatic" (always join), "Preferred" (prefer known), "Ranked", "Recent", "Strongest"
+            if value == "Automatic" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Wi-Fi joins unknown networks automatically",
+                    detail: "JoinMode = Automatic — Mac auto-joins any open network, exposing it to rogue/evil-twin SSIDs",
+                    path: nil,
+                    remediation: "Set 'Ask to join networks' to On in System Settings > Wi-Fi > Advanced"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Firmware Password (Intel Macs only)
+
+    private func checkFirmwarePassword(findings: inout [Finding], errors: inout [String]) {
+        // firmwarepasswd is only meaningful on Intel Macs — Apple Silicon replaces it with the
+        // Recovery owner password tied to the iCloud account. We just note the state on Intel
+        // and skip silently otherwise.
+        let arch = ShellRunner.run("/usr/bin/uname", arguments: ["-m"], timeout: 3)
+        let isAppleSilicon = arch.success && arch.stdout.contains("arm64")
+        if isAppleSilicon { return }
+
+        let result = ShellRunner.run("/usr/sbin/firmwarepasswd", arguments: ["-check"], timeout: 5)
+        guard result.success else { return }
+        let output = (result.stdout + result.stderr).lowercased()
+
+        if output.contains("password is not set") || output.contains("not set") {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "EFI firmware password is not set",
+                detail: "An attacker with physical access can boot from external media and bypass macOS",
+                path: nil,
+                remediation: "Set in Recovery Mode: Utilities > Startup Security Utility > Firmware Password (Intel only)"
+            ))
+        }
+    }
+
+    // MARK: - Password Policy
+
+    private func checkPasswordPolicy(findings: inout [Finding], errors: inout [String]) {
+        // pwpolicy reports the system-wide account policy. macOS does not enforce a strong policy
+        // by default on personal Macs — short / never-expiring passwords are common. We surface
+        // missing complexity/length only as informational since this is a personal-Mac product,
+        // not a managed-fleet auditor.
+        let result = ShellRunner.run("/usr/bin/pwpolicy", arguments: ["-getaccountpolicies"], timeout: 5)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // pwpolicy prints "No accounts policies are set." when nothing is configured.
+        // Match leniently — wording has varied across macOS versions.
+        let lowerOut = result.stdout.lowercased()
+        if lowerOut.contains("no accounts policies") ||
+           lowerOut.contains("no account policies") ||
+           lowerOut.contains("error getting") {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "No account password policy is set",
+                detail: "macOS allows weak/short passwords by default — consider setting a minimum length",
+                path: nil,
+                remediation: "Set a policy with: sudo pwpolicy -setglobalpolicy 'minChars=12 requiresAlpha=1 requiresNumeric=1'"
+            ))
+        }
+    }
+
+    // MARK: - App Store Automatic Updates
+
+    private func checkAppStoreAutoUpdates(findings: inout [Finding], errors: inout [String]) {
+        // App Store apps that ship security fixes (browsers, password managers, IM clients) won't
+        // auto-update unless this is enabled — which leaves users exposed long after fixes ship.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.commerce", "AutoUpdate"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "App Store automatic app updates are disabled",
+                    detail: "Browsers, messengers, and password managers from the App Store won't receive security fixes automatically",
+                    path: nil,
+                    remediation: "Enable: System Settings > General > Software Update > Automatic Updates > Install App Updates"
+                ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay (iCloud+) hides client IP and DNS from network operators. If it has been
+        // disabled despite an active subscription, that may be intentional (corporate VPN) but
+        // is also a privacy regression worth surfacing.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "NSPDisablePrivateRelay"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Private Relay (iCloud+) is turned off — your IP and DNS are visible to networks and Apple-domain trackers",
+                    path: nil,
+                    remediation: "Enable in System Settings > [Your Name] > iCloud > Private Relay (requires iCloud+)"
                 ))
             }
         }

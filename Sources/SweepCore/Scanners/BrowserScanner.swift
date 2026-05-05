@@ -38,8 +38,12 @@ public final class BrowserScanner: Scanner {
         // Dev tools
         "fmkadmapgofadopljbjfkapdkoienihi", // React DevTools
         "nhdogjmejiglipccpnnnanhbledajbpd", // Vue DevTools
-        "bfnaelmomeimhlpmgjnjophhpkkoljpa", // Angular DevTools
+        "ienfalfjdbdpebioblfackkekamfmbnh", // Angular DevTools (Augury)
         "lmhkpmbekcpmknklioeibfkpmmfibljd", // Redux DevTools
+        // NOTE: bfnaelmomeimhlpmgjnjophhpkkoljpa is Phantom Wallet — NOT Angular DevTools
+        // (a previous version of this list mislabeled it). Phantom is intentionally NOT
+        // whitelisted: even if legitimate, a wallet extension with broad permissions
+        // is exactly the kind of asset infostealers target, so we want it surfaced.
     ]
 
     public func scan(progress: ScanProgress? = nil) -> ScanResult {
