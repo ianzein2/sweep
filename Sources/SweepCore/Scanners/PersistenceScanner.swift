@@ -97,12 +97,31 @@ public final class PersistenceScanner: Scanner {
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
 
-        // Get executable path
+        // Get executable path and full argv (for AppleScript / shell-wrapper inspection)
         var executablePath: String?
+        var programArguments: [String] = []
         if let program = plist["Program"] as? String {
             executablePath = program
-        } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
-            executablePath = first
+        }
+        if let args = plist["ProgramArguments"] as? [String] {
+            programArguments = args
+            if executablePath == nil { executablePath = args.first }
+        }
+
+        // 2024-2025 macOS stealers (AMOS, Banshee, Cthulhu, Poseidon) commonly persist via a
+        // LaunchAgent that wraps an `osascript -e ...` payload — using AppleScript to harvest
+        // keychain passwords or download a stage-2 binary. Flag this regardless of signing,
+        // because osascript itself is Apple-signed.
+        if let sig = scriptInterpreterRisk(execPath: executablePath, args: programArguments) {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Persistence wraps a script interpreter (\(sig.interpreter))",
+                detail: "Label: \(label), runs: \(sig.detail) — \(sig.reason)",
+                path: path,
+                remediation: "Inspect plist contents and remove if unexpected: cat \"\(path)\""
+            ))
+            return
         }
 
         // Check against known spyware labels
@@ -127,6 +146,20 @@ public final class PersistenceScanner: Scanner {
                 detail: "Label: \(label) — this is not a legitimate Apple service",
                 path: path,
                 remediation: "Remove this plist: sudo rm \"\(path)\" — legitimate Apple plists don't use this naming pattern"
+            ))
+            return
+        }
+
+        // Vendor-impersonation labels (Microsoft, Zoom, Google, etc.) — used by 2024 DPRK
+        // campaigns and RustDoor to ride the trust of legitimate developer tools.
+        if SpywareSignature.isFakeVendorBundleId(label) {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Vendor-impersonation persistence label",
+                detail: "Label: \(label) — mimics a legitimate vendor's update/helper service",
+                path: path,
+                remediation: "Remove if not from the genuine vendor: sudo rm \"\(path)\""
             ))
             return
         }
@@ -686,5 +719,111 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Script Interpreter Persistence
+
+    /// Inspects a LaunchAgent's executable + argv for the "interpreter wrapping a payload"
+    /// pattern that 2024-2025 macOS infostealers (AMOS, Banshee, Cthulhu, Poseidon) use to
+    /// keep their persistence Apple-signed.
+    ///
+    /// Examples flagged:
+    ///   /usr/bin/osascript -e "do shell script ...with administrator privileges"
+    ///   /bin/sh -c "curl http://… | sh"
+    ///   /usr/bin/python3 -c "import urllib;exec(...)"
+    ///   /usr/bin/curl http://… | /bin/bash
+    private struct ScriptInterpreterRisk {
+        let interpreter: String
+        let detail: String
+        let reason: String
+    }
+
+    private func scriptInterpreterRisk(execPath: String?, args: [String]) -> ScriptInterpreterRisk? {
+        guard let exec = execPath else { return nil }
+        // Resolve trailing-slash / interpreter aliasing so the comparison is stable.
+        let interpreterName = (exec as NSString).lastPathComponent
+
+        let scriptInterpreters: Set<String> = [
+            "osascript", "sh", "bash", "zsh", "ksh", "dash",
+            "python", "python2", "python3", "perl", "ruby",
+            "node", "deno", "lua", "php", "tclsh", "expect",
+            "curl", "wget",
+        ]
+        guard scriptInterpreters.contains(interpreterName) else { return nil }
+
+        // Joined argv (everything after the interpreter)
+        let argv = args.count > 1 ? args.dropFirst().joined(separator: " ") : ""
+        let argvLC = argv.lowercased()
+        let detailSnippet = String(argv.prefix(160))
+
+        // osascript with `do shell script` is a *very* strong stealer indicator —
+        // the only legitimate use is from interactive Automator/AppleScript apps,
+        // not from a LaunchAgent that fires every login.
+        if interpreterName == "osascript" {
+            if argvLC.contains("do shell script") || argvLC.contains("administrator privileges") {
+                return ScriptInterpreterRisk(
+                    interpreter: "osascript",
+                    detail: detailSnippet,
+                    reason: "AppleScript persistence with `do shell script` / admin elevation — pattern used by AMOS, Banshee, Cthulhu, Poseidon"
+                )
+            }
+            // Inline -e usage with a shell command is also suspicious
+            if args.contains("-e") && (argvLC.contains("curl") || argvLC.contains("base64") ||
+                                        argvLC.contains("system events") || argvLC.contains("keychain")) {
+                return ScriptInterpreterRisk(
+                    interpreter: "osascript",
+                    detail: detailSnippet,
+                    reason: "AppleScript inline payload references keychain / curl / base64 — likely credential harvester"
+                )
+            }
+        }
+
+        // Shell wrappers with curl|sh, base64 -d, eval, $(...), or temp paths
+        let downloadAndRun = (argvLC.contains("curl") || argvLC.contains("wget")) &&
+                             (argvLC.contains("|") && (argvLC.contains("sh") || argvLC.contains("bash") || argvLC.contains("zsh")))
+        let evalsRemote = argvLC.contains("eval") && (argvLC.contains("$(curl") || argvLC.contains("$(wget"))
+        let decodesPayload = argvLC.contains("base64") && (argvLC.contains("-d") || argvLC.contains("--decode"))
+        let runsTempBinary = argvLC.contains("/tmp/") || argvLC.contains("/private/tmp/") || argvLC.contains("/var/tmp/")
+
+        if downloadAndRun || evalsRemote || decodesPayload {
+            return ScriptInterpreterRisk(
+                interpreter: interpreterName,
+                detail: detailSnippet,
+                reason: downloadAndRun ? "downloads and pipes a remote script into a shell" :
+                        evalsRemote ? "evaluates remote command output" :
+                        "decodes a base64 payload at login"
+            )
+        }
+        if runsTempBinary {
+            return ScriptInterpreterRisk(
+                interpreter: interpreterName,
+                detail: detailSnippet,
+                reason: "executes a binary from a world-writable temp directory at login"
+            )
+        }
+
+        // Inline interpreter payloads (-c "<long string>") are unusual for legitimate launch
+        // services — they're a classic packed-loader signature.
+        if (interpreterName == "python" || interpreterName == "python2" || interpreterName == "python3" ||
+            interpreterName == "perl" || interpreterName == "ruby" || interpreterName == "node") &&
+           args.contains("-c") && argv.count > 80 {
+            return ScriptInterpreterRisk(
+                interpreter: interpreterName,
+                detail: detailSnippet,
+                reason: "inline interpreter payload (-c with long argument) — common for packed loaders"
+            )
+        }
+
+        // curl/wget as the LaunchAgent program itself with an http(s) URL is exfil/loader behavior
+        if (interpreterName == "curl" || interpreterName == "wget") &&
+           (argvLC.contains("http://") || argvLC.contains("https://")) {
+            return ScriptInterpreterRisk(
+                interpreter: interpreterName,
+                detail: detailSnippet,
+                reason: "LaunchAgent fetches a remote URL on every login"
+            )
+        }
+
+        return nil
     }
 }

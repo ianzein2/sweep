@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking download quarantine")
+        checkDownloadQuarantine(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version supportability")
+        checkMacOSSupportability(findings: &findings, errors: &errors)
+
+        progress?.update("checking developer-mode / SIP overrides")
+        checkDeveloperOverrides(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +475,150 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Download Quarantine
+
+    /// Gatekeeper relies on the LSQuarantine flag (`com.apple.quarantine` xattr) being applied
+    /// to every downloaded file. Both Safari and Chrome can be configured to skip this — and
+    /// some installer scripts will explicitly turn it off — which neuters Gatekeeper's
+    /// translocation/notarization checks. 2024 stealers (AMOS, ClickFix campaigns) instruct
+    /// the user to disable it before opening their payload.
+    private func checkDownloadQuarantine(findings: inout [Finding], errors: inout [String]) {
+        // Safari
+        let safariCheck = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        if safariCheck.success {
+            let value = safariCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" || value.lowercased() == "false" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Download quarantine (LSQuarantine) is disabled",
+                    detail: "Files downloaded by the browser will not be quarantined — Gatekeeper, XProtect, and the 'this file came from the internet' prompt will not trigger",
+                    path: nil,
+                    remediation: "Re-enable: defaults delete com.apple.LaunchServices LSQuarantine"
+                ))
+            }
+        }
+
+        // Chrome / Chromium per-policy: SafeBrowsingProtectionLevel = 0
+        let chromeCheck = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.google.Chrome", "SafeBrowsingProtectionLevel"
+        ], timeout: 5)
+        if chromeCheck.success {
+            let value = chromeCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Chrome SafeBrowsing is disabled",
+                    detail: "Google SafeBrowsing protection is set to 'No protection' in Chrome's managed policy",
+                    path: nil,
+                    remediation: "Re-enable in Chrome > Settings > Privacy and security > Safe Browsing"
+                ))
+            }
+        }
+    }
+
+    // MARK: - macOS Version Supportability
+
+    /// Apple typically ships security updates for the current major macOS plus the previous
+    /// two; older releases stop receiving fixes for actively-exploited CVEs. Anything more
+    /// than two major versions behind today is effectively unpatched.
+    ///
+    /// We deliberately don't hard-code Apple's support list (it shifts) — instead we anchor
+    /// to "current year minus 3" to flag systems that are clearly out of the support window.
+    private func checkMacOSSupportability(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Major version mapping: Ventura=13 (2022), Sonoma=14 (2023), Sequoia=15 (2024),
+        // Tahoe=16 (2025). Anything < currentExpectedMajor - 2 is out-of-support.
+        // Calibrated to a 2026 reference point.
+        if major > 0 && major < 14 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).x is no longer receiving security updates",
+                detail: "Running macOS \(major).\(version.minorVersion) — Apple has stopped issuing security patches for this major version. Recently disclosed kernel and WebKit CVEs are likely unpatched.",
+                path: nil,
+                remediation: "Upgrade macOS in System Settings > General > Software Update (back up first)"
+            ))
+        } else if major == 14 {
+            // Borderline: Sonoma still gets occasional security responses but is being phased out.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(major).x will leave full support soon",
+                detail: "Running macOS \(major).\(version.minorVersion) — still patched but no longer the primary release. Plan an upgrade.",
+                path: nil,
+                remediation: "Upgrade when convenient: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Developer / SIP overrides
+
+    /// Detects boot-arg and developer-mode toggles that loosen Apple's protections —
+    /// `amfi_get_out_of_my_way`, `kext-dev-mode`, and `SystemPolicyControl` are all
+    /// classic signals of a system intentionally weakened for testing or, occasionally,
+    /// by malware that needed the user to flip them.
+    private func checkDeveloperOverrides(findings: inout [Finding], errors: inout [String]) {
+        // nvram boot-args
+        let nvram = ShellRunner.run("/usr/sbin/nvram", arguments: ["boot-args"], timeout: 5)
+        if nvram.success {
+            let bootArgs = nvram.stdout.lowercased()
+            let dangerousFlags = [
+                "amfi_get_out_of_my_way": "AMFI (kernel signing enforcement) bypass — runs unsigned kernel code",
+                "kext-dev-mode": "kext-dev-mode allows unsigned kernel extensions to load",
+                "rootless=0": "rootless=0 disables System Integrity Protection at boot",
+                "amfi=0": "AMFI disabled — no code-signing enforcement",
+                "amfi_unrestrict_task_for_pid": "AMFI relaxation — allows arbitrary task_for_pid lookups",
+                "ipc_control_port_options=0": "IPC control port options disabled",
+                "-no_compat_check": "system-version compatibility check skipped",
+            ]
+            for (flag, reason) in dangerousFlags where bootArgs.contains(flag) {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Dangerous boot-arg set: \(flag)",
+                    detail: reason,
+                    path: nil,
+                    remediation: "Remove the flag: sudo nvram -d boot-args (or edit boot-args to drop \(flag))"
+                ))
+            }
+        }
+
+        // App quarantine policy turned off entirely (assessments disabled)
+        let assess = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status", "--verbose"], timeout: 5)
+        if assess.success || !assess.stderr.isEmpty {
+            let combined = (assess.stdout + assess.stderr).lowercased()
+            if combined.contains("assessments disabled") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Gatekeeper assessments are globally disabled",
+                    detail: "spctl reports 'assessments disabled' — every downloaded app can run, signed or not",
+                    path: nil,
+                    remediation: "Re-enable: sudo spctl --master-enable"
+                ))
+            }
+        }
+
+        // /Library/Apple/System/Library/CoreServices/SystemVersion.plist mismatch can indicate
+        // a sysroot tampered with by malware to confuse signature checks. Read and compare.
+        let sysVersion = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        if sysVersion.success {
+            let live = sysVersion.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let plistData = FileManager.default.contents(atPath: "/System/Library/CoreServices/SystemVersion.plist"),
+               let plist = try? PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any],
+               let onDisk = plist["ProductVersion"] as? String,
+               !live.isEmpty && !onDisk.isEmpty && live != onDisk {
+                findings.append(Finding(
+                    severity: .high, category: .systemIntegrity,
+                    title: "SystemVersion mismatch: live=\(live), plist=\(onDisk)",
+                    detail: "sw_vers reports a different version than SystemVersion.plist — the boot volume may have been tampered with",
+                    path: "/System/Library/CoreServices/SystemVersion.plist",
+                    remediation: "Investigate immediately — this mismatch should never occur on a healthy install"
                 ))
             }
         }

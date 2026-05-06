@@ -434,6 +434,250 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / Lazarus "Contagious Interview" campaign (active 2024-2025) — fake recruiters
+        // trick devs into running poisoned npm packages or Zoom installers.
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["beavertail", "BeaverTail", "javascript_test", "ZoomVideoCommunications"],
+            bundleIdentifiers: ["us.zoom.zoomupdater", "com.zoom.installer.helper"],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.npl",
+                "~/Library/Application Support/.n2",
+                "/private/tmp/p.zi",
+            ],
+            launchAgentLabels: ["com.zoom.video.helper", "com.video.zoom.update"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyp_main", "ferret_payload"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/.n2",
+                "/private/tmp/pdown",
+                "/private/tmp/InvisibleFerret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrostyFerret (Contagious Interview)",
+            processNames: ["FrostyFerret", "ChromeUpdateAlert", "ChromeUpdate"],
+            bundleIdentifiers: ["com.google.chrome.updater"],
+            filePaths: ["/private/tmp/ChromeUpdateAlert.app"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK)",
+            processNames: ["TodoSwift", "todoswift", "MacOS_Helper"],
+            bundleIdentifiers: ["com.todoswift.helper"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PondRAT (DPRK)",
+            processNames: ["PondRAT", "pondrat", "py_loader_mac"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pondrat",
+                "~/Library/Application Support/.pondrat",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FullHouse.Doored (DPRK)",
+            processNames: ["FullHouseDoored", "fullhouse", "doored"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.fullhouse"],
+            launchAgentLabels: []
+        ),
+        // 2024 macOS RATs and stealers
+        SpywareSignature(
+            name: "macOS.ZuRu (poisoned dev tools)",
+            processNames: ["zuru", "ZuRu", "Termius_helper", "MicrosoftRemoteDesktopHelper", "RemoteDesktopHelper"],
+            bundleIdentifiers: ["com.termius.mac.zuru", "com.microsoft.rdc.macos.helper2"],
+            filePaths: [
+                "/private/tmp/.zuru",
+                "~/Library/Application Support/.zuru",
+                "/Library/Application Support/.zuru",
+            ],
+            launchAgentLabels: ["com.zuru.agent", "com.termius.helper.update"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS variant)",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect_helper", "DingTalkHelper"],
+            bundleIdentifiers: ["com.openvpn.client.helper2"],
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.helper.update"]
+        ),
+        SpywareSignature(
+            name: "RustDoor (Trellix)",
+            processNames: ["rustdoor", "RustDoor", "VisualStudioUpdater", "zshrc_helper", "zsh_updater"],
+            bundleIdentifiers: ["com.microsoft.visualstudio.updater"],
+            filePaths: [
+                "~/.cred",
+                "~/Library/Preferences/.test",
+                "/private/tmp/test.zip",
+                "~/Public/.fseventsd",
+            ],
+            launchAgentLabels: ["com.microsoft.visualstudio.code.update", "com.apple.zshrc.helper"]
+        ),
+        SpywareSignature(
+            name: "GoldDoor / GoldDigger (Lazarus)",
+            processNames: ["GoldDoor", "GoldDigger", "golddigger_mac"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.golddoor"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "macOS.NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lbit_mac"],
+            bundleIdentifiers: ["com.notlockbit.encrypt"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.notlockbit",
+            ],
+            launchAgentLabels: ["com.notlockbit.agent"]
+        ),
+        SpywareSignature(
+            name: "Crystal Rans0m",
+            processNames: ["CrystalRansom", "crystal_ransom", "crystal_lock"],
+            bundleIdentifiers: ["com.crystal.ransom"],
+            filePaths: ["/private/tmp/.crystal_ransom"],
+            launchAgentLabels: []
+        ),
+        // 2024-2025 infostealers
+        SpywareSignature(
+            name: "Tusk Stealer",
+            processNames: ["Tusk", "tusk_stealer", "Tusk_Installer", "tuskmac"],
+            bundleIdentifiers: ["com.tusk.stealer"],
+            filePaths: [
+                "/private/tmp/.tusk",
+                "~/Library/Application Support/.Tusk",
+            ],
+            launchAgentLabels: ["com.tusk.agent"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid_stealer", "frigid_mac", "FrigidInstaller"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "AMOS Pro / Atomic v2 (2025)",
+            processNames: ["AMOSPro", "atomic_v2", "atomic2_installer", "AppleScriptHelper"],
+            bundleIdentifiers: ["com.atomic.stealer.pro", "com.amos.pro"],
+            filePaths: [
+                "/private/tmp/.amos2",
+                "/private/tmp/.amospro",
+                "~/Library/Application Support/.AMOSPro",
+            ],
+            launchAgentLabels: ["com.amos.pro.agent"]
+        ),
+        SpywareSignature(
+            name: "Lumma Stealer (macOS port)",
+            processNames: ["LummaStealer", "lumma_mac", "lumma_helper"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: ["/private/tmp/.lumma"],
+            launchAgentLabels: ["com.lumma.service"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odyssey_helper"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "TrickMo (macOS)",
+            processNames: ["TrickMo", "trickmo_mac", "trickmo_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.trickmo"],
+            launchAgentLabels: []
+        ),
+        // Cross-platform red-team frameworks frequently abused on macOS
+        SpywareSignature(
+            name: "Sliver implant",
+            processNames: ["sliver", "Sliver", "sliver-implant", "SliverServer", "sliver-server"],
+            bundleIdentifiers: ["com.sliver.implant"],
+            filePaths: [
+                "/private/tmp/.sliver",
+                "~/Library/Application Support/.sliver",
+            ],
+            launchAgentLabels: ["com.sliver.agent"]
+        ),
+        SpywareSignature(
+            name: "Mythic agent (Poseidon/Apfell)",
+            processNames: ["mythic", "Mythic", "Apfell", "apfell_agent", "poseidon_mythic"],
+            bundleIdentifiers: ["com.mythic.apfell", "com.mythic.poseidon"],
+            filePaths: [
+                "/private/tmp/.mythic",
+                "~/Library/Application Support/.apfell",
+            ],
+            launchAgentLabels: ["com.mythic.agent"]
+        ),
+        SpywareSignature(
+            name: "Empire Mac agent",
+            processNames: ["empire_mac", "EmpireAgent", "empyre"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.empire"],
+            launchAgentLabels: []
+        ),
+        // Crypto wallet drainers (2024-2025)
+        SpywareSignature(
+            name: "WalletGuard Drainer (impostor)",
+            processNames: ["walletguard_helper", "WalletDrainer", "wallet_extract"],
+            bundleIdentifiers: ["com.walletguard.helper"],
+            filePaths: ["/private/tmp/.walletdrain"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Inferno Drainer (macOS module)",
+            processNames: ["InfernoDrainer", "inferno_mac", "inferno_helper"],
+            bundleIdentifiers: ["com.inferno.drain"],
+            filePaths: ["/private/tmp/.inferno"],
+            launchAgentLabels: []
+        ),
+        // Poisoned developer-tool installers
+        SpywareSignature(
+            name: "Poisoned Notion Installer (2024)",
+            processNames: ["NotionUpdaterHelper", "notion_helper2"],
+            bundleIdentifiers: ["notion.id.updater2"],
+            filePaths: ["/private/tmp/.notionupdater"],
+            launchAgentLabels: ["com.notion.updater.helper2"]
+        ),
+        SpywareSignature(
+            name: "Poisoned Loom Installer (2024)",
+            processNames: ["LoomHelperUpdate", "loom_helper2"],
+            bundleIdentifiers: ["com.loom.desktop.updater2"],
+            filePaths: ["/private/tmp/.loomupdater"],
+            launchAgentLabels: ["com.loom.update.helper2"]
+        ),
+        // PyongRAT / SwiftSlicer follow-ons — DPRK Mac tooling
+        SpywareSignature(
+            name: "PyongRAT",
+            processNames: ["pyongrat", "PyongRAT", "pyong_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.pyongrat"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "SwiftSlicer (mac variant)",
+            processNames: ["swiftslicer_mac", "SwiftSlicer", "slicer_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.swiftslicer"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,7 +694,36 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Recent campaigns abuse these "looks-Apple" labels
+        "com.apple.zshrc.helper",            // RustDoor 2024
+        "com.apple.spotlight.helper",        // Multiple 2024 stealers
+        "com.apple.macshare.plist",          // SpectralBlur
+        "com.apple.timesync.helper",         // ZuRu / generic
+        "com.apple.touchidd",                // Stealer mimic
+        "com.apple.notarize.helper",         // Stealer mimic
     ]
+
+    /// Fake "trusted vendor" bundle IDs that mimic legitimate developer tools
+    public static let fakeVendorBundlePatterns: Set<String> = [
+        "us.zoom.zoomupdater",                  // BeaverTail
+        "com.zoom.installer.helper",            // BeaverTail
+        "com.microsoft.visualstudio.updater",   // RustDoor
+        "com.microsoft.rdc.macos.helper2",      // ZuRu
+        "com.termius.mac.zuru",                 // ZuRu
+        "com.openvpn.client.helper2",           // HZ RAT
+        "com.google.chrome.updater",            // FrostyFerret (real ID is com.google.keystone.daemon)
+        "com.loom.desktop.updater2",            // 2024 supply chain
+        "notion.id.updater2",                   // 2024 supply chain
+    ]
+
+    /// Returns true when bundleId looks like a *vendor* impersonation (Microsoft, Zoom, Google, etc.)
+    public static func isFakeVendorBundleId(_ bundleId: String) -> Bool {
+        if fakeVendorBundlePatterns.contains(bundleId) { return true }
+        // Heuristic: legitimate vendors don't ship a bundle ID with a numeric suffix
+        // like "helper2"/"updater2" — this is a common impersonation tell.
+        let suspiciousNumericSuffixes = ["helper2", "updater2", "helper3", "service2"]
+        return suspiciousNumericSuffixes.contains { bundleId.hasSuffix(".\($0)") || bundleId.hasSuffix($0) }
+    }
 
     /// Process names that look like system processes but aren't real Apple binaries.
     /// Real Apple equivalents noted in comments. Only flag if running from non-system paths.
@@ -474,6 +747,19 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 campaign mimics
+        "ChromeUpdate",          // FrostyFerret — real Chrome updater is GoogleSoftwareUpdateAgent
+        "ChromeUpdateAlert",     // FrostyFerret
+        "ZoomVideoCommunications", // BeaverTail-style alias for the user-facing Zoom binary
+        "VisualStudioUpdater",   // RustDoor
+        "MicrosoftRemoteDesktopHelper", // ZuRu
+        "RemoteDesktopHelper",   // ZuRu (real path lives under /Applications/Microsoft Remote Desktop.app)
+        "NotionUpdaterHelper",   // poisoned-installer mimic
+        "LoomHelperUpdate",      // poisoned-installer mimic
+        "DingTalkHelper",        // HZ RAT
+        "OpenVPNConnect_helper", // HZ RAT
+        "AppleScriptHelper",     // AMOS Pro family — legitimate Apple binary is `osascript`
+        "TouchIDHelper",         // Stealer mimic — Apple's process is biometrickitd
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

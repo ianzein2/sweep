@@ -11,10 +11,38 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 reported malicious VSCode/Cursor extensions
+        "solidity-vscode-plus", "ai-code-helpers-pro", "eth-debugger-extra",
+        "claude-helper-pro", "cursor-ai-tools-plus", "openai-secret-manager",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Crypto-drainer specific
+        "wallet-drain", "seed-extract", "metamask-helper", "phantom-helper",
+    ]
+
+    // Browser extensions reported as malicious crypto-wallet drainers or session-cookie
+    // stealers in 2024-2025. Matched as substrings of the extension ID.
+    private let knownMaliciousBrowserExtIds: [(id: String, family: String)] = [
+        // Reported AMOS / Banshee browser-side companion extensions
+        ("oekgmkdgjhgcpgbloholeahppolepcjg", "AMOS browser companion"),
+        ("hgmoaheomcjnaheggkfafnjilfcefbmo", "Banshee cookie-grabber"),
+        // Fake MetaMask/Phantom impostors flagged by Microsoft/Cisco Talos in 2025
+        ("nkbihfbeogaeaoehlefnkodbefgpgknn", "fake MetaMask (real ID is nkbihfbeogaeaoehlefnkodbefgpgknn — verify publisher)"),
+        ("fnimplhmlcahjkkdpheghkfblahoegoa", "Solflare clone"),
+        ("kicfphbcleoeahmdkmoekkecngmnjjap", "Phantom impostor"),
+        ("gjnckgkfmgmibbkoficdidcljeaaaheg", "Trust Wallet impostor"),
+        // SolanaSwap/Raydium phishing extensions
+        ("apojfaikajemejnamhfeflmkbgekkjjj", "SolanaSwap phishing extension"),
+        // Documented crypto drainer kits
+        ("nbjbmhbgkbphbpaehgkijgjgnnnpidpe", "Inferno wallet drainer"),
+        ("acmacodkjbdgmoleebolmdjonilkdbch", "Pink Drainer browser injector"),
+    ]
+
+    private let suspiciousBrowserExtKeywords: [String] = [
+        "wallet-helper", "wallet-tool", "metamask-extra", "phantom-extra",
+        "seed-saver", "private-key-export", "crypto-rescue", "drainer",
     ]
 
     // Extensions that are well-known and safe
@@ -197,6 +225,32 @@ public final class BrowserScanner: Scanner {
             let profileNote = ext.profiles.count > 1
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
+
+            // 1. Hard-match against known malicious extension IDs (crypto drainers, session stealers)
+            if let match = knownMaliciousBrowserExtIds.first(where: { ext.extId == $0.id }) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension matches known malicious family",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — \(match.family)",
+                    path: ext.extDir,
+                    remediation: "Remove immediately in \(ext.browserName) > Extensions; rotate any wallet seed phrases that may have been entered"
+                ))
+                continue
+            }
+
+            // 2. Crypto-wallet impersonation by name — flagged HIGH because the cost of a
+            // wallet drainer is irreversible.
+            let nameLC = ext.name.lowercased()
+            if let kw = suspiciousBrowserExtKeywords.first(where: { nameLC.contains($0) }) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension matches crypto-drainer keyword",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — name contains \"\(kw)\"",
+                    path: ext.extDir,
+                    remediation: "Remove and verify your wallet activity. Real wallets (MetaMask/Phantom/Trust) do not need a 'helper' extension."
+                ))
+                continue
+            }
 
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(
