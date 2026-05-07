@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version freshness")
+        checkMacOSVersionFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking sshd configuration")
+        checkSSHDConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +453,181 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - macOS Version Freshness
+
+    /// Latest *known-supported* macOS major version. Apple supports the current and the
+    /// previous two majors with security updates; anything older receives no patches.
+    /// Bumped manually when a new major ships. As of late 2025 the current major is 15
+    /// (Sequoia); 14 (Sonoma) and 13 (Ventura) still receive security updates.
+    private static let knownLatestMacOSMajor = 15
+    private static let oldestSupportedMajor = 13
+
+    private func checkMacOSVersionFreshness(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        if major < Self.oldestSupportedMajor {
+            // Apple no longer ships security fixes for this major — the kernel, Safari, and
+            // XProtect definitions are frozen at whatever shipped at end-of-support. Any 0-day
+            // disclosed since then is unpatched on this Mac.
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(version.minorVersion) is past Apple's security support window",
+                detail: "Apple supports macOS \(Self.oldestSupportedMajor)+; this Mac is on \(major).\(version.minorVersion).\(version.patchVersion). Public CVEs disclosed after EoL will not be patched here.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS in System Settings > General > Software Update. If hardware can't, isolate this machine from sensitive workloads."
+            ))
+        } else if major < Self.knownLatestMacOSMajor - 1 {
+            // Two majors behind — supported but missing the newer mitigations Apple has added
+            // since (e.g. Lockdown Mode improvements, kernel hardening, App Management TCC bucket).
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS \(major) is two majors behind the latest release",
+                detail: "Current Apple release is macOS \(Self.knownLatestMacOSMajor). Older majors get fewer mitigations (Lockdown Mode, Private Relay, App Management).",
+                path: nil,
+                remediation: "Plan an upgrade to macOS \(Self.knownLatestMacOSMajor) when convenient: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - sshd Configuration
+
+    /// Inspect the active sshd configuration whenever Remote Login is enabled. We only
+    /// emit findings if SSH is actually serving — disabling the daemon already neutralizes
+    /// these settings, and the existing remote-access check covers that case.
+    private func checkSSHDConfig(findings: inout [Finding], errors: inout [String]) {
+        // Cheap probe: is Remote Login on?
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        guard sshState.success && sshState.stdout.lowercased().contains(": on") else { return }
+
+        // sshd -T prints the *effective* config (including drop-ins), which is what the daemon actually uses.
+        let dump = ShellRunner.run("/usr/sbin/sshd", arguments: ["-T"], timeout: 5)
+        guard dump.success else {
+            // Fall back to the static file — incomplete but better than nothing.
+            if let content = try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8) {
+                inspectSSHDLines(content.split(separator: "\n").map(String.init),
+                                 source: "/etc/ssh/sshd_config",
+                                 findings: &findings)
+            }
+            return
+        }
+
+        inspectSSHDLines(dump.stdout.split(separator: "\n").map(String.init),
+                         source: "sshd -T",
+                         findings: &findings)
+    }
+
+    private func inspectSSHDLines(_ lines: [String], source: String, findings: inout [Finding]) {
+        // sshd -T prints "key value" with a single space; comments stripped. Build a dict.
+        var cfg: [String: String] = [:]
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            let parts = trimmed.split(separator: " ", maxSplits: 1)
+            guard parts.count == 2 else { continue }
+            cfg[parts[0].lowercased()] = String(parts[1])
+        }
+
+        // PermitRootLogin must not be "yes" — direct root login over SSH is a brute-force magnet.
+        if let v = cfg["permitrootlogin"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd allows direct root login (PermitRootLogin yes)",
+                detail: "Anyone who guesses the root password gets a root shell. Source: \(source)",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitRootLogin no' (or 'prohibit-password') in /etc/ssh/sshd_config.d/, then reload: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        // PasswordAuthentication should be off in 2025 — keys only.
+        if let v = cfg["passwordauthentication"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "sshd accepts password authentication",
+                detail: "Password auth is brute-forceable. Key-based auth is dramatically safer. Source: \(source)",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PasswordAuthentication no' once you have an SSH key set up: sudo nano /etc/ssh/sshd_config.d/99-sweep.conf"
+            ))
+        }
+
+        // PermitEmptyPasswords must never be on. macOS default is no.
+        if let v = cfg["permitemptypasswords"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd permits empty passwords (PermitEmptyPasswords yes)",
+                detail: "Accounts with no password can log in remotely with no credential at all. Source: \(source)",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitEmptyPasswords no' and reload sshd"
+            ))
+        }
+
+        // X11 forwarding lets a remote attacker inject keystrokes / read screen content
+        // through a connected client. Almost never legitimately needed on modern macOS.
+        if let v = cfg["x11forwarding"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "sshd has X11 forwarding enabled",
+                detail: "X11 forwarding can be abused to read remote-client screens. Source: \(source)",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'X11Forwarding no' unless you specifically rely on it"
+            ))
+        }
+
+        // Protocol < 2 has been removed by OpenSSH but call it out anyway in case of stale config.
+        if let v = cfg["protocol"], v.contains("1") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd configured to accept SSH protocol 1",
+                detail: "SSH 1 is cryptographically broken. Source: \(source)",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Remove the 'Protocol 1' line — modern OpenSSH only supports SSH 2"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    /// Backups commonly contain the entire user library — keychains, browser profiles,
+    /// SSH keys. An unencrypted Time Machine destination is effectively a clear-text copy
+    /// of the user's secrets sitting on a disk that may travel.
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/tmutil",
+                                     arguments: ["destinationinfo", "-X"], timeout: 10)
+        guard result.success, let data = result.stdout.data(using: .utf8) else { return }
+
+        // tmutil emits a plist with a "Destinations" array.
+        guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let destinations = plist["Destinations"] as? [[String: Any]] else { return }
+
+        for dest in destinations {
+            // Encryption may be reported as "Encryption" (Bool) or "Kind" (string) depending on macOS version.
+            let name = dest["Name"] as? String ?? "Time Machine destination"
+            let kind = dest["Kind"] as? String ?? ""
+
+            // The most reliable signal: "Encrypted" key in some macOS versions, or kind containing "Encrypted".
+            let encryptedFlag = (dest["Encrypted"] as? Bool) ??
+                                ((dest["Encrypted"] as? Int).map { $0 != 0 } ?? false)
+            let kindEncrypted = kind.lowercased().contains("encrypted")
+
+            // If we can't determine encryption, skip rather than false-positive.
+            // Both "Encrypted" presence (older macOS) and a "Kind" containing it (newer) are checked.
+            if dest["Encrypted"] == nil && !kindEncrypted {
+                continue
+            }
+
+            if !encryptedFlag && !kindEncrypted {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine destination is not encrypted",
+                    detail: "Destination \"\(name)\" stores backups in clear text — anyone holding the disk can read your keychain, browser data, and SSH keys",
+                    path: nil,
+                    remediation: "Open System Settings > General > Time Machine > (i) on the destination > Encrypt Backups. Existing backups must be re-encrypted from scratch."
                 ))
             }
         }
