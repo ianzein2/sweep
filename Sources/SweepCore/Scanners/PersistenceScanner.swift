@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking shell history for ClickFix patterns")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript-based persistence")
+        scanAppleScriptPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,139 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - ClickFix / paste-into-terminal detection
+    //
+    // "ClickFix" attacks (rampant in 2024-2025) lure the user to a fake "verify you're human"
+    // page that copies a malicious shell command to the clipboard and tells them to paste it
+    // into Terminal. Once executed, the command shows up verbatim in the user's shell history.
+    // The same patterns appear in malicious "fix-my-X" support pages.
+
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+        ]
+
+        // Each pattern is a substring (case-insensitive). The descriptions explain WHY
+        // the line is suspicious so the user can judge whether it was them or an attacker.
+        let suspiciousPatterns: [(pattern: String, reason: String)] = [
+            ("curl -ssl", "downloads remote script with curl"),
+            ("curl -sl", "downloads remote script with curl"),
+            ("curl -fssl", "downloads remote script with curl"),
+            ("wget -qo-", "downloads remote script with wget"),
+            ("| sh", "pipes downloaded content into a shell"),
+            ("| bash", "pipes downloaded content into a shell"),
+            ("| zsh", "pipes downloaded content into zsh"),
+            ("|sh -", "pipes downloaded content into a shell"),
+            ("|bash -", "pipes downloaded content into a shell"),
+            ("base64 -d", "decodes a base64 payload — common obfuscation"),
+            ("base64 --decode", "decodes a base64 payload — common obfuscation"),
+            ("eval \"$(curl", "executes the result of a remote curl"),
+            ("eval $(curl", "executes the result of a remote curl"),
+            ("eval $(wget", "executes the result of a remote wget"),
+            ("osascript -e do shell script", "uses AppleScript to elevate to root"),
+            ("xattr -d com.apple.quarantine", "strips Gatekeeper quarantine off a downloaded file"),
+            ("xattr -dr com.apple.quarantine", "strips Gatekeeper quarantine off a directory"),
+            ("xattr -c", "clears all extended attributes (often to bypass Gatekeeper)"),
+            ("spctl --master-disable", "disables Gatekeeper"),
+            ("csrutil disable", "disables System Integrity Protection"),
+            ("sudo dscl . -create /users/", "creates a hidden local user"),
+            ("ngrok ", "starts an ngrok tunnel"),
+            ("cloudflared ", "starts a cloudflared tunnel"),
+        ]
+
+        for histPath in historyFiles {
+            guard let content = try? String(contentsOfFile: histPath, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: histPath).lastPathComponent
+            let lines = content.components(separatedBy: "\n")
+
+            // zsh history lines often look like ": 1700000000:0;<command>"
+            // We match against the part after the last ';'.
+            for (lineNum, raw) in lines.enumerated() {
+                let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty { continue }
+                let cmd = trimmed.split(separator: ";", maxSplits: 1).last.map(String.init) ?? trimmed
+                let lower = cmd.lowercased()
+
+                for (pattern, reason) in suspiciousPatterns {
+                    if lower.contains(pattern) {
+                        // ClickFix lines almost always combine "curl|sh" or contain a hex-looking
+                        // host. We escalate severity for the hallmark "download then pipe to shell"
+                        // pattern, which is the signature ClickFix shape.
+                        let isCurlPipe = (lower.contains("curl ") || lower.contains("wget "))
+                            && (lower.contains("| sh") || lower.contains("|sh") ||
+                                lower.contains("| bash") || lower.contains("|bash"))
+                        let severity: Severity = isCurlPipe ? .high : .medium
+                        findings.append(Finding(
+                            severity: severity, category: .persistence,
+                            title: "Suspicious shell history entry in \(fileName)",
+                            detail: "Line \(lineNum + 1): \(reason) — \(String(cmd.prefix(140)))",
+                            path: histPath,
+                            remediation: "If you didn't run this yourself, treat the Mac as compromised: rotate credentials and inspect persistence. ClickFix attacks trick users into pasting these into Terminal."
+                        ))
+                        break  // one finding per line
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - AppleScript-backed persistence
+    //
+    // LaunchAgents that invoke `osascript` (or point directly at a .scpt file) are a
+    // classic AMOS / Atomic Stealer pattern: the script is editable, doesn't need code-
+    // signing, and survives anti-malware scans that only look at native binaries.
+
+    private func scanAppleScriptPersistence(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        for (dirPath, dirLabel) in launchDirs {
+            let expanded = dirPath.hasPrefix("~/")
+                ? ShellRunner.realUserHome + dirPath.dropFirst(1)
+                : dirPath
+            guard fm.fileExists(atPath: expanded),
+                  let entries = try? fm.contentsOfDirectory(atPath: expanded) else { continue }
+
+            for file in entries where file.hasSuffix(".plist") {
+                let plistPath = "\(expanded)/\(file)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                else { continue }
+
+                let label = plist["Label"] as? String ?? "unknown"
+                if label.hasPrefix("com.apple.") { continue }
+
+                // Collect everything that could carry the command line so we don't miss
+                // ProgramArguments + Program + WorkingDirectory.
+                var combined = ""
+                if let prog = plist["Program"] as? String { combined += " " + prog }
+                if let args = plist["ProgramArguments"] as? [String] {
+                    combined += " " + args.joined(separator: " ")
+                }
+                let lower = combined.lowercased()
+
+                let usesOsascript = lower.contains("osascript")
+                let pointsAtScpt = lower.contains(".scpt") || lower.contains(".applescript")
+                let inlineScript = lower.contains("do shell script") || lower.contains("-e ")
+
+                guard usesOsascript || pointsAtScpt else { continue }
+
+                // Inline `osascript -e "do shell script ..."` from a LaunchAgent is the
+                // signature pattern — basically a script-able backdoor with no binary.
+                let severity: Severity = (usesOsascript && inlineScript) ? .high : .medium
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: "AppleScript-based persistence",
+                    detail: "Label: \(label), Dir: \(dirLabel) — \(String(combined.trimmingCharacters(in: .whitespaces).prefix(160)))",
+                    path: plistPath,
+                    remediation: "Inspect the script and the plist. AMOS / Atomic Stealer use osascript LaunchAgents to evade binary-only AV."
+                ))
+            }
         }
     }
 

@@ -12,6 +12,10 @@ public final class PermissionScanner: Scanner {
         ("kTCCServicePostEvent", "Synthetic Input"),
         ("kTCCServiceMicrophone", "Microphone"),
         ("kTCCServiceCamera", "Camera"),
+        // Apple Events / Automation: lets a process script other apps via AppleScript.
+        // Heavily abused by AMOS-family stealers to drive Finder, Keychain Access,
+        // and browsers without the user noticing.
+        ("kTCCServiceAppleEvents", "Apple Events / Automation"),
     ]
 
     private let whitelistedClients: Set<String> = [
@@ -138,6 +142,30 @@ public final class PermissionScanner: Scanner {
             let hasInputMonitoring = permLabels.contains("Input Monitoring")
             let hasMic = permLabels.contains("Microphone")
             let hasCamera = permLabels.contains("Camera")
+            let hasAppleEvents = permLabels.contains("Apple Events / Automation")
+
+            // Apple Events lets one app script another. AMOS-style stealers grant themselves
+            // Automation over Finder/Keychain Access/Safari to enumerate browser data and
+            // unlock keychains without prompts. Combined with Accessibility or Screen Capture
+            // it's a near-complete remote-control kit.
+            if hasAppleEvents && (hasScreenCapture || hasInputMonitoring) {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "App has Apple Events + capture/input — full automation surface",
+                    detail: "Client: \(client) — can script other apps and capture screen/keystrokes",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > Automation"
+                ))
+                continue
+            } else if hasAppleEvents {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "Non-standard app has Apple Events / Automation",
+                    detail: "Client: \(client), Granted: \(permissions.first?.modified ?? "unknown") — can drive other apps via AppleScript",
+                    path: nil,
+                    remediation: "Verify in System Settings > Privacy & Security > Automation. AMOS-family stealers abuse this to read browser/keychain data."
+                ))
+            }
 
             if hasScreenCapture && hasInputMonitoring {
                 findings.append(Finding(

@@ -1,6 +1,8 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, infostealers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+
+Recently expanded to cover 2024-2026 macOS threats: AMOS-family stealers, DPRK-linked NimDoor / BeaverTail / InvisibleFerret, Odyssey, FrigidStealer, PasivRobber, ShadowVault, HZ Rat, PondRAT, RustyAttr, ZuRu variants, ClickFix paste-into-terminal attacks, AppleScript-backed persistence, and Gatekeeper-quarantine stripping.
 
 ## Download
 
@@ -71,18 +73,18 @@ sudo sweep --json
 | Scanner | What it does |
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
-| **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring, **Apple Events / Automation**), detects stale/suspicious permissions |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, **shell history for ClickFix curl\|sh paste attacks**, **AppleScript-backed (osascript) launchd persistence** |
+| **Evidence** | Looks for stored screenshots, keystroke logs, screen recordings, exfiltration archives, and crypto-wallet / browser-credential staging on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious / C2 ports (Cobalt Strike, Sliver, NetWire), `/etc/hosts` tampering, proxy/PAC hijacking, **active reverse-tunneling tools (ngrok, cloudflared, frp, chisel, gost)** |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions, plus VSCode / Cursor / Windsurf editor extensions for malicious families and remote-exec patterns |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, **Gatekeeper-quarantine stripping on recently installed apps**, **third-party privileged helper tools** |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, sharing services, software updates, Lockdown Mode, Rapid Security Response, **sshd_config (PermitRootLogin, PasswordAuthentication, KbdInteractiveAuthentication)**, **iCloud Private Relay status** |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

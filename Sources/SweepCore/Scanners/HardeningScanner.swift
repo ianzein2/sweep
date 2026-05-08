@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server configuration")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +452,112 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - SSH Server Configuration
+    //
+    // Even if Remote Login is on for legitimate reasons, the sshd_config defaults can be
+    // dangerous. We surface the well-known dangerous knobs so the user can fix them without
+    // having to know the OpenSSH ruleset. We only inspect the file (no `sshd -T`) so this
+    // works without root in most cases.
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        let sshdConfigPaths = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+        var configContent: String?
+        var configPath: String?
+        for path in sshdConfigPaths {
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                configContent = content
+                configPath = path
+                break
+            }
+        }
+        guard let content = configContent, let path = configPath else { return }
+
+        // Each effective line is: "Directive Value"; lines starting with # are comments.
+        // Apple ships sshd_config with most directives commented out — the commented form
+        // shows the OpenSSH default, which is what's actually in effect.
+        var effective: [String: String] = [:]
+        for raw in content.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { continue }
+            // sshd directives are case-insensitive.
+            effective[String(parts[0]).lowercased()] = String(parts[1]).trimmingCharacters(in: .whitespaces)
+        }
+
+        // PermitRootLogin yes is the single most dangerous SSH setting — it lets anyone with
+        // root's password (or a stolen authorized_key) log in directly. Apple's default is
+        // "prohibit-password" which is OK; "yes" is not.
+        if let v = effective["permitrootlogin"]?.lowercased(),
+           v == "yes" || v == "without-password" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows root login (PermitRootLogin \(v))",
+                detail: "sshd_config explicitly permits root SSH login — anyone with root's password or key can connect",
+                path: path,
+                remediation: "Set 'PermitRootLogin no' in \(path), then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        // PasswordAuthentication yes means brute-force is on the table. With key auth disabled
+        // by setting this to "no", the SSH attack surface drops dramatically.
+        if let v = effective["passwordauthentication"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH password authentication is enabled",
+                detail: "sshd_config has PasswordAuthentication yes — exposes the Mac to SSH password brute-forcing",
+                path: path,
+                remediation: "Switch to key auth: set 'PasswordAuthentication no' in \(path) (after confirming you have a working SSH key)"
+            ))
+        }
+
+        // ChallengeResponseAuthentication / KbdInteractiveAuthentication yes also allows
+        // password-style login through PAM, which is the same attack surface.
+        if let v = effective["challengeresponseauthentication"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH challenge-response authentication is enabled",
+                detail: "sshd_config has ChallengeResponseAuthentication yes — keeps a PAM-based password path open",
+                path: path,
+                remediation: "Set 'ChallengeResponseAuthentication no' in \(path) if you intend key-only SSH"
+            ))
+        }
+        if let v = effective["kbdinteractiveauthentication"]?.lowercased(), v == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH keyboard-interactive authentication is enabled",
+                detail: "sshd_config has KbdInteractiveAuthentication yes — keeps a PAM-based password path open",
+                path: path,
+                remediation: "Set 'KbdInteractiveAuthentication no' in \(path) if you intend key-only SSH"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+    //
+    // Private Relay hides Safari traffic from network observers. We surface the OFF state
+    // as informational (LOW), not a defect, because plenty of people opt out for performance
+    // or work-network reasons. But knowing it's off is useful context.
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // The user-facing toggle writes to com.apple.networkserviceproxy.PrivacyProxy
+        // (true = on). We only emit a finding when we can read a definitive "off".
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "PrivacyProxyEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is disabled",
+                detail: "Safari and Apple-routed DNS traffic is visible to your network operator and ISP",
+                path: nil,
+                remediation: "Enable in System Settings > Apple ID > iCloud > Private Relay (requires iCloud+ subscription)"
+            ))
         }
     }
 

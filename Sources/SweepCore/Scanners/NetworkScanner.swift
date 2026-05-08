@@ -40,6 +40,20 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        50050,                                  // Cobalt Strike default team-server port
+        53413,                                  // NetWire RAT default
+        8081,                                   // Sliver default mTLS staging
+        5060,                                   // Some macOS RATs reuse SIP port for C2
+        2323,                                   // Mirai-derived family default
+        9001,                                   // Tor ORPort (informational if user-initiated)
+    ]
+
+    // Reverse-tunneling tools. Legit for developers, but also the easiest way to expose
+    // a compromised Mac to attacker-controlled infrastructure without opening firewall ports.
+    private let tunnelingProcessNames: Set<String> = [
+        "ngrok", "cloudflared", "frp", "frpc", "frps",
+        "localtunnel", "lt", "serveo", "bore", "pinggy",
+        "chisel", "gost", "tinyproxy", "rathole",
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -149,6 +163,21 @@ public final class NetworkScanner: Scanner {
 
             // Skip ourselves
             if pid == myPid { continue }
+
+            // Reverse-tunneling tool with active connections — flag as MEDIUM (could be
+            // legitimate dev usage, but it's also how attackers pivot).
+            if tunnelingProcessNames.contains(command.lowercased()) {
+                let established = connections.filter { $0.isEstablished }
+                if !established.isEmpty {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "Reverse-tunneling tool with active connections: \(command)",
+                        detail: "Process: \(command) (PID \(pid)), \(established.count) active connection(s) — exposes services on this Mac to the internet",
+                        path: nil,
+                        remediation: "Expected if you're sharing a local dev server. Otherwise: kill \(pid) and remove the tool."
+                    ))
+                }
+            }
 
             // Check against known spyware
             if let sig = SpywareSignature.match(processName: command) {

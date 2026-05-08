@@ -37,6 +37,14 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for apps with Gatekeeper quarantine attribute stripped
+        progress?.update("checking for Gatekeeper bypass attempts")
+        scanQuarantineStripping(findings: &findings, errors: &errors)
+
+        // 7. Check Privileged Helper Tools — root daemons installed by apps
+        progress?.update("checking privileged helper tools")
+        scanPrivilegedHelpers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -276,6 +284,138 @@ public final class DeepScanner: Scanner {
                 detail: "This file is owned by root in your user directory — unusual for user apps",
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper Quarantine Stripping
+    //
+    // macOS attaches a `com.apple.quarantine` extended attribute to anything downloaded
+    // by a Gatekeeper-aware app (Safari, Mail, Messages, AirDrop, App Store, etc).
+    // That xattr is what makes Gatekeeper enforce notarization on first launch.
+    //
+    // A common 2024-2025 install trick — used by AMOS-style stealers and ClickFix campaigns —
+    // is to ship a DMG plus a script that runs `xattr -dr com.apple.quarantine /Applications/Foo.app`,
+    // silently bypassing Gatekeeper. Recently-installed third-party apps that have NO quarantine
+    // xattr at all are the tell.
+
+    private func scanQuarantineStripping(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let appDirs = ["/Applications", "\(ShellRunner.realUserHome)/Applications"]
+        let now = Date()
+
+        for dir in appDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".app") {
+                let appPath = "\(dir)/\(entry)"
+
+                // Only flag apps installed in the last 30 days — old apps legitimately lose their xattr
+                // over time (backups, OS migrations strip it). Recent installs are the interesting case.
+                guard let attrs = try? fm.attributesOfItem(atPath: appPath),
+                      let modDate = attrs[.modificationDate] as? Date else { continue }
+                let daysOld = Calendar.current.dateComponents([.day], from: modDate, to: now).day ?? 999
+                guard daysOld <= 30 else { continue }
+
+                // Apple-signed apps shipping with the OS aren't downloaded — skip them.
+                let infoPlistPath = "\(appPath)/Contents/Info.plist"
+                if let data = fm.contents(atPath: infoPlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let bundleId = plist["CFBundleIdentifier"] as? String,
+                   bundleId.hasPrefix("com.apple.") { continue }
+
+                // Ask xattr whether the quarantine flag is present.
+                let xattrCheck = ShellRunner.run("/usr/bin/xattr",
+                                                 arguments: ["-p", "com.apple.quarantine", appPath],
+                                                 timeout: 3)
+                let hasQuarantine = xattrCheck.success
+                if hasQuarantine { continue }
+
+                // Apps installed via App Store / pkg installers also legitimately have no quarantine.
+                // We can't perfectly tell those apart, so call this MEDIUM — informational, not alarming —
+                // but call out the 30-day install window so the user can decide.
+                findings.append(Finding(
+                    severity: .medium, category: .systemIntegrity,
+                    title: "Recently installed app missing Gatekeeper quarantine flag",
+                    detail: "App: \(entry), installed ~\(daysOld) day(s) ago — could indicate `xattr -d com.apple.quarantine` was run to bypass Gatekeeper",
+                    path: appPath,
+                    remediation: "If you didn't install this from the App Store or a pkg installer, treat the app as untrusted and verify its source"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Privileged Helper Tools
+    //
+    // /Library/PrivilegedHelperTools holds root-running launch daemons that apps register
+    // via SMJobBless. Legitimate examples: 1Password, Docker, virtualization tools.
+    // Spyware sometimes installs its own helper here so that it can act as root without
+    // the user re-authenticating. Anything from an unknown signing identity should be reviewed.
+
+    private func scanPrivilegedHelpers(findings: inout [Finding], errors: inout [String]) {
+        let helperDir = "/Library/PrivilegedHelperTools"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: helperDir),
+              let entries = try? fm.contentsOfDirectory(atPath: helperDir) else { return }
+
+        // Common, well-known helpers we don't bother surfacing.
+        let knownPrefixes: [String] = [
+            "com.apple.",
+            "com.docker.",
+            "com.1password.",
+            "com.agilebits.",
+            "com.parallels.",
+            "com.vmware.",
+            "com.crashlytics.",
+            "com.adobe.",
+            "com.microsoft.",
+            "com.google.keystone.",
+            "com.brave.",
+            "org.virtualbox.",
+            "com.objective-see.",   // LuLu, KnockKnock, etc.
+            "com.crowdstrike.",
+            "com.sentinelone.",
+            "com.malwarebytes.",
+            "com.jamf.",
+            "com.tailscale.",
+        ]
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let path = "\(helperDir)/\(entry)"
+
+            // The filename is the bundle id of the helper (e.g. com.foo.helper).
+            if knownPrefixes.contains(where: { entry.hasPrefix($0) }) { continue }
+
+            // Spyware-mimicked Apple helpers fail this test — they look like com.apple.* but
+            // aren't really Apple. The SpywareSignature heuristic catches these.
+            if SpywareSignature.isFakeAppleBundleId(entry) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake-Apple privileged helper installed",
+                    detail: "Helper: \(entry) — this name impersonates an Apple service but isn't a real Apple helper",
+                    path: path,
+                    remediation: "Inspect, then remove: sudo rm \"\(path)\" and sudo launchctl bootout system/\(entry)"
+                ))
+                continue
+            }
+
+            // Look up the helper's code signature to surface the team identifier when present.
+            let codesign = ShellRunner.run("/usr/bin/codesign",
+                                           arguments: ["-dv", "--verbose=4", path],
+                                           timeout: 5)
+            // codesign writes to stderr by default.
+            let combined = codesign.stderr + codesign.stdout
+            let teamLine = combined.split(separator: "\n").first { $0.contains("TeamIdentifier=") }
+            let teamId = teamLine.map { String($0).replacingOccurrences(of: "TeamIdentifier=", with: "")
+                                                  .trimmingCharacters(in: .whitespaces) } ?? "unknown"
+
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "Privileged helper from unknown vendor",
+                detail: "Helper: \(entry), Team: \(teamId) — runs as root, registered via SMJobBless",
+                path: path,
+                remediation: "If you don't recognize the vendor, remove: sudo rm \"\(path)\" and sudo launchctl bootout system/\(entry)"
             ))
         }
     }
