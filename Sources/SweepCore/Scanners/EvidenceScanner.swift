@@ -445,13 +445,49 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2026 wallets actively targeted by AMOS/Banshee/Poseidon/Cthulhu families
+        ("Solflare",    "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Backpack",    "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("OKX Wallet",  "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Trust Wallet","egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Magic Eden",  "mkpegjkblkkefacfnmkajcjmabijhclg"),
+        ("Argent X",    "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        ("Petra (Aptos)", "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("Rabby",       "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Brave Wallet","odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("Frame",       "ldcoohedfbjoobcadoglnnmmfbdlmmhf"),
+        ("Wasabi Wallet", "WasabiWallet"),
+        ("Sparrow Wallet", "Sparrow"),
+        ("BlueWallet",  "BlueWallet"),
+        ("Coinomi",     "Coinomi"),
+        ("MyMonero",    "MyMonero"),
+        ("Daedalus (Cardano)", "Daedalus"),
+        ("Yoroi",       "ffnbelfdoeiohenkjibnmadjiehjhajb"),
+        ("Coin98",      "aeachknmefphepccionboohckonoeemg"),
+        ("BitKeep / Bitget Wallet", "jiidiaalihmmhddjgbnbgdfflelocpak"),
+        ("Solana CLI keypair", ".config/solana/id.json"),
+        ("Sui Wallet",  "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("MyEtherWallet (MEW)", "nlbmnnijcnlegkjjpcfjclmcfggfefdm"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
     private let browserCredStoreNames: Set<String> = [
         "Login Data", "Web Data", "Cookies", "Local State",
-        "key4.db", "logins.json", "cookies.sqlite",  // Firefox
+        "Login Data For Account",                    // Chromium 122+ split DB
+        "Sessions", "Session Storage",               // session-token theft
+        "History",                                   // Cthulhu/Atomic exfiltrate browsing history
+        "Bookmarks",
+        "key4.db", "key3.db",                        // Firefox NSS DBs (master key)
+        "logins.json", "cookies.sqlite",             // Firefox credentials
+        "places.sqlite", "formhistory.sqlite",       // Firefox extras
+        "signons.sqlite",                            // legacy Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        "User.keychain-db",
+        // Notes / 1Password / Bitwarden artifacts seen exfiltrated by AMOS/Cthulhu
+        "NotesV7.storedata", "NotesV6.storedata",
+        "data.sqlite",                               // 1Password OPVault
+        "data.json",                                 // Bitwarden CLI vault
+        "passff.sqlite",                             // Pass extension
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
@@ -470,6 +506,18 @@ public final class EvidenceScanner: Scanner {
             "\(home)/Library/Application Support/Arc",
             "\(home)/Library/Application Support/Firefox",
             "\(home)/Library/Application Support/com.operasoftware.Opera",
+            "\(home)/Library/Application Support/com.operasoftware.OperaGX",
+            "\(home)/Library/Application Support/Vivaldi",
+            "\(home)/Library/Application Support/Sidekick",
+            "\(home)/Library/Application Support/Zen",
+            "\(home)/Library/Application Support/Dia",
+            "\(home)/Library/Application Support/Comet",
+            "\(home)/Library/Application Support/com.thebrowser.Browser",  // Arc bundle id
+            "\(home)/Library/Application Support/Yandex",
+            "\(home)/Library/Application Support/Opera Software",
+            "\(home)/Library/Application Support/Tor Browser-Data",
+            "\(home)/Library/Application Support/Mullvad Browser",
+            "\(home)/Library/Application Support/LibreWolf",
             "\(home)/Library/Keychains",
             "/Library/Keychains",
         ]
@@ -534,12 +582,41 @@ public final class EvidenceScanner: Scanner {
             }
         }
 
-        // Watch for active invocations of `security dump-keychain` — a stealer hallmark.
+        // AMOS-family stealers historically write a Mach-O stage-2 to /private/tmp
+        // and pipe an AppleScript dropper through `osascript` to display a fake password
+        // prompt. Hunt for the classic `AppleScript-*.scpt` artifacts here.
+        // (The AMOS AppleScript Dropper signature picks up the running process by name;
+        //  this catches the on-disk artifact even after the process has exited.)
+        let amosScriptDirs = ["/private/tmp", "/tmp", "/var/tmp"]
+        for dir in amosScriptDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries {
+                let lower = entry.lowercased()
+                let isAppleScriptArtifact = (lower.hasPrefix("applescript-") && lower.hasSuffix(".scpt")) ||
+                                            lower.hasSuffix(".amos.scpt") ||
+                                            lower == "applescript.run"
+                if isAppleScriptArtifact {
+                    let path = "\(dir)/\(entry)"
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "AMOS-style AppleScript dropper artifact",
+                        detail: "File: \(entry) — Atomic Stealer / Cthulhu / Banshee stage their AppleScript droppers under this naming pattern in temp dirs",
+                        path: path,
+                        remediation: "Review and remove: rm \"\(path)\" — then run a full sweep (sudo sweep) to look for staged credential dumps"
+                    ))
+                }
+            }
+        }
+
+        // Watch for active invocations that dump keychain / credential stores — a stealer hallmark.
         // Looking at currently-running processes is cheaper than parsing log history.
         let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
         if psResult.success {
             for line in psResult.stdout.split(separator: "\n") {
                 let lineStr = String(line)
+                let lowered = lineStr.lowercased()
+
+                // 1. `security dump-keychain` — extracts every stored password.
                 if lineStr.contains("security") && lineStr.contains("dump-keychain") {
                     findings.append(Finding(
                         severity: .high, category: .suspiciousProcess,
@@ -547,6 +624,34 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                    continue
+                }
+
+                // 2. `osascript` driving a fake "System Preferences requires your password" prompt.
+                //    AMOS / Banshee / Cuckoo all use this exact pattern. The dialog text always
+                //    references the macOS password and "system" or "preferences".
+                if lowered.contains("osascript") &&
+                   lowered.contains("display dialog") &&
+                   (lowered.contains("password") || lowered.contains("keychain")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "osascript driving a password-prompt dialog",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "Do NOT enter your password. Kill this process — it is the classic AMOS/Banshee credential prompt"
+                    ))
+                    continue
+                }
+
+                // 3. `chainbreaker` / `keychaindump` — third-party keychain dumpers.
+                if lowered.contains("chainbreaker") || lowered.contains("keychaindump") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Third-party keychain extraction tool running",
+                        detail: "Active: \(String(lineStr.prefix(160)))",
+                        path: nil,
+                        remediation: "Kill this process and investigate — chainbreaker/keychaindump are dedicated credential-extraction tools"
                     ))
                 }
             }

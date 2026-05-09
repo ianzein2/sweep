@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Items (SMAppService)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +678,138 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Background Items (SMAppService / btm)
+
+    /// Modern macOS persistence: Ventura+ introduced SMAppService, which lets apps register
+    /// LaunchAgents, daemons, and login items via API rather than dropping plists into the
+    /// classic LaunchAgents/LaunchDaemons directories. The registry lives in the BTM database
+    /// at /var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v*.btm and is exposed
+    /// via `sfltool dumpbtm`. Modern AMOS/Banshee/Cthulhu variants increasingly use this API
+    /// so legacy plist-only scans miss them. We surface the dump as a scan source and flag
+    /// entries that look like spyware (hidden paths, temp dirs, fake-Apple identifiers).
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // sfltool is in /usr/bin on macOS 13+. If it's missing or fails, silently skip.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // dumpbtm output is multiline records. Each record block contains lines like:
+        //   Name:           Some App
+        //   Bundle ID:      com.example.app
+        //   Executable Path: /Applications/Some App.app/Contents/MacOS/Some App
+        //   Item URL:       file:///Library/LaunchAgents/com.example.plist
+        // Parse line-by-line, emit a finding once we have enough context to evaluate.
+
+        var currentName: String?
+        var currentBundleId: String?
+        var currentExec: String?
+        var currentURL: String?
+        var currentDisposition: String?
+
+        func evaluateAndReset() {
+            defer {
+                currentName = nil; currentBundleId = nil; currentExec = nil
+                currentURL = nil; currentDisposition = nil
+            }
+            // Accept either an executable or a URL — many login items have only one.
+            let exec = currentExec ?? currentURL ?? ""
+            let bundleId = currentBundleId ?? ""
+            let name = currentName ?? bundleId
+
+            // Apple's own background items dominate the dump — skip them aggressively.
+            if bundleId.hasPrefix("com.apple.") &&
+               !SpywareSignature.isFakeAppleBundleId(bundleId) { return }
+            if exec.hasPrefix("/System/") || exec.contains("/System/Library/") { return }
+
+            // 1) Match against known spyware by bundle ID, label, or executable name.
+            let execName = (exec as NSString).lastPathComponent
+            if let sig = SpywareSignature.match(bundleId: bundleId)
+                ?? SpywareSignature.match(label: bundleId)
+                ?? SpywareSignature.match(processName: execName) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware in Background Items: \(sig.name)",
+                    detail: "Name: \(name), Bundle ID: \(bundleId)\(currentDisposition.map { ", State: \($0)" } ?? "")",
+                    path: exec.isEmpty ? nil : exec,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions, then uninstall \(sig.name)"
+                ))
+                return
+            }
+
+            // 2) Fake Apple bundle IDs are a strong impersonation signal.
+            if !bundleId.isEmpty && SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID registered as Background Item",
+                    detail: "Bundle ID: \(bundleId), Name: \(name) — legitimate Apple services don't appear here",
+                    path: exec.isEmpty ? nil : exec,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                return
+            }
+
+            // 3) Anything pointing at /tmp, /var/tmp, or a hidden directory is spyware-shaped.
+            let isHiddenPath = exec.contains("/.") ||
+                               exec.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            let isTempPath = exec.hasPrefix("/tmp/") || exec.hasPrefix("/private/tmp/") ||
+                             exec.hasPrefix("/var/tmp/") || exec.hasPrefix("/private/var/tmp/")
+            if !exec.isEmpty && (isHiddenPath || isTempPath) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Item points to \(isHiddenPath ? "hidden" : "temp") path",
+                    detail: "Name: \(name), Bundle ID: \(bundleId), Path: \(exec)",
+                    path: exec,
+                    remediation: "Remove via System Settings > General > Login Items & Extensions and investigate the source app"
+                ))
+                return
+            }
+
+            // 4) Background Item whose backing executable no longer exists — orphaned, often
+            //    left behind after partial removal of malware. Low severity, informational.
+            if !exec.isEmpty &&
+               !exec.hasPrefix("file://") &&
+               !FileManager.default.fileExists(atPath: exec) {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Background Item references missing executable",
+                    detail: "Name: \(name), Missing: \(exec)",
+                    path: exec,
+                    remediation: "Orphaned login item — clean up in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            // Records are typically separated by blank lines or "Item Identifier"-style headers.
+            if trimmed.isEmpty {
+                if currentExec != nil || currentBundleId != nil || currentURL != nil {
+                    evaluateAndReset()
+                }
+                continue
+            }
+
+            func value(after prefix: String) -> String? {
+                guard trimmed.hasPrefix(prefix) else { return nil }
+                return String(trimmed.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespaces)
+            }
+
+            if let v = value(after: "Name:")             { currentName = v;  continue }
+            if let v = value(after: "Bundle ID:")        { currentBundleId = v; continue }
+            if let v = value(after: "Identifier:")       { if currentBundleId == nil { currentBundleId = v } ; continue }
+            if let v = value(after: "Executable Path:")  { currentExec = v;  continue }
+            if let v = value(after: "URL:")              { currentURL = v;   continue }
+            if let v = value(after: "Item URL:")         { currentURL = v;   continue }
+            if let v = value(after: "Disposition:")      { currentDisposition = v; continue }
+        }
+        // Flush the final record.
+        if currentExec != nil || currentBundleId != nil || currentURL != nil {
+            evaluateAndReset()
         }
     }
 

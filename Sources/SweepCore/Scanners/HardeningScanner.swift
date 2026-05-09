@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking lock-screen notification previews")
+        checkLockScreenNotificationPreview(findings: &findings, errors: &errors)
+
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi password sharing")
+        checkWiFiSharing(findings: &findings, errors: &errors)
+
+        progress?.update("checking accessory access policy")
+        checkAccessoryAccess(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server hardening")
+        checkSSHHardening(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +461,167 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Lock-screen notification previews
+
+    /// 2FA codes from Messages and Mail are the #1 way SIM-swap and SS7 attackers escalate
+    /// once they have a phone number. If notifications are previewed on the lock screen,
+    /// anyone with physical access (or anyone shoulder-surfing) sees those codes without
+    /// touching the keyboard. Apple ships this on by default.
+    private func checkLockScreenNotificationPreview(findings: inout [Finding], errors: inout [String]) {
+        // ApplePushPreviewMode: 0 = Always (incl. when locked), 1 = When unlocked, 2 = Never
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.notificationcenterui", "previewType"
+        ], timeout: 5)
+
+        // The default (no value set) is "Always" on macOS.
+        let value = result.success
+            ? Int(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+            : nil
+        let alwaysShown = (value == 0) || value == nil
+
+        if alwaysShown {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Notifications preview on the lock screen",
+                detail: "Notification contents (including 2FA codes from Messages and Mail) are visible on the lock screen without unlocking",
+                path: nil,
+                remediation: "Set: System Settings > Notifications > Show Previews → \"When Unlocked\""
+            ))
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    /// AirPlay Receiver (added to macOS in Monterey) opens TCP/UDP listeners on the LAN
+    /// and has been the source of multiple CVEs (CVE-2024-23227 / "Wormable AirBorne" 2025
+    /// is the latest). Most users never use it; leaving it on is gratuitous attack surface.
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.RemoteManagement.plist", "AirPlayReceiverEnabled"
+        ], timeout: 5)
+
+        // Many systems store this elsewhere; also check the launchd state of the daemon.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let receiverRunning = launchctl.success && launchctl.stdout.contains("com.apple.AirPlayXPCHelper")
+
+        let prefEnabled = result.success &&
+            result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        if prefEnabled || receiverRunning {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac accepts AirPlay streams from other devices on the LAN — adds attack surface (CVE-2024-23227, AirBorne RCE family in 2025)",
+                path: nil,
+                remediation: "Disable: System Settings > General > AirDrop & Handoff > AirPlay Receiver: Off"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi Password Sharing
+
+    /// Continuity Wi-Fi password sharing pushes saved network credentials to Apple devices
+    /// you're physically near. Convenient at home; dangerous in coworking spaces, airports,
+    /// and conferences where adjacent strangers may end up authorized.
+    private func checkWiFiSharing(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.wifi.WiFiAgent", "WiFiPasswordSharingEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Wi-Fi password sharing is enabled",
+                detail: "This Mac will offer saved Wi-Fi credentials to nearby Apple devices via Continuity",
+                path: nil,
+                remediation: "Disable if you frequent shared spaces: System Settings > Wi-Fi > Allow asking to join networks / Password sharing"
+            ))
+        }
+    }
+
+    // MARK: - Accessory Access Policy (USB Restricted Mode for Mac)
+
+    /// Apple silicon Macs gained an "Allow accessories to connect" preference (Sequoia+)
+    /// — the macOS analogue of iOS USB Restricted Mode. "Always" effectively disables
+    /// the prompt and exposes the Mac to malicious USB-C peripherals (Juicejacking,
+    /// BadUSB, O.MG cables) that auto-mount when plugged in.
+    private func checkAccessoryAccess(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.accessoryAccess", "AllowAccessoriesAlways"
+        ], timeout: 5)
+        guard result.success else { return }
+        if result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "USB-C accessories are auto-trusted",
+                detail: "Mac is set to always allow new accessories — malicious USB devices (BadUSB, O.MG cables) connect without prompting",
+                path: nil,
+                remediation: "Set to \"Ask Every Time\" or \"Ask for New Accessories\": System Settings > Privacy & Security > Allow accessories to connect"
+            ))
+        }
+    }
+
+    // MARK: - SSH Server Hardening
+
+    /// If Remote Login is enabled, sshd_config still defaults to permitting password auth
+    /// and root login on macOS. Both are persistent backdoor vectors. We only emit findings
+    /// if SSH is actually exposed (the daemon is running) — there's no point lecturing a
+    /// user whose SSH is off.
+    private func checkSSHHardening(findings: inout [Finding], errors: inout [String]) {
+        let sshOn = ShellRunner.run("/usr/sbin/systemsetup",
+                                    arguments: ["-getremotelogin"], timeout: 5)
+        guard sshOn.success && sshOn.stdout.lowercased().contains(": on") else { return }
+
+        // Read effective config via `sshd -T` if possible (resolves Includes); fall back to file.
+        var effective = ""
+        let dump = ShellRunner.run("/usr/sbin/sshd", arguments: ["-T"], timeout: 5)
+        if dump.success {
+            effective = dump.stdout.lowercased()
+        } else if let raw = try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8) {
+            effective = raw.lowercased()
+        } else {
+            return
+        }
+
+        // Each line is `key value`. Find the LAST occurrence of each option, as later wins.
+        func value(of key: String) -> String? {
+            var found: String?
+            for line in effective.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2, String(parts[0]) == key else { continue }
+                found = String(parts[1]).trimmingCharacters(in: .whitespaces)
+            }
+            return found
+        }
+
+        // PermitRootLogin: anything other than "no" (or "prohibit-password" with key auth only) is risky.
+        let permitRoot = value(of: "permitrootlogin") ?? "yes"
+        if permitRoot == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows root login (PermitRootLogin yes)",
+                detail: "Remote attackers can attempt to brute-force the root account directly",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set: PermitRootLogin no — then run: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        // PasswordAuthentication: defaults to yes; key-only is the modern best practice.
+        let passwordAuth = value(of: "passwordauthentication") ?? "yes"
+        if passwordAuth == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "Passwords are guessable; SSH keys are not. Password auth is also abused by botnets via brute force.",
+                path: "/etc/ssh/sshd_config",
+                remediation: "After adding an SSH key, set: PasswordAuthentication no — then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
         }
     }
 

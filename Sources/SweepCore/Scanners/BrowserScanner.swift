@@ -4,17 +4,42 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
-    // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // Recent campaigns (late 2024 / 2025 / 2026) have weaponized VSCode/Cursor marketplace
+    // extensions to steal credentials, drain crypto wallets, and inject backdoors. Keywords
+    // mirror reported malicious extension families and IOCs.
     private let suspiciousEditorExtKeywords: [String] = [
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2026 marketplace incidents (DPRK Contagious Interview, ShellWasher cluster,
+        // Material Theme typosquats, Solidity-Language fakes, GitHub Copilot impersonators).
+        "shellwasher", "cychelloworld", "ctxnodelibs", "ai-task-runner",
+        "github-copilot-pro", "github-copilotpro", "copilot-helper",
+        "material-theme-icon", "solidity-language", "solidity-extra",
+        "prettiest-vscode", "claude-helpers", "claude-pro",
+        "auto-coder", "ai-fixer-pro", "code-runner-pro",
+        "remote-code-runner", "node-fetch-helper",
+        // BeaverTail / InvisibleFerret install via fake "Coding Test" zips.
+        "coding-test-helper", "code-test-runner",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Stage-2 indicators historically present in malicious extension display names.
+        "drainer", "wallet-helper", "wallet-sync", "token-helper",
+        "cookie-helper", "cookie-export", "session-export",
+    ]
+
+    // Domains historically used for stage-2 retrieval by malicious VSCode/Cursor extensions
+    // and supply-chain compromises (including the polyfill.io incident, June 2024).
+    private let suspiciousExtensionDomains: [String] = [
+        "polyfill.io", "cdn.polyfill.io",
+        "cachedfiles.cn", "cdn.cachedfiles.cn",
+        "bootcdn.net",
+        "ipcheck.cloud",
+        "api.npoint.io",
+        "transfer.sh",
+        "0x0.st",
     ]
 
     // Extensions that are well-known and safe
@@ -363,14 +388,16 @@ public final class BrowserScanner: Scanner {
 
                 // Scan for suspicious runtime behaviors in the extension bundle
                 let scriptResult = scanExtensionScripts(extPath: extPath)
-                if scriptResult.hasRemoteExec || scriptResult.hasShellExec {
+                if scriptResult.hasRemoteExec || scriptResult.hasShellExec || scriptResult.suspiciousDomain != nil {
+                    let severity: Severity = (scriptResult.hasRemoteExec || scriptResult.suspiciousDomain != nil) ? .high : .medium
                     findings.append(Finding(
-                        severity: scriptResult.hasRemoteExec ? .high : .medium,
+                        severity: severity,
                         category: .suspiciousFile,
                         title: "\(editorName) extension runs shell commands / remote code",
                         detail: "Extension: \(displayName) (\(extId))" +
                             (scriptResult.hasRemoteExec ? " — downloads and executes remote code" : "") +
-                            (scriptResult.hasShellExec ? " — spawns child_process commands" : ""),
+                            (scriptResult.hasShellExec ? " — spawns child_process commands" : "") +
+                            (scriptResult.suspiciousDomain.map { " — references known stage-2 host: \($0)" } ?? ""),
                         path: extPath,
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
@@ -382,6 +409,7 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+        let suspiciousDomain: String?
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
@@ -390,6 +418,7 @@ public final class BrowserScanner: Scanner {
         let fm = FileManager.default
         var hasRemoteExec = false
         var hasShellExec = false
+        var suspiciousDomain: String?
 
         let candidatePaths = [
             "\(extPath)/extension.js",
@@ -415,8 +444,15 @@ public final class BrowserScanner: Scanner {
                (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
                 hasRemoteExec = true
             }
+            // 2024-2026 supply-chain / DPRK extension stage-2 hosts.
+            if suspiciousDomain == nil {
+                for domain in suspiciousExtensionDomains where lower.contains(domain) {
+                    suspiciousDomain = domain
+                    break
+                }
+            }
         }
 
-        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec, suspiciousDomain: suspiciousDomain)
     }
 }
