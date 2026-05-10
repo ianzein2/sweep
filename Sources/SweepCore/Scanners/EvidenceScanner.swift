@@ -445,6 +445,22 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2025 wallet additions targeted by AMOS / Banshee / Frigate / Phantom-Stealer
+        ("Trust Wallet",    "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet",      "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Rabby",           "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Backpack",        "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Brave Wallet",    "odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("Sui Wallet",      "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("Aptos / Petra",   "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("Slope",           "pocmplpaccanhmnllbbkpgfliimjljgo"),
+        ("Argent X",        "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        ("MetaMask Flask",  "ljfoeinjpaedjfecbmggjgodbgkmjkjk"),
+        // Hardware wallet companion apps (browser-side files give attackers seed material)
+        ("Trezor Suite (browser)", "@trezor"),
+        // Standalone wallet app data dirs
+        ("Phantom (desktop)", "Phantom"),
+        ("Solflare",          "Solflare"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -452,6 +468,31 @@ public final class EvidenceScanner: Scanner {
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        // 2025 stealer additions
+        "Network Persistent State",                  // Chromium TLS cache w/ session bindings
+        "Affiliation Database",                      // contains sync passwords on Chromium
+        "Bookmarks",                                 // historically benign, but flagged when copied to /tmp
+        "History",                                   // Chromium browse history
+        "places.sqlite",                             // Firefox history
+        "formhistory.sqlite",                        // Firefox autofill
+        "signons.sqlite",                            // Firefox legacy logins
+    ]
+
+    /// Filenames stalker / stealer kits exfiltrate beyond browsers — SSH keys, Telegram sessions,
+    /// password-manager vaults, GPG keyrings, iCloud Keychain copies.
+    private let extraCredentialFilenames: Set<String> = [
+        // SSH private keys (any of these in /tmp or hidden dirs is exfil staging)
+        "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+        // Common cloud / dev tokens
+        ".npmrc", ".pypirc", ".netrc",
+        "credentials",                  // ~/.aws/credentials staged outside ~/.aws
+        // Messenger session theft
+        "tdata",                        // Telegram Desktop session blob
+        "Local Storage",                // Discord token bucket (when staged outside the app)
+        // Password-manager exports
+        "1password.1pux", "bitwarden_export.json", "lastpass_export.csv",
+        // GnuPG keyring
+        "secring.gpg", "private-keys-v1.d",
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
@@ -506,6 +547,36 @@ public final class EvidenceScanner: Scanner {
                                 remediation: "Rotate browser-saved passwords and investigate the process that created this file"
                             ))
                         }
+                    }
+                }
+
+                // SSH keys / Telegram tdata / GPG keyrings staged outside their legitimate dirs.
+                // AMOS-family stealers (and 2025 NimDoor builds) explicitly grep for these files
+                // and copy them into /tmp before uploading.
+                if extraCredentialFilenames.contains(filename) {
+                    let legitCredRoots = [
+                        "\(home)/.ssh",                                     // SSH keys
+                        "\(home)/.gnupg",                                   // GPG keys
+                        "\(home)/.aws",                                     // AWS credentials
+                        "\(home)/.npm",                                     // .npmrc location
+                        "\(home)/Library/Application Support/Telegram Desktop", // tdata
+                    ]
+                    let inLegitCredPath = legitCredRoots.contains(where: { filePath.hasPrefix($0) })
+                    let isStaging = filePath.hasPrefix("/tmp") || filePath.hasPrefix("/private/tmp") ||
+                                    filePath.hasPrefix("/var/tmp") ||
+                                    filePath.split(separator: "/").contains(where: {
+                                        let s = String($0)
+                                        return s.hasPrefix(".") && s != ".local" && s != ".config" &&
+                                               s != ".ssh" && s != ".gnupg" && s != ".aws" && s != ".npm"
+                                    })
+                    if !inLegitCredPath && isStaging {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "Credential file copied to staging location: \(filename)",
+                            detail: "File \"\(filename)\" at \(filePath) — outside its legitimate directory; stealers stage SSH keys, Telegram sessions, and dev tokens before exfiltration",
+                            path: filePath,
+                            remediation: "Rotate the affected credential (SSH key, API token, or messenger session) and investigate the process that placed this copy"
+                        ))
                     }
                 }
 

@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plugin bundles")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking modern Login Items (BTM)")
+        scanBackgroundTaskItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,153 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plugin Bundle Persistence
+
+    /// Spotlight importers (.mdimporter), Quick Look generators (.qlgenerator), screensavers (.saver),
+    /// and Audio Units (.component) get auto-loaded into Apple-signed host processes (mdimporter, quicklookd,
+    /// legacyScreenSaver, coreaudiod). Dropping a malicious bundle into one of these directories yields
+    /// persistent code execution under a trusted process — a technique used by 2024-2025 stealers and
+    /// red-team kits to stay below LaunchAgent-focused scanners.
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let pluginRoots: [(path: String, suffix: String, hostLabel: String)] = [
+            // Spotlight importers — loaded by mdimporter / mds.
+            ("/Library/Spotlight",                       ".mdimporter",  "Spotlight (mds)"),
+            ("\(home)/Library/Spotlight",                ".mdimporter",  "Spotlight (mds)"),
+            // Quick Look generators — loaded by quicklookd whenever Finder previews a file.
+            ("/Library/QuickLook",                       ".qlgenerator", "Quick Look (quicklookd)"),
+            ("\(home)/Library/QuickLook",                ".qlgenerator", "Quick Look (quicklookd)"),
+            // Screensavers — loaded by legacyScreenSaver. macOS 14+ requires a TCC prompt, but
+            // older bundles still run in user context after first approval.
+            ("/Library/Screen Savers",                   ".saver",       "Screen Saver (legacyScreenSaver)"),
+            ("\(home)/Library/Screen Savers",            ".saver",       "Screen Saver (legacyScreenSaver)"),
+            // Audio Units — loaded by coreaudiod into every audio-using process.
+            ("/Library/Audio/Plug-Ins/Components",        ".component",   "Audio Unit (coreaudiod)"),
+            ("\(home)/Library/Audio/Plug-Ins/Components", ".component",   "Audio Unit (coreaudiod)"),
+            // Color Sync filters / Print filters — loaded by ColorSync and CUPS.
+            ("/Library/Printers/PPD Plugins",             ".plugin",      "Print plugin (CUPS)"),
+            ("/Library/ColorSync/Profiles",               ".colorprofile","ColorSync profile"),
+        ]
+
+        let fm = FileManager.default
+        for root in pluginRoots {
+            guard fm.fileExists(atPath: root.path),
+                  let entries = try? fm.contentsOfDirectory(atPath: root.path) else { continue }
+
+            for entry in entries where entry.hasSuffix(root.suffix) {
+                let bundlePath = "\(root.path)/\(entry)"
+
+                // The executable lives at <bundle>/Contents/MacOS/<binaryName>.
+                let macOSDir = "\(bundlePath)/Contents/MacOS"
+                let bundleBinary = (try? fm.contentsOfDirectory(atPath: macOSDir).first)
+                    .map { "\(macOSDir)/\($0)" }
+
+                let isSigned = bundleBinary.map { checkIsSigned(path: $0) } ?? false
+
+                // Match against known spyware first
+                if let sig = SpywareSignature.match(processName: entry.replacingOccurrences(of: root.suffix, with: "")) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware as \(root.hostLabel) plugin: \(sig.name)",
+                        detail: "Plugin: \(entry) loaded into \(root.hostLabel)",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned \(root.hostLabel) plugin",
+                        detail: "Plugin: \(entry) — auto-loaded into \(root.hostLabel) but is not code-signed",
+                        path: bundlePath,
+                        remediation: "Inspect, then remove if unfamiliar: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Background Task Management (Login Items v2)
+
+    /// Modern macOS (Ventura+) registers Login Items in the BTM database and via SMAppService —
+    /// completely bypassing the classic LaunchAgents directories. PermissionScanner already greps
+    /// `sfltool dumpbtm` for known-spyware names; this pass surfaces unfamiliar entries so the user
+    /// can review them too. AMOS, Banshee, and AppleProcessHub all install themselves here in 2025.
+    private func scanBackgroundTaskItems(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        struct BTMRecord {
+            var url: String = ""
+            var bundleId: String = ""
+            var team: String = ""
+            var disposition: String = ""
+        }
+
+        // sfltool dumpbtm output is a series of "Item N:" stanzas with key-value pairs.
+        // We scan for unsigned/ad-hoc entries (empty Team Identifier) outside trusted paths.
+        var records: [BTMRecord] = []
+        var current = BTMRecord()
+        for raw in result.stdout.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("Item ") || line.hasPrefix("--") {
+                if !current.url.isEmpty || !current.bundleId.isEmpty { records.append(current) }
+                current = BTMRecord()
+                continue
+            }
+            if line.hasPrefix("URL:") {
+                current.url = line.replacingOccurrences(of: "URL:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Bundle Identifier:") || line.hasPrefix("Bundle ID:") {
+                current.bundleId = line.split(separator: ":", maxSplits: 1)
+                    .last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            } else if line.hasPrefix("Developer Identifier:") || line.hasPrefix("Team Identifier:") {
+                current.team = line.split(separator: ":", maxSplits: 1)
+                    .last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+            } else if line.hasPrefix("Disposition:") {
+                current.disposition = line.replacingOccurrences(of: "Disposition:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+        if !current.url.isEmpty || !current.bundleId.isEmpty { records.append(current) }
+
+        let trustedTeams: Set<String> = [
+            "(null)", "", "Apple",  // Apple-signed entries report empty team here
+        ]
+
+        for record in records {
+            // Apple, Apple-signed, and clearly system entries are uninteresting.
+            if record.bundleId.hasPrefix("com.apple.") { continue }
+            if record.url.hasPrefix("file:///System/") || record.url.hasPrefix("file:///Library/Apple/") { continue }
+
+            // Hidden path or tmp staging → high severity.
+            let url = record.url
+            let isHidden = url.split(separator: "/").contains { $0.hasPrefix("%2E") || $0.hasPrefix(".") }
+            let isTemp = url.contains("/tmp/") || url.contains("/private/tmp/") || url.contains("/var/tmp/")
+            let unsigned = trustedTeams.contains(record.team)
+
+            if isHidden || isTemp {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login Item registered from hidden or temp path",
+                    detail: "Bundle: \(record.bundleId.isEmpty ? "(none)" : record.bundleId), URL: \(url)",
+                    path: nil,
+                    remediation: "Remove: System Settings > General > Login Items & Extensions"
+                ))
+            } else if unsigned && !record.bundleId.isEmpty {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Login Item without developer identifier",
+                    detail: "Bundle: \(record.bundleId), URL: \(url)" +
+                        (record.disposition.isEmpty ? "" : ", Status: \(record.disposition)"),
+                    path: nil,
+                    remediation: "Verify this app is expected: System Settings > General > Login Items & Extensions"
+                ))
+            }
         }
     }
 

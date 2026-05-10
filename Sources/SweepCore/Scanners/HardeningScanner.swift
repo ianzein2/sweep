@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version support")
+        checkMacOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking Mail privacy protection")
+        checkMailPrivacyProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkWiFiMACRandomization(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +455,101 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS version support window
+
+    /// Apple actively patches the current macOS plus the previous two major releases. Anything
+    /// older stops receiving fixes for known-exploited vulns (kernel TCC bypasses, WebKit RCEs,
+    /// CoreText bugs that Pegasus / DazzleSpy used). Running an unsupported version is one of the
+    /// strongest single hardening risks on a Mac in 2026.
+    private func checkMacOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // As of 2026 the supported window is macOS 14 (Sonoma) and newer. macOS 13 (Ventura) and
+        // earlier no longer receive Apple security updates and miss patches like the HM Surf TCC
+        // bypass (CVE-2024-44133) and the 2025 WebKit and IOMobileFrameBuffer fixes.
+        let lastSupportedMajor = 14
+
+        if major < lastSupportedMajor {
+            let nameByMajor: [Int: String] = [
+                10: "macOS 10.x", 11: "Big Sur", 12: "Monterey", 13: "Ventura",
+                14: "Sonoma", 15: "Sequoia", 16: "Tahoe",
+            ]
+            let label = nameByMajor[major] ?? "macOS \(major)"
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS version no longer receives security updates",
+                detail: "Running \(label) (\(major).\(version.minorVersion).\(version.patchVersion)) — Apple ships fixes only for macOS \(lastSupportedMajor)+. Known kernel and TCC-bypass exploits used by 2024-2025 stealers remain unpatched.",
+                path: nil,
+                remediation: "Upgrade: System Settings > General > Software Update. If your hardware can't run a supported version, treat the device as untrusted for sensitive work."
+            ))
+        } else if major == lastSupportedMajor {
+            // Sonoma is still supported but is the next to roll off — informational nudge.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS is supported but nearing end of life",
+                detail: "Running major version \(major) — security updates will stop within ~12 months of the next macOS release",
+                path: nil,
+                remediation: "Plan an upgrade when convenient: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Mail Privacy Protection
+
+    /// Mail Privacy Protection (Mail.app, macOS 12+) hides the user's IP and pre-fetches remote
+    /// content, defeating tracking pixels. Most modern stalkerware-as-a-service products rely on
+    /// these pixels to confirm a target opened an email; leaving the protection off is a real
+    /// surveillance gap.
+    private func checkMailPrivacyProtection(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.mail-shared", "DownloadInBackground"
+        ], timeout: 5)
+        // Mail Privacy Protection enables DownloadInBackground=1 plus AutoLoadRemoteContent=1.
+        let altResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.mail", "AutoLoadRemoteContent"
+        ], timeout: 5)
+
+        let bg = result.success ? result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let auto = altResult.success ? altResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+
+        // If both keys are explicitly set to 0, Mail Privacy Protection is off.
+        if bg == "0" || auto == "0" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Mail Privacy Protection is disabled",
+                detail: "Mail.app will fetch remote content directly, exposing IP and read-receipts to senders — including stalkerware tracking pixels",
+                path: nil,
+                remediation: "Enable: Mail > Settings > Privacy > Protect Mail Activity"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi MAC Randomization
+
+    /// macOS Sonoma+ randomizes the Wi-Fi MAC per network by default. A static MAC across networks
+    /// lets surveillance vendors and Wi-Fi-tracking ad networks fingerprint the device across
+    /// locations — and is required by some commercial stalkerware before the kit will install.
+    private func checkWiFiMACRandomization(findings: inout [Finding], errors: inout [String]) {
+        // The system-wide private MAC preference defaults to enabled on Sonoma+. If it has been
+        // explicitly turned off, every joined network sees the same hardware MAC.
+        let privacyResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.private-mac-address-enabled"
+        ], timeout: 5)
+        guard privacyResult.success else { return }
+
+        let value = privacyResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Wi-Fi MAC randomization is disabled",
+                detail: "Private Wi-Fi address is off system-wide — your Mac broadcasts the same MAC on every network, enabling cross-location tracking",
+                path: nil,
+                remediation: "Per-network: Wi-Fi menu > the network's (i) icon > Private Wi-Fi address: Rotating"
+            ))
         }
     }
 

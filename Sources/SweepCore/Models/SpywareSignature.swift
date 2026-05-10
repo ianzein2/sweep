@@ -434,6 +434,150 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS threats — DPRK / Lazarus and successors
+        SpywareSignature(
+            // Lazarus group, 2025; Nim-compiled droppers in fake Web3 / crypto job lures.
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "trojanizedZoom", "ZoomVideoSDK", "zoom_sdk_support"],
+            bundleIdentifiers: ["us.zoom.support.sdk", "com.zoom.video-sdk-helper"],
+            filePaths: [
+                "~/Library/LaunchAgents/com.zoom.video-sdk-helper.plist",
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.zoom_sdk",
+            ],
+            launchAgentLabels: ["com.zoom.video-sdk-helper", "us.zoom.support.sdk"]
+        ),
+        SpywareSignature(
+            // DPRK "Contagious Interview" campaign — fake job interview installer (2024-2025).
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "p.js", "ferret", "InvisibleFerret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/.npl",
+                "~/Library/Application Support/.bt",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Lazarus Go-based RAT (2025) replacing earlier Python builds.
+            name: "PylangGhost / GoLangGhost",
+            processNames: ["pylangghost", "golangghost", "ghostagent", "system_helper_x"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.ghost", "~/Library/Application Support/.ghost"],
+            launchAgentLabels: ["com.apple.system.helper.x"]
+        ),
+        // 2025-2026 macOS infostealers
+        SpywareSignature(
+            // AMOS spinoff first reported Oct 2025; impersonates Apple system processes.
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "apphub_helper", "apphubd"],
+            bundleIdentifiers: ["com.apple.processhub", "com.apple.processhub.helper"],
+            filePaths: [
+                "/private/tmp/.apphub",
+                "~/Library/Application Support/.apphub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.helper", "com.apple.processhub"]
+        ),
+        SpywareSignature(
+            // Distributed via "fake YouTube tutorial" downloads (2025).
+            name: "FrigateStealer",
+            processNames: ["frigate", "Frigate", "frigate_helper", "FrigateAgent"],
+            bundleIdentifiers: ["com.frigate.agent"],
+            filePaths: [
+                "/private/tmp/.frigate",
+                "~/Library/Application Support/.Frigate",
+            ],
+            launchAgentLabels: ["com.frigate.agent", "com.frigate.service"]
+        ),
+        SpywareSignature(
+            // 2025 stealer family advertised on Russian forums; targets browser cookies + wallets.
+            name: "Lunar / MoonStealer",
+            processNames: ["MoonStealer", "moonstealer", "lunar", "LunarAgent", "moon_helper"],
+            bundleIdentifiers: ["com.moonstealer.agent", "com.lunar.helper"],
+            filePaths: [
+                "/private/tmp/.moon",
+                "/private/tmp/.lunar",
+                "~/Library/Application Support/.MoonStealer",
+            ],
+            launchAgentLabels: ["com.moonstealer.agent", "com.lunar.service"]
+        ),
+        SpywareSignature(
+            // Late-2025 stealer associated with cracked-app installers.
+            name: "SHOOKSTER",
+            processNames: ["shookster", "SHOOKSTER", "sh00kster", "shk_helper"],
+            bundleIdentifiers: ["com.shookster.agent"],
+            filePaths: [
+                "/private/tmp/.shookster",
+                "~/Library/Application Support/.shookster",
+            ],
+            launchAgentLabels: ["com.shookster.agent"]
+        ),
+        SpywareSignature(
+            // 2025 stealer that bundles a fake "calendar" app (com.app.calendar.helper).
+            name: "Phantom Stealer",
+            processNames: ["PhantomStealer", "phantomstealer", "phantom_helper", "PhStealer"],
+            bundleIdentifiers: ["com.phantom.stealer", "com.phstealer.agent"],
+            filePaths: [
+                "/private/tmp/.phantom_stealer",
+                "~/Library/Application Support/.PhantomStealer",
+            ],
+            launchAgentLabels: ["com.phantom.stealer", "com.phstealer.agent"]
+        ),
+        SpywareSignature(
+            // 2025 AMOS variant rebranded "BonBon" by its operators.
+            name: "BonBon Stealer (AMOS variant)",
+            processNames: ["BonBon", "bonbon", "bonbon_helper", "AMOSv2"],
+            bundleIdentifiers: ["com.bonbon.agent", "com.amos.v2"],
+            filePaths: [
+                "/private/tmp/.bonbon",
+                "~/Library/Application Support/.bonbon",
+            ],
+            launchAgentLabels: ["com.bonbon.agent"]
+        ),
+        // 2025-2026 macOS ransomware / RATs
+        SpywareSignature(
+            // First confirmed cross-platform LockBit fork on macOS (late 2024 / 2025).
+            name: "NotLockBit",
+            processNames: ["notlockbit", "NotLockBit", "lockbit-mac", "ntlb_helper"],
+            bundleIdentifiers: ["com.notlockbit.agent"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.NotLockBit",
+            ],
+            launchAgentLabels: ["com.notlockbit.agent"]
+        ),
+        SpywareSignature(
+            // Cross-platform RAT (2024-2025) ported to macOS, often dropped via npm supply chain.
+            name: "HabitsRAT",
+            processNames: ["habitsrat", "HabitsRAT", "habits_helper", "habitsd"],
+            bundleIdentifiers: ["com.habits.rat"],
+            filePaths: ["/private/tmp/.habits", "~/Library/Application Support/.habits"],
+            launchAgentLabels: ["com.habits.rat", "com.habits.daemon"]
+        ),
+        SpywareSignature(
+            // Voldemort backdoor (TA415 / late-2024) — Mac variant uses Google Sheets as C2.
+            name: "Voldemort",
+            processNames: ["voldemort", "Voldemort", "vmrt_helper", "tomriddle"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.voldemort",
+                "~/Library/Application Support/.voldemort",
+            ],
+            launchAgentLabels: ["com.google.sheets.sync", "com.gmail.helper"]
+        ),
+        SpywareSignature(
+            // Cuckoo Stealer 2.0 (2025) — direct successor with reworked persistence.
+            name: "Cuckoo Stealer v2",
+            processNames: ["CuckooV2", "cuckoo2", "DumpMediaSpotifyMusicConverter2", "spotifyConverter"],
+            bundleIdentifiers: ["com.cuckoo.stealer.v2", "com.spotify.converter.helper"],
+            filePaths: [
+                "/private/tmp/.cuckoo2",
+                "~/Library/Application Support/.cuckoo2",
+            ],
+            launchAgentLabels: ["com.cuckoo.stealer.v2", "com.spotify.converter.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -474,6 +618,16 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2025-2026 stealer process-mimic names observed in the wild
+        "appleprocesshub",       // AppleProcessHub stealer (Oct 2025)
+        "AppleProcessHub",
+        "apphubd",               // AppleProcessHub helper
+        "macos_updater",         // generic stealer disguise
+        "system_helper_x",       // Lazarus PylangGhost
+        "ZoomVideoSDK",          // NimDoor — fake Zoom SDK helper
+        "zoom_sdk_support",
+        "spotifyConverter",      // Cuckoo v2
+        "DumpMediaSpotifyMusicConverter2",
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID
