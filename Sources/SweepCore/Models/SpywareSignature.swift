@@ -434,6 +434,197 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS-targeting threats (current ITW campaigns)
+        SpywareSignature(
+            // BlackBasta-affiliated macOS backdoor, first reported by Bitdefender Feb 2024.
+            // Drops a binary in /tmp masquerading as a system updater and writes a LaunchAgent.
+            name: "RustDoor",
+            processNames: ["rustdoor", "GoogleHelperUpdater", "Visual Studio Updater"],
+            bundleIdentifiers: ["com.apple.systemupdater", "com.visualstudio.updater"],
+            filePaths: [
+                "/private/tmp/.test",
+                "/private/tmp/.previewer",
+                "~/Library/Application Support/.GoogleUpdater",
+                "/Users/Shared/.GoogleUpdater",
+            ],
+            launchAgentLabels: ["com.apple.systemupdater", "com.google.updater.agent"]
+        ),
+        SpywareSignature(
+            // Chinese-targeting RAT dropped via WeChat/Skype installers, Kaspersky Aug 2024.
+            // Uses a tiny dropper plus a persistent agent in ~/Library.
+            name: "HZ Rat",
+            processNames: ["hzd", "hzdaemon", "HZ_Helper", "OpenVPNHelper"],
+            bundleIdentifiers: ["com.openvpn.helper", "com.tencent.update"],
+            filePaths: [
+                "~/Library/Application Support/.hzd",
+                "/private/tmp/.hzd",
+                "~/Library/Preferences/com.openvpn.helper.plist",
+            ],
+            launchAgentLabels: ["com.openvpn.helper", "com.tencent.update.helper"]
+        ),
+        SpywareSignature(
+            // Python/Swift backdoor staged through a malicious VS Code extension.
+            // Original Bitdefender report June 2023; new variants seen through 2024.
+            name: "JokerSpy",
+            processNames: ["xcc", "shared.dat", "sh.py", "JokerSpy"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Public/.local/xcc",
+                "~/Library/Application Support/Code/User/globalStorage/.xcc",
+                "/Users/Shared/.local/xcc",
+                "/private/tmp/.xcc",
+            ],
+            launchAgentLabels: ["com.apple.xcc", "com.vscode.helper"]
+        ),
+        SpywareSignature(
+            // Trojanized Termius/iTerm2 distributed via Baidu ads. SentinelOne re-reported
+            // a resurgent variant in Sept 2024 — same fake CoreLocation framework drop.
+            name: "macOS.ZuRu",
+            processNames: ["g.ps1", "GoogleUpdate", "Termius Helper", "iTermLite"],
+            bundleIdentifiers: ["com.termius.mac", "com.googlecode.iterm2.helper"],
+            filePaths: [
+                "~/Library/CoreLocation/.fseventsd",
+                "/tmp/GoogleUpdate",
+                "/private/var/tmp/.update_check",
+                "/Applications/Termius.app/Contents/Frameworks/libcrypto.2.dylib",
+            ],
+            launchAgentLabels: ["com.google.update.agent", "com.termius.helper"]
+        ),
+        SpywareSignature(
+            // The same APT41-linked Android implant reappeared on macOS in mid-2024 with
+            // a full plugin framework; ThreatFabric and Huntress documented the OSX build.
+            name: "LightSpy (macOS)",
+            processNames: ["LightSpy", "macircloader", "core_proxy"],
+            bundleIdentifiers: ["com.apple.softwareupdate.darwin"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "/Users/Shared/.lightspy_core",
+                "~/Library/Caches/com.apple.softwareupdate.darwin",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate.darwin"]
+        ),
+        SpywareSignature(
+            // Nov 2024 SentinelOne writeup. Stores payload entirely in extended attributes
+            // and executes via AppleScript — leaves a small launcher in /tmp.
+            name: "RustyAttr",
+            processNames: ["Internal_Pdf", "Spectacle", "rustyattr"],
+            bundleIdentifiers: ["com.apple.pdf.viewer"],
+            filePaths: [
+                "/private/tmp/.RustyAttr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.apple.pdf.viewer"]
+        ),
+        SpywareSignature(
+            // 2024 stealer (FIN7 affiliate) targeting macOS crypto users — variant of
+            // BeaverTail with credential exfil; ships as a fake macOS browser update.
+            name: "DeerStealer",
+            processNames: ["deerStealer", "deerStealer.helper", "ChromeUpdate"],
+            bundleIdentifiers: ["com.google.chromeupdater"],
+            filePaths: [
+                "/private/tmp/.deer",
+                "~/Library/Application Support/.deer",
+            ],
+            launchAgentLabels: ["com.google.chromeupdater"]
+        ),
+        SpywareSignature(
+            // Lazarus / DPRK "Contagious Interview" campaign. The downloader masquerades
+            // as a coding-challenge npm package and stages a Python backdoor.
+            name: "BeaverTail",
+            processNames: ["VCam", "main.py", "BeaverTail", "node-helper"],
+            bundleIdentifiers: ["com.npm.helper"],
+            filePaths: [
+                "~/Library/Caches/com.apple.installer/.cache",
+                "/private/tmp/.beavertail",
+                "~/.npm/node_modules/.cache/.beaver",
+            ],
+            launchAgentLabels: ["com.npm.helper", "com.apple.installer.helper"]
+        ),
+        SpywareSignature(
+            // Second-stage Python backdoor that BeaverTail drops once a developer runs
+            // the malicious "interview" npm package.
+            name: "InvisibleFerret",
+            processNames: ["pay", "p.py", "InvisibleFerret", "anydeskd"],
+            bundleIdentifiers: ["com.anydesk.helper"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.ferret",
+                "~/.cache/pip/.ferret",
+            ],
+            launchAgentLabels: ["com.anydesk.helper"]
+        ),
+        SpywareSignature(
+            // Lazarus 2024 RustBucket follow-on; bundles a fake PostgreSQL binary as
+            // the stager and pulls a second-stage from a typo-squatted GitHub repo.
+            name: "FullHouse.Doored",
+            processNames: ["postgresql", "psql_helper", "FullHouseDoor"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/postgresql",
+                "/private/var/tmp/.psql_helper",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Huntress / Sentinel "NimDoor" — Nim-language backdoor used by DPRK in
+            // 2025 Web3 social-engineering attacks. Drops a Mach-O in ~/Library/Frameworks.
+            name: "NimDoor",
+            processNames: ["NimDoor", "GoogleChromeFramework", "nimd"],
+            bundleIdentifiers: ["com.google.chrome.framework.helper"],
+            filePaths: [
+                "~/Library/Frameworks/.GoogleChromeFramework",
+                "/private/tmp/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.chrome.framework.helper"]
+        ),
+        SpywareSignature(
+            // Banshee Stealer v2 (Nov 2024). Builds on Banshee but adds Apple's own
+            // XProtect string-encryption trick to dodge static signatures.
+            name: "Banshee 2.0",
+            processNames: ["BansheeV2", "banshee2", "bnsh2"],
+            bundleIdentifiers: ["com.banshee.v2"],
+            filePaths: [
+                "/private/tmp/.banshee2",
+                "~/Library/Application Support/.Banshee2",
+            ],
+            launchAgentLabels: ["com.banshee.v2.service"]
+        ),
+        SpywareSignature(
+            // PythonStealer / "AppleProcessHub" — Apr 2025 Kandji writeup. Persists
+            // through ~/Library/LaunchAgents and exfils browser data.
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aphub"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aphub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            // FrigidStealer (Feb 2025) — distributed through fake browser update SocGholish
+            // landing pages targeting macOS. Drops a single Mach-O in /tmp.
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "SafariUpdate"],
+            bundleIdentifiers: ["com.apple.safari.updater"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.apple.safari.updater"]
+        ),
+        SpywareSignature(
+            // Trend Micro "CrystalRAY" — exploits dev tools and SSH key theft, with a
+            // small macOS variant seen mid-2024.
+            name: "CrystalRAY",
+            processNames: ["crystalray", "crystal_helper", "ssh-keystore"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/.ssh/.crystal",
+            ],
+            launchAgentLabels: ["com.ssh.keystore"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -474,6 +665,13 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        "GoogleChromeFramework", // Real: Google Chrome Framework (library, not a process)
+        "SafariUpdate",          // Not a real Apple process
+        "ChromeUpdate",          // Real: GoogleSoftwareUpdateAgent
+        "ChromeUpdater",         // Same
+        "Visual Studio Updater", // Not a real Microsoft binary on macOS
+        "Termius Helper",        // Termius ships "Termius Helper" capitalized differently than the impostor variant
+        "GoogleHelperUpdater",   // Used by RustDoor
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

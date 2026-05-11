@@ -12,6 +12,27 @@ public final class PermissionScanner: Scanner {
         ("kTCCServicePostEvent", "Synthetic Input"),
         ("kTCCServiceMicrophone", "Microphone"),
         ("kTCCServiceCamera", "Camera"),
+        // 2024-2025: stalkerware increasingly relies on AppleEvents (AppleScript automation)
+        // and Developer Tool (lets a process bypass Gatekeeper for its children).
+        ("kTCCServiceAppleEvents", "Automation (Apple Events)"),
+        ("kTCCServiceDeveloperTool", "Developer Tool"),
+        // Granular folder access — a stealer with these can read your whole user space
+        // without needing Full Disk Access.
+        ("kTCCServiceSystemPolicyDocumentsFolder", "Documents Folder"),
+        ("kTCCServiceSystemPolicyDesktopFolder", "Desktop Folder"),
+        ("kTCCServiceSystemPolicyDownloadsFolder", "Downloads Folder"),
+        ("kTCCServiceSystemPolicyNetworkVolumes", "Network Volumes"),
+        ("kTCCServiceSystemPolicyRemovableVolumes", "Removable Volumes"),
+        // Personal-data services — surveillance-ware harvests these directly.
+        ("kTCCServiceAddressBook", "Contacts"),
+        ("kTCCServiceCalendar", "Calendar"),
+        ("kTCCServiceReminders", "Reminders"),
+        ("kTCCServicePhotos", "Photos"),
+        ("kTCCServiceMediaLibrary", "Media Library"),
+        ("kTCCServiceLocation", "Location"),
+        ("kTCCServiceBluetoothAlways", "Bluetooth"),
+        // Screen Time / Family Controls — covertly tracks app usage and web browsing.
+        ("kTCCServiceEndpointSecurityClient", "Endpoint Security Client"),
     ]
 
     private let whitelistedClients: Set<String> = [
@@ -138,6 +159,57 @@ public final class PermissionScanner: Scanner {
             let hasInputMonitoring = permLabels.contains("Input Monitoring")
             let hasMic = permLabels.contains("Microphone")
             let hasCamera = permLabels.contains("Camera")
+            let hasAutomation = permLabels.contains("Automation (Apple Events)")
+            let hasDeveloperTool = permLabels.contains("Developer Tool")
+            let hasAccessibility = permLabels.contains("Accessibility")
+            let hasEndpointSecurity = permLabels.contains("Endpoint Security Client")
+
+            // Endpoint Security Client is a kernel-adjacent capability — only EDR vendors
+            // should hold it. Anything else with this grant is highly suspicious.
+            if hasEndpointSecurity {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Non-standard app has Endpoint Security Client",
+                    detail: "Client: \(client) — can monitor every process on the system. Reserved for EDR/AV vendors.",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > Endpoint Security"
+                ))
+            }
+
+            // AppleEvents + Accessibility = an app can both observe and drive every other
+            // app on the Mac via AppleScript. This combination is the hallmark of modern
+            // AppleScript-based macOS spyware (BeaverTail, ZuRu-family). It is rarely
+            // legitimate outside automation tools like Keyboard Maestro or Hammerspoon.
+            if hasAutomation && hasAccessibility && !knownAccessibilityApps.contains(client) {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "App has Automation + Accessibility (full app control)",
+                    detail: "Client: \(client) — can read every window and script every app via AppleScript",
+                    path: nil,
+                    remediation: "Revoke both in System Settings > Privacy & Security — only known automation tools (Keyboard Maestro, Hammerspoon) need this combination"
+                ))
+            } else if hasAutomation {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "App has Automation (Apple Events) permission",
+                    detail: "Client: \(client) — can script other apps via AppleScript / osascript",
+                    path: nil,
+                    remediation: "Verify in System Settings > Privacy & Security > Automation"
+                ))
+            }
+
+            // Developer Tool turns the holder into a Gatekeeper bypass — anything it
+            // launches is exempt from notarization checks. Modern stealers (AMOS family)
+            // request this so the dropped payload can run.
+            if hasDeveloperTool {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Non-Apple app has Developer Tool permission",
+                    detail: "Client: \(client) — child processes are exempt from Gatekeeper checks",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > Developer Tools unless this is Xcode or a verified IDE"
+                ))
+            }
 
             if hasScreenCapture && hasInputMonitoring {
                 findings.append(Finding(
@@ -168,6 +240,43 @@ public final class PermissionScanner: Scanner {
                     title: "Non-standard app has Input Monitoring",
                     detail: "Client: \(client), Granted: \(permissions.first?.modified ?? "unknown")",
                     path: nil, remediation: "Check System Settings > Privacy & Security > Input Monitoring"
+                ))
+            }
+
+            // Personal-data harvester pattern: an app holding multiple personal-data
+            // services is a stalkerware footprint. We weight Photos/Contacts/Calendar/
+            // Reminders/Location — three or more of these together is unusual outside a
+            // PIM suite, and rarely legitimate for a non-Apple background process.
+            let personalDataLabels: Set<String> = [
+                "Photos", "Contacts", "Calendar", "Reminders", "Location", "Media Library",
+            ]
+            let personalDataCount = permLabels.filter { personalDataLabels.contains($0) }.count
+            if personalDataCount >= 3 {
+                let held = permLabels.filter { personalDataLabels.contains($0) }
+                    .sorted().joined(separator: ", ")
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "App holds multiple personal-data permissions",
+                    detail: "Client: \(client) — \(held)",
+                    path: nil,
+                    remediation: "Verify this app legitimately needs all of these in System Settings > Privacy & Security"
+                ))
+            }
+
+            // Granular folder access without Full Disk Access is the modern infostealer
+            // pattern (avoids the Full Disk Access prompt entirely).
+            let folderLabels: Set<String> = [
+                "Documents Folder", "Desktop Folder", "Downloads Folder",
+                "Network Volumes", "Removable Volumes",
+            ]
+            let folderGrants = permLabels.filter { folderLabels.contains($0) }
+            if folderGrants.count >= 2 {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "App has access to multiple user folders",
+                    detail: "Client: \(client) — \(folderGrants.sorted().joined(separator: ", "))",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > Files and Folders if not expected"
                 ))
             }
         }

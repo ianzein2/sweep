@@ -129,6 +129,68 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: Apple Events automation + Accessibility = AppleScript-based
+        // backdoor. The 2024-2025 wave of macOS stalkerware (BeaverTail/ZuRu kin)
+        // relies on osascript and Apple Events to drive other apps invisibly.
+        let permissionFindings = results.first(where: { $0.scannerName == "Permission Scan" })?.findings ?? []
+        let hasAutomationPlus = permissionFindings.contains {
+            $0.title.contains("Automation + Accessibility") ||
+            $0.title.contains("Automation (Apple Events)")
+        }
+        let hasSuspiciousAppleScriptPersistence = (results.first(where: { $0.scannerName == "Persistence Scan" })?.findings ?? [])
+            .contains { f in
+                let lower = (f.path ?? "").lowercased() + " " + f.detail.lowercased()
+                return lower.contains("osascript") || lower.contains(".scpt") || lower.contains("applescript")
+            }
+        if hasAutomationPlus && hasSuspiciousAppleScriptPersistence {
+            findings.append(Finding(
+                severity: .high,
+                category: .keylogging,
+                title: "AppleScript automation backdoor pattern detected",
+                detail: "An app holds Automation + Accessibility while a LaunchAgent invokes osascript — classic macOS AppleScript-based RAT footprint",
+                path: nil,
+                remediation: "Revoke Automation in System Settings > Privacy & Security and remove the AppleScript persistence"
+            ))
+        }
+
+        // Pattern 7: Supply-chain compromise. A redirected npm/pip registry combined
+        // with a suspicious shell-config command means every dev build can pull
+        // tampered packages and the shell is set up to run their payload.
+        let persistenceFindings = results.first(where: { $0.scannerName == "Persistence Scan" })?.findings ?? []
+        let hasRegistryHijack = persistenceFindings.contains { $0.title.contains("registry redirected") || $0.title.contains("package index redirected") }
+        let hasShellHijack = persistenceFindings.contains { $0.title.contains("Suspicious command in") || $0.title.contains("Malicious git alias") }
+        if hasRegistryHijack && hasShellHijack {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "Developer supply-chain compromise pattern",
+                detail: "Package manager is pointed at a non-default host AND your shell/git config runs external code — your next build could install attacker code",
+                path: nil,
+                remediation: "Restore the default registries, audit ~/.gitconfig and shell profiles, then `npm cache clean --force` before building again"
+            ))
+        }
+
+        // Pattern 8: Recent risky download still on disk + active unsigned process.
+        // The quarantine DB sees the download moment; the process scanner sees the
+        // result of opening it.
+        let deepFindings = results.first(where: { $0.scannerName == "Deep Inspection Scan" })?.findings ?? []
+        let hasRiskyDownload = deepFindings.contains {
+            $0.title.contains("download from suspicious host") ||
+            $0.title.contains("missing quarantine attribute")
+        }
+        let hasUnsignedRunning = (results.first(where: { $0.scannerName == "Process Scan" })?.findings ?? [])
+            .contains { $0.title.contains("Unsigned") || $0.title.contains("Ad-hoc signed") }
+        if hasRiskyDownload && hasUnsignedRunning {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "Risky recent download is likely the unsigned process running now",
+                detail: "A file was downloaded from a known malware-staging host and an unsigned process is currently running — the two are probably the same payload",
+                path: nil,
+                remediation: "Identify the unsigned process, terminate it, then remove the matching download from ~/Downloads"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,

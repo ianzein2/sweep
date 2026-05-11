@@ -37,6 +37,16 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Inspect recent quarantined downloads — the macOS social-engineering
+        //    chain (fake browser updates, cracked-app sites) shows up here first.
+        progress?.update("inspecting quarantine events")
+        scanQuarantineEvents(findings: &findings, errors: &errors)
+
+        // 7. Files that lost their quarantine attribute via xattr stripping — a
+        //    common technique stealers use to bypass Gatekeeper prompts.
+        progress?.update("checking for quarantine xattr stripping")
+        scanStrippedQuarantine(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -278,6 +288,161 @@ public final class DeepScanner: Scanner {
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
         }
+    }
+
+    // MARK: - Quarantine Events (recent risky downloads)
+
+    /// Reads LaunchServices' QuarantineEventsV2 SQLite database — the canonical log
+    /// of every file downloaded with the quarantine attribute set (anything from a
+    /// browser, Mail, Messages, AirDrop, etc.). Lets us correlate "recent download
+    /// from a sketchy host that is still on disk" with active threats.
+    private func scanQuarantineEvents(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dbPath = "\(home)/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+        guard FileManager.default.fileExists(atPath: dbPath) else { return }
+
+        // Copy first — sqlite refuses to open a live DB without WAL access.
+        let tempPath = "/tmp/sweep-qe-\(UUID().uuidString).db"
+        let copyResult = ShellRunner.run("/bin/cp", arguments: [dbPath, tempPath])
+        let queryPath = copyResult.success ? tempPath : dbPath
+        defer { try? FileManager.default.removeItem(atPath: tempPath) }
+
+        // Pull the most recent quarantined items (last 30 days). Columns:
+        //   LSQuarantineEventIdentifier, LSQuarantineTimeStamp, LSQuarantineAgentName,
+        //   LSQuarantineDataURLString, LSQuarantineOriginURLString, ...
+        // CoreFoundation epoch is seconds since 2001-01-01; we just print the URL.
+        let query = """
+        SELECT LSQuarantineTimeStamp, LSQuarantineAgentName,
+               COALESCE(LSQuarantineDataURLString,''),
+               COALESCE(LSQuarantineOriginURLString,'')
+        FROM LSQuarantineEvent
+        WHERE LSQuarantineTimeStamp > strftime('%s','now') - 978307200 - (30*86400)
+        ORDER BY LSQuarantineTimeStamp DESC
+        LIMIT 200;
+        """
+        let result = ShellRunner.run("/usr/bin/sqlite3",
+                                     arguments: ["-separator", "|", queryPath, query],
+                                     timeout: 10)
+        guard result.success, !result.stdout.isEmpty else {
+            if result.stderr.contains("locked") || result.stderr.contains("Operation not permitted") {
+                errors.append("Quarantine DB unreadable — grant Full Disk Access to read")
+            }
+            return
+        }
+
+        // Hosts that legitimate users rarely download .pkg/.dmg from. Free-tier
+        // file-share and PaaS hostnames dominate macOS social-engineering campaigns
+        // (AMOS, FrigidStealer, BeaverTail). github.io / gh-pages staging
+        // landing pages were heavily abused in 2024-2025.
+        let riskyHostFragments: [(fragment: String, reason: String)] = [
+            ("discordapp.com/attachments", "Discord CDN — common malware drop point"),
+            ("discord.com/attachments",    "Discord CDN — common malware drop point"),
+            ("cdn.discordapp.com",         "Discord CDN — common malware drop point"),
+            (".github.io",                 "GitHub Pages — used to stage fake update sites"),
+            ("transfer.sh",                "Public file-share — used for short-lived stealer drops"),
+            ("anonfiles.com",              "Anonymous file host — heavily abused by stealers"),
+            ("send.cm",                    "Anonymous file host — heavily abused by stealers"),
+            ("mega.nz",                    "Mega — common drop point for cracked-app stealers"),
+            ("mediafire.com",              "Mediafire — common drop point for cracked-app stealers"),
+            ("dropmefiles.com",            "Anonymous file host — heavily abused by stealers"),
+            ("workers.dev",                "Cloudflare Workers — used for fake-update redirectors"),
+            ("pages.dev",                  "Cloudflare Pages — used for fake-update redirectors"),
+            ("vercel.app",                 "Vercel preview — used for fake-update landing pages"),
+            ("netlify.app",                "Netlify preview — used for fake-update landing pages"),
+            (".onion",                     "Tor hidden service — exceptionally suspicious as a download source"),
+        ]
+
+        // Risky extensions that should normally only come from the Mac App Store or
+        // a vendor's signed installer page.
+        let riskyExtensions = ["pkg", "dmg", "mpkg", "app.zip", "dylib", "scpt"]
+
+        // Track risky downloads still on disk (we don't have file paths in the DB,
+        // but the agent name tells us roughly which app handled the download).
+        var emittedAgents = Set<String>()  // dedupe per agent
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let parts = String(rawLine).split(separator: "|", maxSplits: 3, omittingEmptySubsequences: false)
+            guard parts.count >= 4 else { continue }
+            let agent = String(parts[1])
+            let dataURL = String(parts[2])
+            let originURL = String(parts[3])
+            let urls = (dataURL + " " + originURL).lowercased()
+
+            // Self-quarantined events with no URL aren't actionable.
+            guard !urls.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+
+            // Match risky hosts
+            for entry in riskyHostFragments where urls.contains(entry.fragment) {
+                let key = "\(agent)|\(entry.fragment)"
+                if emittedAgents.contains(key) { continue }
+                emittedAgents.insert(key)
+
+                let isExecExtension = riskyExtensions.contains { urls.contains(".\($0)") }
+                findings.append(Finding(
+                    severity: isExecExtension ? .high : .medium,
+                    category: .suspiciousFile,
+                    title: "Recent download from suspicious host (\(entry.fragment))",
+                    detail: "Agent: \(agent), \(entry.reason)" +
+                        (isExecExtension ? " — and the file is executable (.pkg/.dmg/.dylib)" : ""),
+                    path: nil,
+                    remediation: "Verify the file in ~/Downloads and remove it if unfamiliar. Origin: \(String(originURL.prefix(160)))"
+                ))
+                break
+            }
+        }
+    }
+
+    // MARK: - Quarantine Attribute Stripping
+
+    /// Stealers commonly strip `com.apple.quarantine` off a freshly-downloaded
+    /// payload (via `xattr -d` or `xattr -cr`) so Gatekeeper won't prompt the user.
+    /// We can't tell *which* file was stripped, but we can check recent Mach-O
+    /// downloads in ~/Downloads and flag any that no longer carry the attribute —
+    /// a strong indicator of attacker-driven xattr manipulation.
+    private func scanStrippedQuarantine(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let downloads = "\(home)/Downloads"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: downloads) else { return }
+
+        // Limit ourselves to files touched in the last 14 days — older items have
+        // usually been opened (which legitimately clears the attribute).
+        let cutoff = Date().addingTimeInterval(-14 * 86400)
+        guard let entries = try? fm.contentsOfDirectory(atPath: downloads) else { return }
+
+        let machoExtensions: Set<String> = ["dmg", "pkg", "mpkg", "app", "dylib"]
+        var flagged = 0
+
+        for entry in entries where flagged < 5 {
+            let entryPath = "\(downloads)/\(entry)"
+            let ext = (entry as NSString).pathExtension.lowercased()
+            guard machoExtensions.contains(ext) else { continue }
+
+            guard let attrs = try? fm.attributesOfItem(atPath: entryPath),
+                  let modDate = attrs[.modificationDate] as? Date,
+                  modDate > cutoff else { continue }
+
+            // Read the quarantine xattr; an empty value means the attribute is gone.
+            let xattr = ShellRunner.run("/usr/bin/xattr", arguments: ["-p", "com.apple.quarantine", entryPath], timeout: 3)
+            let hasQuarantine = xattr.success && !xattr.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !hasQuarantine {
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "Recent download missing quarantine attribute: \(entry)",
+                    detail: "Modified \(formatRelative(modDate)) — a stealer or sideload script may have stripped com.apple.quarantine to bypass Gatekeeper",
+                    path: entryPath,
+                    remediation: "Inspect: xattr -l \"\(entryPath)\" — if you didn't intentionally strip the attribute, treat this file as untrusted"
+                ))
+                flagged += 1
+            }
+        }
+    }
+
+    private func formatRelative(_ date: Date) -> String {
+        let seconds = -date.timeIntervalSinceNow
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 
     // MARK: - Process Environment Inspection

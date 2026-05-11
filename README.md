@@ -71,20 +71,37 @@ sudo sweep --json
 | Scanner | What it does |
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
-| **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Permission** | Audits TCC grants — Screen Recording, Input Monitoring, Accessibility, Automation (Apple Events), Developer Tool, Photos/Contacts/Calendar/Location, granular folder access, Endpoint Security |
+| **Persistence** | Scans LaunchAgents (including stealthy WatchPaths/QueueDirectories and scheduled triggers), LaunchDaemons, login items, StartupItems, rc/shell/cron, login/logout hooks, sudoers, PAM, emond, plus dev-environment supply chain (`.gitconfig`, `.npmrc`, pip configs) |
+| **Evidence** | Hunts stored screenshots, keystroke logs, screen recordings, exfil staging archives, and copies of browser credential stores / crypto wallets |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
-| **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
-| **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants, mounted DMGs and hardlinked binaries (TCC bypass vectors) |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, system proxies and PAC URL hijacks |
+| **Profile** | Detects MDM enrollment and configuration profiles with VPN/cert/proxy surveillance payloads |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions, plus VSCode/Cursor/Windsurf marketplace extensions for malicious shell/remote-code behavior |
+| **Deep Inspection** | Custom root CA certs, DNS hijacking, hidden files, ownership anomalies, DYLD env abuse, **recent risky downloads (Quarantine DB)** and **stripped quarantine attributes** |
+| **Hardening** | CIS-style checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, updates, Lockdown Mode, Rapid Security Response, **AirPlay Receiver**, **Find My Mac**, **accessory authorization**, **Time Machine encryption**, **Apple Intelligence privacy**, personalised ads |
 
-After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
+After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns:
+
+- unsigned process + persistence + network activity = classic spyware trifecta
+- event tap + hidden persistence = keylogger
+- stored screenshots / keylogs + network = exfiltration in progress
+- SIP disabled + unsigned processes = wide-open system
+- Apple Events automation + Accessibility + osascript persistence = AppleScript backdoor
+- redirected npm/pip registry + shell hijack = developer supply-chain compromise
+- recent download from a malware-staging host + unsigned running process = the download is probably the payload
+
+### Detected threat families
+
+Signatures cover both classic stalkerware (FlexiSpy, mSpy, Hoverwatch, Spyrix, KidsGuard, WebWatcher…) and modern macOS campaigns from 2023–2025:
+
+- **Stealers**: Atomic (AMOS), Banshee 1 & 2.0, Cthulhu, Poseidon, MetaStealer, Cuckoo, Realst, MacStealer, PureLand, DeerStealer, FrigidStealer, AppleProcessHub
+- **APT / DPRK**: RustBucket, KandyKorn, ObjCShellz, SpectralBlur, NokNok, BeaverTail, InvisibleFerret, FullHouse.Doored, NimDoor
+- **Backdoors / RATs**: RustDoor, HZ Rat, JokerSpy, ZuRu, LightSpy (macOS), RustyAttr, CrystalRAY
+- **Commercial / state surveillance**: Pegasus, Predator, Chrysaor, DazzleSpy, CloudMensis, XCSSET
 
 ## Security score
 

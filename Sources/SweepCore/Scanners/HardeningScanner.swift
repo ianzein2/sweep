@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking accessory authorization")
+        checkAccessoryAuthorization(findings: &findings, errors: &errors)
+
+        progress?.update("checking Apple Intelligence")
+        checkAppleIntelligence(findings: &findings, errors: &errors)
+
+        progress?.update("checking personalised ads")
+        checkPersonalizedAds(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +462,188 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // AirPlay Receiver lets the Mac accept screen mirroring / Continuity Camera from
+        // anyone on the local network when set to "Everyone". macOS Ventura+ exposes it
+        // via Control Center; the underlying preference is com.apple.airplayreceiver.
+        let enabledResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "AirplayRecieverEnabled"
+        ], timeout: 5)
+        // Apple misspelled the key as "Reciever" — keep both for compatibility.
+        let alt = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.airplay", "ReceiverEnabled"
+        ], timeout: 5)
+
+        let isEnabled =
+            (enabledResult.success && enabledResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1") ||
+            (alt.success && alt.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+        guard isEnabled else { return }
+
+        // "Allow AirPlay for: Everyone" is the risky setting. Other values: 0 = Current User,
+        // 1 = Anyone on same network, 2 = Everyone.
+        let scopeResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.airplay", "DiscoverableMode"
+        ], timeout: 5)
+        let scope = scopeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isEveryone = scope == "Everyone" || scope == "2"
+        let severity: Severity = isEveryone ? .high : .medium
+
+        findings.append(Finding(
+            severity: severity, category: .hardening,
+            title: "AirPlay Receiver is enabled\(isEveryone ? " for Everyone" : "")",
+            detail: isEveryone
+                ? "Any nearby Apple device can request to mirror its screen to this Mac"
+                : "AirPlay Receiver accepts incoming screen mirroring",
+            path: nil,
+            remediation: "Disable: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+        ))
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is the anti-theft control — without it, a stolen Mac can be wiped
+        // and resold. The plist lives under /Library/Preferences and is root-readable;
+        // a non-root scan that fails to read it isn't an actionable signal, so we stay
+        // quiet in that case rather than nag every non-sudo run.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "Without Find My Mac, a stolen Mac cannot be located, locked, or wiped remotely",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Apple ID] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Accessory Authorization (Apple Silicon)
+
+    private func checkAccessoryAuthorization(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon Macs and recent Intel models gained an "Allow accessories to
+        // connect" option (Sonoma 14.4+). Setting it to "Always" disables the prompt
+        // for new USB/Thunderbolt devices, leaving the Mac vulnerable to malicious
+        // peripherals (BadUSB, charge-only juice-jacking dongles, etc.).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.AccessoryAllowed", "Status"
+        ], timeout: 5)
+        let alt = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.AccessoryUpdateSecurity", "Mode"
+        ], timeout: 5)
+        let primary = result.success ? result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let secondary = alt.success ? alt.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+
+        // "Always" / "0" both indicate the prompt has been disabled.
+        if primary == "Always" || primary == "0" || secondary == "Always" || secondary == "0" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Mac auto-allows new USB/Thunderbolt accessories",
+                detail: "macOS will not prompt before granting USB or Thunderbolt access to a new device",
+                path: nil,
+                remediation: "Set to \"Ask Every Time\": System Settings > Privacy & Security > Allow accessories to connect"
+            ))
+        }
+    }
+
+    // MARK: - Apple Intelligence Privacy
+
+    private func checkAppleIntelligence(findings: inout [Finding], errors: inout [String]) {
+        // Apple Intelligence (macOS 15.1+) sends some prompts to Apple's Private Cloud
+        // Compute and, optionally, ChatGPT. The data is processed off-device. We flag
+        // this as informational so privacy-conscious users can audit it.
+        let aiOn = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.CloudSubscriptionFeatures.optIn", "AppleIntelligenceEnabled"
+        ], timeout: 5)
+        let aiAlt = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.AppleIntelligence", "Enabled"
+        ], timeout: 5)
+        let enabled =
+            (aiOn.success && aiOn.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1") ||
+            (aiAlt.success && aiAlt.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+        guard enabled else { return }
+
+        // Also check if the ChatGPT extension is enabled — that sends data to OpenAI.
+        let chatGPT = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.generativeexperiencesd", "ChatGPTEnabled"
+        ], timeout: 5)
+        let chatGPTOn = chatGPT.success && chatGPT.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Apple Intelligence is enabled\(chatGPTOn ? " with ChatGPT extension" : "")",
+            detail: chatGPTOn
+                ? "Apple Intelligence and the ChatGPT extension can send prompts off-device (to Apple's Private Cloud Compute and OpenAI)"
+                : "Some Apple Intelligence requests are processed in Apple's Private Cloud Compute",
+            path: nil,
+            remediation: "Review or disable: System Settings > Apple Intelligence & Siri"
+        ))
+    }
+
+    // MARK: - Personalised Advertising
+
+    private func checkPersonalizedAds(findings: inout [Finding], errors: inout [String]) {
+        // "Personalised Ads" (com.apple.AdLib.allowApplePersonalizedAdvertising) lets
+        // Apple's ad framework tie purchases, App Store searches, and Apple News
+        // activity to a profile. The default in macOS 13+ is OFF; legacy users may
+        // still have it on.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.AdLib", "allowApplePersonalizedAdvertising"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Personalised advertising is enabled",
+                    detail: "Apple uses Apple ID activity to target ads in the App Store and News",
+                    path: nil,
+                    remediation: "Disable: System Settings > Privacy & Security > Apple Advertising"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // Unencrypted Time Machine destinations expose every file you've backed up to
+        // anyone with physical access to the drive. tmutil reports destination info
+        // including whether the volume is encrypted.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Output is grouped per destination — split on blank lines.
+        let blocks = result.stdout.components(separatedBy: "\n\n")
+        for block in blocks {
+            let lines = block.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+            let name = lines.first(where: { $0.hasPrefix("Name") })
+                .map { $0.split(separator: ":", maxSplits: 1).last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? "?" } ?? "Time Machine destination"
+            // tmutil reports "Encrypted : 0" when the destination is plaintext.
+            let encrypted = lines.contains { line in
+                line.hasPrefix("Encrypted") && line.contains("1")
+            }
+            let unencrypted = lines.contains { line in
+                line.hasPrefix("Encrypted") && line.contains("0")
+            }
+            if unencrypted && !encrypted {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine backup is not encrypted",
+                    detail: "Destination \"\(name)\" stores backups without encryption — anyone with the drive can read every backed-up file",
+                    path: nil,
+                    remediation: "Re-add the destination with Encryption: System Settings > General > Time Machine"
                 ))
             }
         }

@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking developer supply-chain config")
+        scanDeveloperSupplyChain(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -96,6 +99,15 @@ public final class PersistenceScanner: Scanner {
         let label = plist["Label"] as? String ?? "unknown"
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
+        // Stealth-trigger persistence: WatchPaths fires the job when a path is touched,
+        // QueueDirectories fires when a directory becomes non-empty. Neither requires
+        // RunAtLoad, so the job is invisible to "what starts at boot?" audits but still
+        // executes regularly. Modern macOS malware (HZ Rat, NimDoor, RustyAttr) uses
+        // these triggers because they bypass the typical persistence indicators.
+        let watchPaths = plist["WatchPaths"] as? [String] ?? []
+        let queueDirs = plist["QueueDirectories"] as? [String] ?? []
+        let startCalendar = plist["StartCalendarInterval"] != nil
+        let startInterval = plist["StartInterval"] != nil
 
         // Get executable path
         var executablePath: String?
@@ -133,6 +145,52 @@ public final class PersistenceScanner: Scanner {
 
         // Skip real Apple plists
         if label.hasPrefix("com.apple.") { return }
+
+        // Stealth-trigger flagging — only emit when the watched path itself looks like
+        // an attempt to monitor sensitive user data. Watching ~/Library/Cookies or the
+        // login keychain, for example, is a strong stealer indicator. Watching
+        // ~/.config alone is too noisy to flag.
+        if !watchPaths.isEmpty || !queueDirs.isEmpty {
+            let sensitivePathFragments = [
+                "Cookies", "Login Data", "Web Data", "Keychains", "login.keychain",
+                ".ssh", ".aws", ".docker/config", ".gnupg", ".gitconfig", ".npmrc",
+                "/Mail/", "/Messages/", "/Safari/", "/Notes/",
+                "/Library/Application Support/Google/Chrome",
+                "/Library/Application Support/Firefox",
+                "/Library/Application Support/BraveSoftware",
+                "/Library/Application Support/Code/User",
+            ]
+            let watched = watchPaths + queueDirs
+            for path in watched {
+                if sensitivePathFragments.contains(where: { path.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent triggers on sensitive path",
+                        detail: "Label: \(label) — fires when \(path) changes",
+                        path: path,
+                        remediation: "WatchPaths on a credential or browser store is a stealer indicator: sudo rm \"\(path)\""
+                    ))
+                    break
+                }
+            }
+        }
+
+        // StartCalendarInterval / StartInterval on a non-trusted binary is the modern
+        // periodic-execution persistence pattern (avoids RunAtLoad and KeepAlive flags).
+        if (startCalendar || startInterval) && !runAtLoad {
+            if let exec = executablePath {
+                let isTrusted = trustedPathPrefixes.contains { exec.hasPrefix($0) }
+                if !isTrusted && !label.hasPrefix("com.apple.") {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "LaunchAgent runs on a periodic schedule",
+                        detail: "Label: \(label) — fires via \(startCalendar ? "StartCalendarInterval" : "StartInterval") rather than RunAtLoad",
+                        path: path,
+                        remediation: "Verify this scheduled job: launchctl print user/\(getuid())/\(label)"
+                    ))
+                }
+            }
+        }
 
         guard let execPath = executablePath else { return }
 
@@ -675,6 +733,158 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Developer Supply-Chain Config
+
+    /// Catches the 2024-2025 surge in dev-environment attacks: tampered `.gitconfig`,
+    /// `.npmrc`, and pip configs that silently redirect to attacker infrastructure or
+    /// run shell commands on routine git/npm operations. These don't show up as
+    /// processes or LaunchAgents — they activate the next time the developer runs
+    /// `git pull` or `npm install`.
+    private func scanDeveloperSupplyChain(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        // 1. ~/.gitconfig — `[alias]` entries that begin with `!` execute a shell
+        //    command. The `core.fsmonitor` and `core.sshCommand` keys also let an
+        //    attacker run arbitrary code on every git invocation.
+        let gitconfig = "\(home)/.gitconfig"
+        if let content = try? String(contentsOfFile: gitconfig, encoding: .utf8) {
+            var inAliasSection = false
+            var inCoreSection = false
+            for (idx, rawLine) in content.split(separator: "\n").enumerated() {
+                let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("[") {
+                    inAliasSection = line.lowercased().hasPrefix("[alias")
+                    inCoreSection = line.lowercased().hasPrefix("[core")
+                    continue
+                }
+                if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") { continue }
+
+                // Aliases starting with `!` invoke /bin/sh; flag obviously dangerous ones.
+                if inAliasSection {
+                    let parts = line.split(separator: "=", maxSplits: 1).map { String($0).trimmingCharacters(in: .whitespaces) }
+                    guard parts.count == 2, parts[1].hasPrefix("!") else { continue }
+                    let body = parts[1].lowercased()
+                    let dangerous = ["curl ", "wget ", "| sh", "| bash", "base64", "eval ", "/tmp/", "nc -"]
+                    if dangerous.contains(where: { body.contains($0) }) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Malicious git alias in ~/.gitconfig",
+                            detail: "Line \(idx + 1): \(String(line.prefix(120))) — runs a shell command on git invocation",
+                            path: gitconfig,
+                            remediation: "Inspect and remove: git config --global --unset alias.\(parts[0])"
+                        ))
+                    }
+                }
+
+                // [core] fsmonitor / sshCommand / pager — every key that runs a binary.
+                if inCoreSection {
+                    let lower = line.lowercased()
+                    let riskyKeys = ["fsmonitor", "sshcommand", "pager", "editor", "hookspath"]
+                    if riskyKeys.contains(where: { lower.hasPrefix($0) }) &&
+                       (lower.contains("curl") || lower.contains("/tmp/") || lower.contains("base64") ||
+                        lower.contains("python -c") || lower.contains("sh -c")) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Suspicious [core] override in ~/.gitconfig",
+                            detail: "Line \(idx + 1): \(String(line.prefix(120))) — executes external code on every git command",
+                            path: gitconfig,
+                            remediation: "Open ~/.gitconfig and remove the [core] override"
+                        ))
+                    }
+                }
+            }
+        }
+
+        // 2. ~/.npmrc — a non-npmjs `registry` line silently redirects every `npm
+        //    install` to attacker-controlled mirrors. We allow the common alternates
+        //    (yarnpkg, jfrog/Artifactory, GitHub Packages) and the official npm
+        //    registry.
+        let npmrc = "\(home)/.npmrc"
+        if let content = try? String(contentsOfFile: npmrc, encoding: .utf8) {
+            let trustedRegistries = [
+                "registry.npmjs.org",
+                "registry.yarnpkg.com",
+                "npm.pkg.github.com",
+                ".jfrog.io",
+                ".artifactory.",
+                ".azurecr.io",
+                "registry.npmmirror.com",   // Chinese mirror — informational only
+                "localhost", "127.0.0.1",
+            ]
+            for (idx, rawLine) in content.split(separator: "\n").enumerated() {
+                let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") { continue }
+                let lower = line.lowercased()
+
+                // Plaintext auth token — frequently leaked to attackers via Slack/screen share.
+                if lower.contains("_authtoken=") || lower.contains("//npm.") && lower.contains(":_auth=") {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "npm auth token stored in ~/.npmrc",
+                        detail: "Line \(idx + 1): plaintext token — anything that reads ~/.npmrc can publish packages as you",
+                        path: npmrc,
+                        remediation: "Rotate the token and move credentials into the macOS keychain via `npm login`"
+                    ))
+                }
+
+                // Registry override that doesn't point at a known-trusted host.
+                guard lower.hasPrefix("registry=") || lower.contains(":registry=") else { continue }
+                if !trustedRegistries.contains(where: { lower.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "npm registry redirected in ~/.npmrc",
+                        detail: "Line \(idx + 1): \(String(line.prefix(120))) — every `npm install` will fetch from this host",
+                        path: npmrc,
+                        remediation: "Restore the default: npm config set registry https://registry.npmjs.org/"
+                    ))
+                }
+            }
+        }
+
+        // 3. ~/.pip/pip.conf and ~/.config/pip/pip.conf — same risk pattern for Python.
+        let pipConfigs = [
+            "\(home)/.pip/pip.conf",
+            "\(home)/.config/pip/pip.conf",
+            "\(home)/Library/Application Support/pip/pip.conf",
+        ]
+        for pipConfig in pipConfigs {
+            guard let content = try? String(contentsOfFile: pipConfig, encoding: .utf8) else { continue }
+            let lower = content.lowercased()
+            // The default index-url is pypi.org. Anything else should be reviewed.
+            if let range = lower.range(of: "index-url") {
+                let after = String(lower[range.upperBound...])
+                let trustedPypi = ["pypi.org", "files.pythonhosted.org",
+                                   ".jfrog.io", ".artifactory.", ".azurecr.io",
+                                   "localhost", "127.0.0.1"]
+                if !trustedPypi.contains(where: { after.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Python package index redirected",
+                        detail: "Custom index-url in \(pipConfig) — `pip install` fetches from a non-default host",
+                        path: pipConfig,
+                        remediation: "Inspect: cat \(pipConfig) — restore index-url = https://pypi.org/simple/ if not expected"
+                    ))
+                }
+            }
+        }
+
+        // 4. Globally-configured npm `ignore-scripts` flag — when set to *false* it
+        //    re-enables postinstall scripts (Node disables them by default in some
+        //    enterprise environments). Many supply-chain incidents (2024-2025) used
+        //    the postinstall hook as their initial-execution vector.
+        if let content = try? String(contentsOfFile: npmrc, encoding: .utf8) {
+            if content.lowercased().contains("ignore-scripts=false") {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "npm postinstall scripts explicitly re-enabled",
+                    detail: "~/.npmrc forces ignore-scripts=false — every dependency's postinstall runs on `npm install`",
+                    path: npmrc,
+                    remediation: "Remove the line, or set ignore-scripts=true to require explicit consent"
+                ))
+            }
         }
     }
 
