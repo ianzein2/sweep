@@ -434,6 +434,199 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS threats — DPRK "Contagious Interview" / Lazarus family
+        // (BeaverTail loads InvisibleFerret as stage 2; commonly disguised as a Node.js
+        // "demo" project shipped during fake job interviews.)
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "node.helper", "MiroTalk"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beaver",
+                "~/.npm/_cacache/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "p.py", "pay"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.ferret",
+                "/private/tmp/pay",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "FlexibleFerret", "FerretUI", "ChromeUpdate"],
+            bundleIdentifiers: ["com.flexibleferret.installer"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.flexibleferret",
+            ],
+            launchAgentLabels: ["com.flexibleferret.agent"]
+        ),
+        SpywareSignature(
+            name: "GolangGhost / PylangGhost",
+            processNames: ["golangghost", "pylangghost", "GolangGhost", "nvidia.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.golangghost",
+                "~/Library/Caches/.gghost",
+                "~/Documents/nvidia_release.zip",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HiddenRisk",
+            processNames: ["hiddenrisk", "HiddenRisk", "growth.py", "BitcoinTactics"],
+            bundleIdentifiers: ["com.hiddenrisk.app", "com.crypto.tactics"],
+            filePaths: [
+                "/private/tmp/.hiddenrisk",
+                "~/Library/Application Support/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.crypto.tactics.agent"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "GoogleVPN", "ZoomVideoSDKHelper"],
+            bundleIdentifiers: ["com.nimdoor.agent"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.update", "com.zoom.helper.update"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["todoswift", "ToDoApp", "Bitcoin_DePIN_Investments"],
+            bundleIdentifiers: ["com.todoswift.agent"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: ["com.todoswift.service"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["OpenVPNConnect", "openvpn_connect_installer_signed", "hzrat", "HZRat"],
+            bundleIdentifiers: ["com.openvpn.connect.installer"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+                "/var/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.client.helper"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "WindowsUpdater", "MacUpdater_signed"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigid",
+                "~/Downloads/Update.dmg",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "ZuRu (resurgent)",
+            processNames: ["zuru", "ZuRu", "iTerm2_zuru", "OpenVPNConnect_zuru"],
+            bundleIdentifiers: ["com.zuru.helper"],
+            filePaths: [
+                "/private/tmp/.zuru",
+                "~/Library/Application Support/.ZuRu",
+                "/Library/.zuru_payload",
+            ],
+            launchAgentLabels: ["com.zuru.agent"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "ProcessHub", "AppleProcessSvc"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.appleprocesshub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.service"]
+        ),
+        SpywareSignature(
+            name: "Crackdown Stealer",
+            processNames: ["crackdown", "Crackdown", "crackdown_installer"],
+            bundleIdentifiers: ["com.crackdown.stealer"],
+            filePaths: [
+                "/private/tmp/.crackdown",
+                "~/Library/Application Support/.Crackdown",
+            ],
+            launchAgentLabels: ["com.crackdown.agent"]
+        ),
+        SpywareSignature(
+            name: "macOS.NotLockBit",
+            processNames: ["notlockbit", "NotLockBit", "lockbit_macos"],
+            bundleIdentifiers: ["com.notlockbit.ransom"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.notlockbit",
+            ],
+            launchAgentLabels: ["com.notlockbit.service"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost (Famous Chollima)",
+            processNames: ["pylangghost", "famouschollima", "PylangGhost", "vid_chat.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pylangghost",
+                "~/Library/Application Support/.pylang",
+                "~/Documents/CryptoApply_*.zip",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ClickFake / ClickFix",
+            processNames: ["clickfake", "clickfix", "fakeCaptcha", "macFix"],
+            bundleIdentifiers: ["com.clickfake.agent"],
+            filePaths: [
+                "/private/tmp/.clickfake",
+                "/private/tmp/.clickfix",
+                "~/Library/Application Support/.clickfake",
+            ],
+            launchAgentLabels: ["com.clickfake.service"]
+        ),
+        SpywareSignature(
+            name: "Banshee 2.0",
+            processNames: ["banshee2", "Banshee2", "bnsh2", "BansheeUI_v2"],
+            bundleIdentifiers: ["com.banshee.v2", "com.banshee2.stealer"],
+            filePaths: [
+                "/private/tmp/.banshee2",
+                "~/Library/Application Support/.Banshee2",
+            ],
+            launchAgentLabels: ["com.banshee.v2.service"]
+        ),
+        SpywareSignature(
+            name: "AMOS v3 (rust port)",
+            processNames: ["amos3", "AMOS3", "atomic_rust", "amosrs"],
+            bundleIdentifiers: ["com.atomic.stealer.v3"],
+            filePaths: [
+                "/private/tmp/.amos3",
+                "~/Library/Application Support/.amos3",
+            ],
+            launchAgentLabels: ["com.atomic.v3.service"]
+        ),
+        SpywareSignature(
+            name: "CryptoMining (XMRig drop-in)",
+            processNames: ["xmrig", "XMRig", "kdevtmpfsi", "minergate"],
+            bundleIdentifiers: ["com.minergate.app"],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "~/Library/Application Support/.xmr",
+                "/Library/Application Support/.miner",
+            ],
+            launchAgentLabels: ["com.xmr.miner", "com.minergate.agent"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +643,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2026 macOS malware impersonation patterns
+        "com.apple.processhub",
+        "com.apple.processhub.service",
+        "com.apple.macos.update",
+        "com.apple.google.update",   // mixes Google and Apple — neither uses this
+        "com.apple.zoom.helper.update",
+        "com.apple.softwareupdate.helper.agent",
+        "com.apple.notification.center.helper",
+        "com.apple.iconservices.helper.agent",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
