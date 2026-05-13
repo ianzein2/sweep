@@ -17,6 +17,19 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Chrome extension IDs that were publicly confirmed malicious in 2024-2025.
+    /// Kept intentionally short and conservative — only IDs cited in vendor incident
+    /// reports (Cyberhaven Dec 2024 supply-chain compromise, etc.) are listed here.
+    /// Generic name-based heuristics still cover newer / unreported variants.
+    private let knownMaliciousExtensionIds: Set<String> = [
+        // Cyberhaven supply-chain wave (Dec 24, 2024 - Jan 2025).
+        // These extensions were updated to a malicious version that exfiltrated session
+        // cookies and ad-platform credentials. Even if the user has since updated to a
+        // clean version, the previous install may have already leaked their tokens.
+        "pajkjnmeojmbapicmbpliphjmcekeaac",  // Cyberhaven (compromised 24.10.4)
+        "fbmlcbhdmilaggadifoaehbjefdckfdj",  // "Tackker - online keylogger tool"
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +156,21 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-malicious ID = highest-severity finding, regardless of permissions.
+                    // The user may have already updated past the compromised version, but
+                    // the install left credentials at risk.
+                    if knownMaliciousExtensionIds.contains(extId) {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches publicly-reported malicious ID",
+                            detail: "Extension ID: \(extId) (profile: \(profile)) — listed in 2024-2025 vendor incident reports",
+                            path: extDir,
+                            remediation: "Remove in \(browserName) > Extensions and rotate any saved passwords / session tokens that browser had stored"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

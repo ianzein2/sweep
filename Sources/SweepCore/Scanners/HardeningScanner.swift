@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Stolen Device Protection")
+        checkStolenDeviceProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Task Management state")
+        checkBackgroundTaskManagement(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth discoverability")
+        checkBluetoothDiscoverable(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi private address")
+        checkWiFiPrivateAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking accessory connection policy")
+        checkAccessoryConnectionPolicy(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +484,160 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Stolen Device Protection (macOS Sequoia 15.2+, iCloud Keychain context)
+
+    private func checkStolenDeviceProtection(findings: inout [Finding], errors: inout [String]) {
+        // Stolen Device Protection adds a delay + biometric requirement for sensitive Apple ID
+        // operations when the Mac is in an unfamiliar location. Apple added it for macOS in
+        // Sequoia. It's defended via the bird/cloudd daemon — there's no public defaults key,
+        // but iCloud account status gives us a hint that the feature applies.
+        let icloudCheck = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "MobileMeAccounts", "Accounts"
+        ], timeout: 5)
+        guard icloudCheck.success && icloudCheck.stdout.contains("AccountID") else {
+            // No iCloud account — SDP doesn't apply
+            return
+        }
+
+        // The state is exposed via a private framework. We surface this as informational so the
+        // user is aware they should manually verify the toggle.
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Verify Stolen Device Protection is on",
+            detail: "Sequoia 15.2+ offers Stolen Device Protection for iCloud — when off, an attacker who knows your passcode can change your Apple Account in seconds",
+            path: nil,
+            remediation: "Check: System Settings > [your name] > Sign-In & Security > Stolen Device Protection (Mac)"
+        ))
+    }
+
+    // MARK: - Background Task Management (BTM) observability
+
+    private func checkBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        // Ventura+ introduced Background Task Management with the `sfltool dumpbtm` command —
+        // it surfaces every login item, LaunchAgent, and LaunchDaemon registered with the system.
+        // The dump itself is too large to ship as a finding, but we can spot a useful corruption
+        // signal: a non-empty count of "Disabled by user" entries with developer = nil is a sign
+        // an actor renamed or unsigned an item — a known BTM evasion pattern (Trellix / CharmingKitten).
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Heuristic: count items with empty developer-name field — these are flagged with the
+        // string "Developer Name: (null)" or just a blank line in Apple's plist-style output.
+        // Many false positives are possible, so we only flag at a high threshold.
+        let lines = result.stdout.split(separator: "\n").map(String.init)
+        let nullDevCount = lines.filter { $0.contains("Developer Name: (null)") }.count
+
+        if nullDevCount >= 5 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "\(nullDevCount) background items have no developer signature",
+                detail: "BTM (Background Task Management) lists multiple items with a (null) developer — known evasion technique used by recent macOS persistence frameworks",
+                path: nil,
+                remediation: "Audit: sfltool dumpbtm | grep -B 3 'Developer Name: (null)' — then disable unknown items in System Settings > General > Login Items"
+            ))
+        }
+    }
+
+    // MARK: - Bluetooth Discoverability
+
+    private func checkBluetoothDiscoverable(findings: inout [Finding], errors: inout [String]) {
+        // A discoverable Bluetooth Mac is fingerprintable from across a room. macOS turns
+        // discoverability on briefly when the Bluetooth pane is open, but a stuck-on state
+        // is a real exposure (often left on by recent BlueDucky-style USB drop attacks).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "DiscoverableState"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Bluetooth is in discoverable state",
+                    detail: "This Mac is advertising as discoverable to other Bluetooth devices — close the Bluetooth pane to clear",
+                    path: nil,
+                    remediation: "Close System Settings > Bluetooth, or run: sudo defaults write /Library/Preferences/com.apple.Bluetooth DiscoverableState -bool false"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wi-Fi Private MAC Address
+
+    private func checkWiFiPrivateAddress(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma+ supports per-network private MAC addresses ("Limit IP address tracking").
+        // When off, every Wi-Fi network this Mac joins sees the same hardware MAC, enabling
+        // cross-network tracking by ad networks and stalkers.
+        // The known-networks plist lists every network with its PrivateMACAddressModeUserSetting.
+        // We do a lightweight substring heuristic — counting how many networks have it Off —
+        // since the plist is binary and we don't want to drag in a full parse.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        ], timeout: 5)
+        guard result.success && result.stdout.contains("PrivateMACAddressModeUserSetting") else { return }
+
+        // Each network entry contains a line like:
+        //   PrivateMACAddressModeUserSetting = Off;
+        // Count those literal phrases — that's the number of networks where the user opted out.
+        let offCount = result.stdout.components(separatedBy: "PrivateMACAddressModeUserSetting = Off").count - 1
+        if offCount > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Wi-Fi private address is disabled on \(offCount) network(s)",
+                detail: "When off, your real hardware MAC is broadcast, allowing cross-network tracking",
+                path: nil,
+                remediation: "Enable per network: System Settings > Wi-Fi > network name > (i) > Private Wi-Fi Address: Rotating"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // iCloud+ subscribers get Private Relay (a 2-hop proxy for Safari + DNS). If they're
+        // paying for it and it's off, surface that — but only as informational. It's not a
+        // hard requirement.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "NSPDisableSetting"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Private Relay (iCloud+ feature) is off — Safari + DNS traffic is visible to your ISP",
+                    path: nil,
+                    remediation: "If subscribed to iCloud+: System Settings > [name] > iCloud > Private Relay"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Accessory Connection Policy (Apple Silicon, macOS Sequoia+)
+
+    private func checkAccessoryConnectionPolicy(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon Macs added "Allow accessories to connect" — controls whether a newly
+        // attached USB-C device is auto-trusted. Default in Sequoia is "Ask for new accessories",
+        // which is the safe setting. If a managed config has lowered it to "Always", physical
+        // BadUSB / O.MG-Cable attacks become trivial.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.allowAccessoryConnection"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // "Always" or "1" indicates auto-trust
+            if value == "Always" || value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "USB accessory auto-connect is set to Always",
+                    detail: "New USB-C accessories connect without prompting — BadUSB / O.MG-cable attacks succeed silently",
+                    path: nil,
+                    remediation: "Set to 'Ask for new accessories': System Settings > Privacy & Security > Allow accessories to connect"
                 ))
             }
         }
