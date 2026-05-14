@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in bundle persistence")
+        scanPluginBundlePersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Action scripts")
+        scanFolderActionScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking Mail rules / bundles")
+        scanMailPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,299 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plug-in Bundle Persistence
+    //
+    // Many macOS plug-in directories load arbitrary code into long-running processes (Finder,
+    // Spotlight, audio daemons, screensaver engine, etc.) on every login or every time the host
+    // app runs. Spyware abuses these as quiet, signed-by-the-user persistence channels —
+    // the bundles aren't surfaced anywhere in System Settings, so users rarely audit them.
+
+    private struct PluginLocation {
+        let dir: String
+        let extensions: Set<String>
+        let kind: String
+        let host: String
+        let severity: Severity
+    }
+
+    private func scanPluginBundlePersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let locations: [PluginLocation] = [
+            // Spotlight importers run inside mdworker and execute on every file index — a stealthy
+            // execution surface. The user dir is empty by default; system dir contains Apple's set.
+            PluginLocation(dir: "\(home)/Library/Spotlight",
+                           extensions: ["mdimporter"],
+                           kind: "Spotlight importer",
+                           host: "loaded by mdworker on every Spotlight index",
+                           severity: .high),
+            PluginLocation(dir: "/Library/Spotlight",
+                           extensions: ["mdimporter"],
+                           kind: "Spotlight importer (system)",
+                           host: "loaded by mdworker on every Spotlight index",
+                           severity: .high),
+            // QuickLook generators run when Finder previews a matching file — auto-execution on hover.
+            PluginLocation(dir: "\(home)/Library/QuickLook",
+                           extensions: ["qlgenerator"],
+                           kind: "QuickLook plug-in",
+                           host: "loaded by quicklookd whenever Finder previews a file",
+                           severity: .high),
+            PluginLocation(dir: "/Library/QuickLook",
+                           extensions: ["qlgenerator"],
+                           kind: "QuickLook plug-in (system)",
+                           host: "loaded by quicklookd whenever Finder previews a file",
+                           severity: .high),
+            // Screen savers are bundles that load on lock/idle — perfect for camera/keystroke spyware.
+            PluginLocation(dir: "\(home)/Library/Screen Savers",
+                           extensions: ["saver", "qtz"],
+                           kind: "Screen Saver",
+                           host: "loaded by legacyScreenSaver / WindowServer on idle",
+                           severity: .medium),
+            PluginLocation(dir: "/Library/Screen Savers",
+                           extensions: ["saver", "qtz"],
+                           kind: "Screen Saver (system)",
+                           host: "loaded by legacyScreenSaver / WindowServer on idle",
+                           severity: .medium),
+            // Audio Units run inside coreaudiod and any AU host (Logic, GarageBand, browsers).
+            PluginLocation(dir: "\(home)/Library/Audio/Plug-Ins/Components",
+                           extensions: ["component"],
+                           kind: "Audio Unit",
+                           host: "loaded by coreaudiod and audio-using apps",
+                           severity: .medium),
+            PluginLocation(dir: "/Library/Audio/Plug-Ins/Components",
+                           extensions: ["component"],
+                           kind: "Audio Unit (system)",
+                           host: "loaded by coreaudiod and audio-using apps",
+                           severity: .medium),
+            // Color picker plug-ins load into any app that opens NSColorPanel. Trivially installable, never audited.
+            PluginLocation(dir: "\(home)/Library/ColorPickers",
+                           extensions: ["colorPicker"],
+                           kind: "Color Picker plug-in",
+                           host: "loaded by any app that shows the system color panel",
+                           severity: .medium),
+            PluginLocation(dir: "/Library/ColorPickers",
+                           extensions: ["colorPicker"],
+                           kind: "Color Picker plug-in (system)",
+                           host: "loaded by any app that shows the system color panel",
+                           severity: .medium),
+            // Internet Plug-Ins are deprecated but Safari/AppKit may still load them.
+            PluginLocation(dir: "\(home)/Library/Internet Plug-Ins",
+                           extensions: ["plugin", "webplugin", "bundle"],
+                           kind: "Internet Plug-In",
+                           host: "loaded by Safari and other WebKit hosts (legacy)",
+                           severity: .high),
+            PluginLocation(dir: "/Library/Internet Plug-Ins",
+                           extensions: ["plugin", "webplugin", "bundle"],
+                           kind: "Internet Plug-In (system)",
+                           host: "loaded by Safari and other WebKit hosts (legacy)",
+                           severity: .high),
+            // Input Methods run inside loginwindow — they have access to every keystroke.
+            PluginLocation(dir: "\(home)/Library/Input Methods",
+                           extensions: ["app", "bundle"],
+                           kind: "Input Method",
+                           host: "loaded by loginwindow — sees every keystroke typed",
+                           severity: .high),
+            PluginLocation(dir: "/Library/Input Methods",
+                           extensions: ["app", "bundle"],
+                           kind: "Input Method (system)",
+                           host: "loaded by loginwindow — sees every keystroke typed",
+                           severity: .high),
+            // Login Items folder (legacy) — apps placed here run at login.
+            PluginLocation(dir: "\(home)/Library/LoginItems",
+                           extensions: ["app", "bundle"],
+                           kind: "Login Item",
+                           host: "launched at user login",
+                           severity: .medium),
+            // PreferencePanes appear in System Settings and can register helpers/launchd jobs on install.
+            PluginLocation(dir: "\(home)/Library/PreferencePanes",
+                           extensions: ["prefPane"],
+                           kind: "Preference Pane",
+                           host: "loaded by System Settings; pane installer often registers a launch agent",
+                           severity: .low),
+            PluginLocation(dir: "/Library/PreferencePanes",
+                           extensions: ["prefPane"],
+                           kind: "Preference Pane (system)",
+                           host: "loaded by System Settings; pane installer often registers a launch agent",
+                           severity: .low),
+        ]
+
+        let fm = FileManager.default
+        // Apple-shipped bundles always use a com.apple.* identifier.
+        let appleBundlePrefix = "com.apple."
+
+        for loc in locations {
+            guard fm.fileExists(atPath: loc.dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: loc.dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let ext = (entry as NSString).pathExtension
+                guard loc.extensions.contains(ext) else { continue }
+                let bundlePath = "\(loc.dir)/\(entry)"
+
+                // Read the bundle's CFBundleIdentifier so we can skip Apple's own plug-ins.
+                let infoPlistPath = "\(bundlePath)/Contents/Info.plist"
+                let bundleId: String = {
+                    guard let data = fm.contents(atPath: infoPlistPath),
+                          let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                    else { return "" }
+                    return (plist["CFBundleIdentifier"] as? String) ?? ""
+                }()
+
+                if bundleId.hasPrefix(appleBundlePrefix) { continue }
+
+                // Cross-reference with known spyware (process names + bundle IDs).
+                let entryName = (entry as NSString).deletingPathExtension
+                if let sig = SpywareSignature.match(processName: entryName)
+                    ?? SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware as \(loc.kind): \(sig.name)",
+                        detail: "\(entry) — \(loc.host)",
+                        path: bundlePath,
+                        remediation: "Remove: rm -rf \"\(bundlePath)\" — then verify nothing else depends on it"
+                    ))
+                    continue
+                }
+
+                // Plug-ins masquerading as Apple bundle IDs are a strong indicator.
+                if SpywareSignature.isFakeAppleBundleId(bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(loc.kind) using fake Apple bundle ID",
+                        detail: "Bundle ID \"\(bundleId)\" — \(loc.host)",
+                        path: bundlePath,
+                        remediation: "Remove: rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Otherwise surface the bundle so the user can audit it. Most macs have zero
+                // entries in these directories; even one warrants a look.
+                findings.append(Finding(
+                    severity: loc.severity, category: .persistence,
+                    title: "\(loc.kind) installed: \(entry)",
+                    detail: bundleId.isEmpty
+                        ? "\(loc.host)"
+                        : "Bundle ID: \(bundleId) — \(loc.host)",
+                    path: bundlePath,
+                    remediation: "Verify you installed this. To remove: rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Folder Action Scripts
+    //
+    // Folder Actions trigger AppleScripts when files are added, removed, or modified in a
+    // watched folder. They run silently in the background via System Events — a quiet way
+    // to react to file drops (Downloads, Desktop) and trigger code execution.
+
+    private func scanFolderActionScripts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let scriptDirs = [
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+
+        let fm = FileManager.default
+        for dir in scriptDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let ext = (entry as NSString).pathExtension.lowercased()
+                guard ["scpt", "scptd", "applescript", "sh", "py"].contains(ext) else { continue }
+                let scriptPath = "\(dir)/\(entry)"
+
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed: \(entry)",
+                    detail: "Folder Action scripts run automatically when watched folders change — review which folder this is bound to",
+                    path: scriptPath,
+                    remediation: "List bindings: osascript -e 'tell application \"System Events\" to get every folder action' — remove with 'remove folder action <name>'"
+                ))
+            }
+        }
+
+        // Also check whether Folder Actions are enabled at all — a common spyware enabler.
+        let enabledResult = ShellRunner.run("/usr/bin/osascript", arguments: [
+            "-e", "tell application \"System Events\" to get folder actions enabled"
+        ], timeout: 5)
+        if enabledResult.success &&
+           enabledResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true" {
+            // Listing the actual attached actions makes the finding actionable.
+            let listResult = ShellRunner.run("/usr/bin/osascript", arguments: [
+                "-e", "tell application \"System Events\" to get name of every folder action"
+            ], timeout: 5)
+            let actions = listResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !actions.isEmpty && actions.lowercased() != "missing value" {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Actions are enabled",
+                    detail: "Active folder actions: \(String(actions.prefix(160)))",
+                    path: nil,
+                    remediation: "If unexpected, disable: osascript -e 'tell application \"System Events\" to set folder actions enabled to false'"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Mail Persistence
+    //
+    // Apple Mail supports plug-in bundles and rules that can run AppleScripts on incoming
+    // messages. Both have been used as persistence/exfiltration vectors (e.g. CVE-2020-9922
+    // and several stealer families that auto-forward sensitive mail to attacker addresses).
+
+    private func scanMailPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let bundleDirs = [
+            "\(home)/Library/Mail/Bundles",
+            "/Library/Mail/Bundles",
+        ]
+
+        let fm = FileManager.default
+        for dir in bundleDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") &&
+                                       (entry.hasSuffix(".mailbundle") || entry.hasSuffix(".bundle")) {
+                let bundlePath = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Apple Mail plug-in installed: \(entry)",
+                    detail: "Mail loads this bundle inside its own process — full access to mailboxes, drafts, and outgoing messages",
+                    path: bundlePath,
+                    remediation: "Apple-signed Mail plug-ins are extremely rare. If unexpected: rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+
+        // Mail rules with run-script or forward-message actions are a common silent-exfil pattern.
+        // SyncedRules.plist holds the user's rules; presence of "AppleScript" or "Forward" actions is worth surfacing.
+        let mailV10Plist = "\(home)/Library/Mail/V10/MailData/SyncedRules.plist"
+        let mailV9Plist  = "\(home)/Library/Mail/V9/MailData/SyncedRules.plist"
+        for rulesPath in [mailV10Plist, mailV9Plist] {
+            guard let data = fm.contents(atPath: rulesPath),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) else { continue }
+
+            // Rules can be at the top level or nested under a "rules" key; just stringify and search.
+            let content = String(describing: plist).lowercased()
+            let runsScript = content.contains("applescript") || content.contains("runapplescript")
+            let autoForwards = content.contains("forwardtext") || content.contains("forwardmessage") ||
+                               content.contains("redirect")
+            if runsScript || autoForwards {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Apple Mail rules contain script-run or auto-forward actions",
+                    detail: "Mail rules can silently run AppleScripts or forward incoming messages — common stealer exfil channel",
+                    path: rulesPath,
+                    remediation: "Audit in Mail > Settings > Rules and remove any rule you don't recognize"
+                ))
+                break  // one finding per file is enough
+            }
         }
     }
 

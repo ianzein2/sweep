@@ -60,6 +60,14 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. ClickFix / "paste this command in Terminal" social-engineering traces.
+        //    This has been the dominant macOS initial-access technique in 2024-2026: fake CAPTCHAs,
+        //    fake browser-update prompts, and fake video-call permission dialogs all instruct the
+        //    victim to paste a one-liner that pulls a stage-2 payload. Evidence is left behind in
+        //    shell history, ~/Downloads, and AppleScript history.
+        progress?.update("hunting for ClickFix / paste-and-run traces")
+        scanForClickFixTraces(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -549,6 +557,167 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+            }
+        }
+    }
+
+    // MARK: - ClickFix / Paste-And-Run Traces
+    //
+    // ClickFix lures (fake reCAPTCHA, fake "your browser is out of date", fake Zoom/Teams
+    // permission requests) tell the victim to copy a command and paste it into Terminal or
+    // the macOS Run dialog (Cmd-Space → paste). The payload is almost always one of:
+    //   - osascript -e 'do shell script ... with administrator privileges'  (steals sudo password)
+    //   - curl -fsSL <url> | sh / | bash / | zsh                            (drop-and-run loader)
+    //   - echo <base64> | base64 -d | bash                                  (obfuscated loader)
+    //   - eval "$(curl ...)"                                                (in-shell exec)
+    // After a successful infection these strings linger in shell history and (if the user typed
+    // them at the Terminal) AppleScript / osascript invocation logs. Surfacing them lets the
+    // user see exactly what they were tricked into running.
+
+    private struct ClickFixPattern {
+        let regex: NSRegularExpression
+        let label: String
+    }
+
+    private static let clickFixPatterns: [ClickFixPattern] = {
+        let raw: [(String, String)] = [
+            // osascript "do shell script ... with administrator privileges" — the canonical
+            // password-prompt pattern. Steals the sudo password through Apple's own dialog.
+            (#"osascript.*do shell script.*with administrator privileges"#,
+             "osascript invoking 'do shell script with administrator privileges' (password-prompt loader)"),
+            // curl/wget piping to a shell — the most common stage-2 loader pattern.
+            (#"(curl|wget)\s+[^|]*\|\s*(sh|bash|zsh|fish)\b"#,
+             "downloads a remote script and pipes it into a shell"),
+            // Same shape but with -fsSL / -L / quiet flags that make it invisible.
+            (#"curl\s+-[a-zA-Z]*[fsSL][a-zA-Z]*\s.*\|\s*(sh|bash|zsh)\b"#,
+             "silent curl piped to shell (curl -fsSL ... | sh)"),
+            // eval "$(curl ...)" — shell expansion of remote content.
+            (#"eval\s+["']?\$\((curl|wget)"#,
+             "evaluates remote content via eval $(curl ...)"),
+            // Base64-decoded payload piped to a shell — almost always malicious in shell history.
+            (#"(echo|printf)\s+[A-Za-z0-9+/=]{40,}\s*\|\s*base64\s+(-d|--decode|-D)"#,
+             "decodes a base64 blob and runs it (obfuscated loader)"),
+            // bash <(curl ...) and bash -c "$(curl ...)" — process substitution loaders.
+            (#"(bash|sh|zsh)\s+(<\(|-c\s+["']?\$\()(curl|wget)"#,
+             "process-substitution loader running remote shell code"),
+            // python -c '...; urlopen(...)' inline downloaders (Pyongyang/BeaverTail favourite).
+            (#"python[23]?\s+-c\s+["'].*(urlopen|urllib|urlretrieve)"#,
+             "inline Python downloader"),
+        ]
+        return raw.compactMap { pattern, label in
+            guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+            else { return nil }
+            return ClickFixPattern(regex: re, label: label)
+        }
+    }()
+
+    private func scanForClickFixTraces(home: String, findings: inout [Finding], errors: inout [String]) {
+        // 1) Shell history. We scan the user's actual history files — these are the most
+        //    direct record of what was typed at the prompt or pasted in.
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        let fm = FileManager.default
+        for histPath in historyFiles {
+            guard fm.fileExists(atPath: histPath),
+                  let data = fm.contents(atPath: histPath) else { continue }
+            // Shell history may not be valid UTF-8 (zsh metafies bytes). Decode best-effort.
+            let content = String(data: data, encoding: .utf8)
+                ?? String(data: data, encoding: .isoLatin1)
+                ?? ""
+            if content.isEmpty { continue }
+
+            // Limit work: only scan the most recent ~5000 lines.
+            let lines = content.split(separator: "\n").suffix(5000)
+
+            // De-dupe: if multiple shells share the same fragment, surface it once per file.
+            var alreadyReported = Set<String>()
+
+            for line in lines {
+                let lineStr = String(line)
+                // zsh history has the format ": <epoch>:<elapsed>;<command>" — strip the prefix.
+                let command: String
+                if lineStr.hasPrefix(":"), let semi = lineStr.firstIndex(of: ";") {
+                    command = String(lineStr[lineStr.index(after: semi)...])
+                } else {
+                    command = lineStr
+                }
+                if command.isEmpty { continue }
+
+                let nsRange = NSRange(command.startIndex..<command.endIndex, in: command)
+                for pattern in EvidenceScanner.clickFixPatterns {
+                    guard pattern.regex.firstMatch(in: command, options: [], range: nsRange) != nil
+                    else { continue }
+                    let snippet = String(command.prefix(140))
+                    let dedupeKey = "\(histPath)|\(pattern.label)|\(snippet)"
+                    if !alreadyReported.insert(dedupeKey).inserted { break }
+
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Possible ClickFix command in shell history",
+                        detail: "\(pattern.label) — \(snippet)",
+                        path: histPath,
+                        remediation: "If you didn't intentionally run this, assume credential / wallet compromise: rotate passwords, revoke browser sessions, and run a full Sweep scan. Audit with: grep -nE 'curl.*\\|.*sh|osascript.*shell script' \(histPath)"
+                    ))
+                    break  // one finding per matching command
+                }
+            }
+        }
+
+        // 2) AppleScript runtime support files left over from osascript invocations.
+        //    macOS keeps a small log of AppleScript executions per-user; if the user was
+        //    walked through Apple's "do shell script" prompt this directory often has fresh entries.
+        let asTracesDir = "\(home)/Library/Application Scripts"
+        if let entries = try? fm.contentsOfDirectory(atPath: asTracesDir) {
+            for entry in entries where entry.hasPrefix("com.apple.osascript") || entry.contains("do-shell") {
+                let path = "\(asTracesDir)/\(entry)"
+                if let attrs = try? fm.attributesOfItem(atPath: path),
+                   let modDate = attrs[.modificationDate] as? Date,
+                   modDate.timeIntervalSinceNow > -86400 * 14 {  // last 14 days
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "Recent osascript / 'do shell script' artifact",
+                        detail: "\(entry) modified \(formatAge(modDate)) — verify you ran an Apple Script intentionally",
+                        path: path,
+                        remediation: "If unexpected, this can be a ClickFix loader trace — review and remove"
+                    ))
+                }
+            }
+        }
+
+        // 3) Recently downloaded shell / AppleScript / pkg files in ~/Downloads. Many ClickFix
+        //    chains drop a follow-up installer here after the first paste. We're conservative —
+        //    only flag files modified in the last week with extensions almost no one downloads
+        //    legitimately on a regular basis.
+        let downloadsDir = "\(home)/Downloads"
+        let suspiciousDownloadExts: Set<String> = ["sh", "command", "scpt", "applescript", "bash", "zsh"]
+        if let enumerator = fm.enumerator(
+            at: URL(fileURLWithPath: downloadsDir),
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) {
+            var reportedCount = 0
+            for case let url as URL in enumerator {
+                if enumerator.level > 2 { enumerator.skipDescendants(); continue }
+                let ext = url.pathExtension.lowercased()
+                guard suspiciousDownloadExts.contains(ext) else { continue }
+                guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                      let modDate = values.contentModificationDate,
+                      modDate.timeIntervalSinceNow > -86400 * 7 else { continue }
+                let size = values.fileSize ?? 0
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "Recently downloaded shell/AppleScript file",
+                    detail: "\(url.lastPathComponent) (\(size) bytes), modified \(formatAge(modDate))",
+                    path: url.path,
+                    remediation: "Inspect before running: cat \"\(url.path)\" — never run scripts you didn't author yourself"
+                ))
+                reportedCount += 1
+                if reportedCount >= 10 { break }  // cap noise
             }
         }
     }

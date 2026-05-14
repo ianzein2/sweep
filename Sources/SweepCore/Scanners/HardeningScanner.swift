@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server config")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS update status")
+        checkPendingUpdates(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -447,6 +456,176 @@ public final class HardeningScanner: Scanner {
                 ))
             }
         }
+    }
+
+    // MARK: - SSH Server Configuration
+    //
+    // /etc/ssh/sshd_config controls how Remote Login (SSH) authenticates incoming connections.
+    // Even users who legitimately need SSH often leave the defaults wide open: password auth
+    // enabled, root login allowed, PermitEmptyPasswords occasionally toggled by setup scripts.
+    // We only run this scan if Remote Login is actually on — otherwise it's noise.
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // Cheap pre-check: only audit the config when SSH is actually enabled.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        let sshOn = sshState.success && sshState.stdout.lowercased().contains(": on")
+        if !sshOn { return }
+
+        // Look at both the main config and any drop-ins under /etc/ssh/sshd_config.d.
+        var configPaths = ["/etc/ssh/sshd_config"]
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/ssh/sshd_config.d") {
+            for entry in dropIns where entry.hasSuffix(".conf") {
+                configPaths.append("/etc/ssh/sshd_config.d/\(entry)")
+            }
+        }
+
+        // Effective settings: last-write wins across all included files. We track each setting's
+        // current value and the file/line it came from so the remediation tells the user where to look.
+        var effective: [String: (value: String, source: String)] = [:]
+
+        for path in configPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for (idx, raw) in content.split(separator: "\n").enumerated() {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                let key = String(parts[0]).lowercased()
+                let value = String(parts[1])
+                    .trimmingCharacters(in: .whitespaces)
+                    .lowercased()
+                effective[key] = (value, "\(path):\(idx + 1)")
+            }
+        }
+
+        // PermitRootLogin: anything other than "no" or "prohibit-password" allows direct root SSH.
+        if let entry = effective["permitrootlogin"] {
+            let bad = !["no", "prohibit-password", "without-password", "forced-commands-only"]
+                .contains(entry.value)
+            if bad {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "SSH allows root login (PermitRootLogin \(entry.value))",
+                    detail: "Direct root SSH is one of the highest-value targets for brute-force attackers. Source: \(entry.source)",
+                    path: entry.source,
+                    remediation: "Set 'PermitRootLogin no' in /etc/ssh/sshd_config and restart SSH"
+                ))
+            }
+        }
+
+        // PermitEmptyPasswords yes — combined with PasswordAuthentication, this is catastrophic.
+        if let entry = effective["permitemptypasswords"], entry.value == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords (PermitEmptyPasswords yes)",
+                detail: "Any account with a blank password can SSH in. Source: \(entry.source)",
+                path: entry.source,
+                remediation: "Set 'PermitEmptyPasswords no' and audit local accounts for empty passwords"
+            ))
+        }
+
+        // PasswordAuthentication: keys-only is the modern best practice.
+        if let entry = effective["passwordauthentication"], entry.value == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH password authentication is enabled",
+                detail: "Allows brute-force / credential-stuffing attempts. Source: \(entry.source)",
+                path: entry.source,
+                remediation: "Set up SSH keys, then 'PasswordAuthentication no' in /etc/ssh/sshd_config"
+            ))
+        }
+
+        // ChallengeResponseAuthentication / KbdInteractiveAuthentication can also enable password-equivalent auth.
+        for key in ["challengeresponseauthentication", "kbdinteractiveauthentication"] {
+            if let entry = effective[key], entry.value == "yes" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "SSH \(key) enabled",
+                    detail: "Keyboard-interactive auth can fall back to password prompts. Source: \(entry.source)",
+                    path: entry.source,
+                    remediation: "Disable if SSH keys are your only intended auth method"
+                ))
+            }
+        }
+
+        // X11Forwarding yes — exposes the X11 socket; almost never needed on macOS.
+        if let entry = effective["x11forwarding"], entry.value == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding is enabled",
+                detail: "X11 forwarding exposes the local display to remote SSH clients. Source: \(entry.source)",
+                path: entry.source,
+                remediation: "Set 'X11Forwarding no' unless you specifically need it"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+    //
+    // Find My Mac is also the gate for Activation Lock. Without it, a stolen Mac can be wiped
+    // and re-sold. We treat its absence as a hardening miss, not a malware indicator.
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        // If the key isn't set or is 0, FMM is off.
+        let enabled: Bool = {
+            guard result.success else { return false }
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value == "1" || value.lowercased() == "true"
+        }()
+        if !enabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "Without Find My Mac, this Mac can't be remotely located, locked, or wiped if lost or stolen — and Activation Lock won't engage",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Pending Updates
+    //
+    // softwareupdate --list returns pending updates if any are available. Outdated macOS leaves
+    // known-exploited bugs unpatched (Apple's monthly bulletins routinely list "actively exploited").
+
+    private func checkPendingUpdates(findings: inout [Finding], errors: inout [String]) {
+        // softwareupdate can be slow when it actually fetches the catalog. Cap aggressively.
+        let result = ShellRunner.run("/usr/sbin/softwareupdate",
+                                     arguments: ["--list", "--no-scan"], timeout: 15)
+        // --no-scan uses the cached list (avoids a network round-trip). If it succeeds and
+        // mentions "Software Update found the following new or updated software" or any
+        // line starting with "* Label:", there are pending updates.
+        guard result.success else { return }
+        let output = result.stdout
+        if output.contains("No new software available") || output.isEmpty { return }
+
+        // Prefer counting "* Label:" lines for accuracy across macOS versions.
+        let updateLines = output.split(separator: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.hasPrefix("* Label:") || trimmed.hasPrefix("*")
+        }
+        let count = updateLines.count
+        if count == 0 { return }
+
+        // Check if any of the pending updates look like security/critical updates.
+        let lower = output.lowercased()
+        let isSecurity = lower.contains("security") || lower.contains("safari") ||
+                         lower.contains("xprotect") || lower.contains("mrt")
+        let severity: Severity = isSecurity ? .medium : .low
+
+        findings.append(Finding(
+            severity: severity, category: .hardening,
+            title: "macOS has \(count) pending update\(count == 1 ? "" : "s")",
+            detail: isSecurity
+                ? "Including security-related updates — install promptly"
+                : "Pending: \(updateLines.prefix(3).map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "; "))",
+            path: nil,
+            remediation: "Install: System Settings > General > Software Update — or: sudo softwareupdate --install --all"
+        ))
     }
 
     // MARK: - Rapid Security Response
