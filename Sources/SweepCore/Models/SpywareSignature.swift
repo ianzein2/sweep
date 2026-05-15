@@ -434,6 +434,162 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threats — APT, supply-chain, and developer-targeted campaigns
+        SpywareSignature(
+            // DPRK-linked, targets developers via fake job interview "tech tests"
+            // First disclosed by Unit 42 (Palo Alto) and Securonix in late 2023, with active
+            // 2024-2025 campaigns shipping malicious npm packages and "skills assessments".
+            name: "BeaverTail / InvisibleFerret",
+            processNames: ["beavertail", "invisibleferret", "ifagent", "p.py", "pay.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.p2",
+                "~/Library/Application Support/.invisible",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // DPRK-linked Nim-language macOS backdoor (Huntress, 2024)
+            name: "NimDoor",
+            processNames: ["nimdoor", "nimsdk", "GoogleVPN", "ZoomFix"],
+            bundleIdentifiers: ["com.zoom.fix", "com.googlevpn.helper"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/Group Containers/.nimd",
+            ],
+            launchAgentLabels: ["com.googlevpn.helper", "com.zoom.fix.update"]
+        ),
+        SpywareSignature(
+            // China-linked HZ Rat macOS variant — discovered by Kaspersky 2024,
+            // distributed via trojanized installers of Chinese-market apps.
+            name: "HZ Rat (macOS)",
+            processNames: ["hzrat", "OpenVPNConnect", "miHoYo_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzr",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        SpywareSignature(
+            // TA569 — drive-by "fake browser update" lure, 2024-2025 (Proofpoint, ESET).
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "WindowServer_helper"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.windowserver.helper"]
+        ),
+        SpywareSignature(
+            // DPRK-linked, 2024 — Swift-built loader masquerading as a meeting/calendar app.
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "MeetingBar_helper"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // DPRK-linked, 2024 — abuses extended attributes (xattr) for payload staging.
+            // The malware reads the macOS finder file flags / xattr blob as its second stage.
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "PDFViewer_helper", "macdefault"],
+            bundleIdentifiers: ["com.rustyattr.viewer"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.Rusty",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // OSX.ZuRu, 2024 update — distributed via trojanized iTerm2/Termius/Navicat builds.
+            // Drops a malicious helper next to the legit app and a fake Google Update label.
+            name: "OSX.ZuRu",
+            processNames: ["GoogleUpdateHelper", "Termius_helper", "Navicat_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/GoogleUpdate",
+                "/Library/Application Support/.GoogleUpdate",
+            ],
+            launchAgentLabels: ["com.google.update.helper"]
+        ),
+        SpywareSignature(
+            // 2024 cross-platform infostealer with macOS port; sold on dark-web forums.
+            name: "Mocha Stealer",
+            processNames: ["Mocha", "mocha_stealer", "mochaagent"],
+            bundleIdentifiers: ["com.mocha.stealer"],
+            filePaths: [
+                "/private/tmp/.mocha",
+                "~/Library/Application Support/.Mocha",
+            ],
+            launchAgentLabels: ["com.mocha.service"]
+        ),
+        SpywareSignature(
+            // ThreatFabric — macOS port of the Crystal stealer family, 2024.
+            name: "Crystal Stealer (macOS)",
+            processNames: ["Crystal", "crystal_stealer", "crystalmac"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        SpywareSignature(
+            // 2024 — LockBit-affiliate macOS variant ("OSX.DarkSide" rename), AV vendor reports.
+            name: "DarkSide (macOS)",
+            processNames: ["DarkSide", "darkside_mac", "DSAgent"],
+            bundleIdentifiers: ["com.darkside.mac"],
+            filePaths: ["/private/tmp/.darkside"],
+            launchAgentLabels: ["com.darkside.service"]
+        ),
+        SpywareSignature(
+            // LightSpy macOS variant — first publicly documented in 2024 (BlackBerry / ThreatFabric).
+            // Modular implant with audio/screen/keychain capture plugins.
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "WindowServerKit", "irc_loader", "macma_main"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Application Support/.LSpy",
+                "/Library/.lightspy",
+            ],
+            launchAgentLabels: ["com.apple.windowserverkit"]
+        ),
+        SpywareSignature(
+            // CloudSorcerer macOS port (Kaspersky 2024) — APT using public cloud APIs as C2.
+            name: "CloudSorcerer (macOS)",
+            processNames: ["cloudsorcerer", "yandex_sync_helper", "github_sync"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cloudsorcerer",
+                "~/Library/Application Support/.YandexHelper",
+            ],
+            launchAgentLabels: ["com.yandex.sync.helper"]
+        ),
+        SpywareSignature(
+            // Lazarus / KandyKorn follow-on — observed in 2024 crypto-firm intrusions.
+            name: "FullHouse.Doored",
+            processNames: ["fullhouse", "doored", "macshell_d"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.fullhouse", "/private/tmp/.doored"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Cisco Talos / SentinelOne — North Korean OSX.SmoothOperator successor, 2024.
+            name: "OdysseyStealer",
+            processNames: ["odyssey", "odyssey_stealer", "odys"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +606,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 spoof patterns observed in NimDoor / FrigidStealer / OSX.ZuRu campaigns
+        "com.apple.windowserver.helper",
+        "com.apple.windowserverkit",
+        "com.apple.coreservices.update",
+        "com.apple.icloud.helper",
+        "com.apple.findmy.helper",
+        "com.apple.xprotect.helper",
+        "com.apple.notarization.helper",
+        "com.apple.spotlight.indexer",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

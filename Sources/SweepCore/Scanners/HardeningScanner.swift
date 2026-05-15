@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Touch ID for sudo")
+        checkSudoTouchID(findings: &findings, errors: &errors)
+
+        progress?.update("checking audit logging")
+        checkAuditLogging(findings: &findings, errors: &errors)
+
+        progress?.update("checking kernel boot-args")
+        checkSecureBoot(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS support status")
+        checkMacOSSupportStatus(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,157 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Touch ID for sudo (macOS Sonoma+)
+
+    private func checkSudoTouchID(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma+ ships /etc/pam.d/sudo_local.template, which means the platform
+        // supports authenticating sudo with Touch ID via /etc/pam.d/sudo_local — a drop-in
+        // that survives system updates. /etc/pam.d/sudo, on the other hand, is overwritten on
+        // each upgrade, so a pam_tid.so line added there silently disappears and the user
+        // thinks Touch ID is on when it isn't. We only run this check on systems where the
+        // template file exists (i.e. the feature is supported in the first place).
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: "/etc/pam.d/sudo_local.template") else { return }
+
+        let sudoLocal = (try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8)) ?? ""
+        let sudoMain = (try? String(contentsOfFile: "/etc/pam.d/sudo", encoding: .utf8)) ?? ""
+
+        let hasTid: (String) -> Bool = { content in
+            content.split(separator: "\n").contains { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.hasPrefix("#") && t.contains("pam_tid.so")
+            }
+        }
+        let localHasTid = hasTid(sudoLocal)
+        let mainHasTid = hasTid(sudoMain)
+
+        // If only /etc/pam.d/sudo was edited, the next macOS update will silently wipe it.
+        if mainHasTid && !localHasTid {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Touch ID for sudo configured in /etc/pam.d/sudo (not persistent)",
+                detail: "/etc/pam.d/sudo is overwritten on every macOS update — your Touch ID rule will be lost",
+                path: "/etc/pam.d/sudo",
+                remediation: "Move the pam_tid.so line into /etc/pam.d/sudo_local (sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local) — survives updates"
+            ))
+        }
+    }
+
+    // MARK: - Audit logging (BSM / auditd)
+
+    private func checkAuditLogging(findings: inout [Finding], errors: inout [String]) {
+        // macOS ships BSM audit logging (auditd) which records sudo, login, and authorization events.
+        // Apple has been deprecating it but it still ships in macOS 14/15. Forensic investigations
+        // depend on these logs — if disabled, you lose the audit trail after a compromise.
+        // We only flag this if the audit_control file exists (some lab/clean installs may have removed it).
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: "/etc/security/audit_control") else { return }
+
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        guard launchctl.success else { return }
+
+        // com.apple.auditd is the audit log daemon — if it isn't loaded, the audit trail is silent.
+        let auditdLoaded = launchctl.stdout.contains("com.apple.auditd")
+        if !auditdLoaded {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Audit logging (auditd) is not running",
+                detail: "BSM audit logs record sudo/login/authorization events — without them, forensic analysis after a compromise is much harder",
+                path: "/etc/security/audit_control",
+                remediation: "Load auditd: sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.auditd.plist (note: Apple deprecated BSM, may not be available on all macOS versions)"
+            ))
+        }
+    }
+
+    // MARK: - Boot Security (kernel boot-args and KEXT loading policy)
+
+    private func checkSecureBoot(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon and T2 Macs default to a locked-down boot policy — only signed, current
+        // macOS can boot, and third-party kernel extensions can't load without an explicit
+        // user authorization. Two settings reliably degrade this without root:
+        //   1. NVRAM `boot-args` contains debugging flags (e.g. `-v`, `keepsyms=1`, `arch=...`)
+        //      — most worrying is `amfi_get_out_of_my_way=1` which disables AMFI signature checks.
+        //   2. `csrutil status` reports kext-signing disabled even with SIP otherwise on.
+        // We can read NVRAM without root using `nvram -p`.
+        let nvram = ShellRunner.run("/usr/sbin/nvram", arguments: ["-p"], timeout: 5)
+        guard nvram.success else { return }
+
+        for line in nvram.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            guard lineStr.hasPrefix("boot-args\t") || lineStr.hasPrefix("boot-args ") else { continue }
+            // boot-args value follows the first whitespace
+            let parts = lineStr.split(separator: "\t", maxSplits: 1).map { String($0) }
+            let args = (parts.count > 1 ? parts[1] : "").trimmingCharacters(in: .whitespaces)
+            if args.isEmpty { continue }
+
+            // amfi_get_out_of_my_way=1 disables Apple Mobile File Integrity — kills code-signing enforcement.
+            if args.contains("amfi_get_out_of_my_way=1") || args.contains("amfi=") {
+                findings.append(Finding(
+                    severity: .high, category: .systemIntegrity,
+                    title: "Apple Mobile File Integrity (AMFI) disabled via boot-args",
+                    detail: "boot-args contains an AMFI override: \(args) — unsigned code can run as if signed",
+                    path: nil,
+                    remediation: "Clear boot-args in Recovery Mode: sudo nvram -d boot-args"
+                ))
+                return
+            }
+            // arch= forces booting a non-native architecture (rare and a red flag on Apple Silicon).
+            // -v / keepsyms=1 are developer-only but not strictly insecure; report as low informational.
+            if args.contains("arch=") {
+                findings.append(Finding(
+                    severity: .medium, category: .systemIntegrity,
+                    title: "Custom architecture forced via boot-args",
+                    detail: "boot-args: \(args) — forcing a non-native boot architecture is unusual outside developer testing",
+                    path: nil,
+                    remediation: "Clear unless intentional: sudo nvram -d boot-args"
+                ))
+                return
+            }
+            if !args.isEmpty {
+                findings.append(Finding(
+                    severity: .low, category: .systemIntegrity,
+                    title: "Non-default kernel boot-args set",
+                    detail: "boot-args: \(args) — typically empty on consumer Macs",
+                    path: nil,
+                    remediation: "Review and clear if unexpected: sudo nvram -d boot-args"
+                ))
+            }
+        }
+    }
+
+    // MARK: - macOS Support Status
+
+    private func checkMacOSSupportStatus(findings: inout [Finding], errors: inout [String]) {
+        // Apple typically supports the current macOS plus the two prior majors. Older versions
+        // stop receiving security patches entirely — running them is the single highest-impact
+        // hardening miss most users have.
+        // This table needs to be updated periodically; the date below records the last review.
+        // Last reviewed: 2025-11 — Apple ships Sequoia (15), Sonoma (14), and Ventura (13) updates.
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // macOS 11 (Big Sur) lost security updates in Sep 2023.
+        // macOS 12 (Monterey) lost security updates in Sep 2024.
+        // macOS 13 (Ventura) is on its last support year as of 2025.
+        if major < 13 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major) no longer receives security updates",
+                detail: "Apple stopped shipping security patches for this version of macOS — every newly disclosed kernel/Safari bug remains exploitable forever",
+                path: nil,
+                remediation: "Upgrade to macOS 13 (Ventura) or newer: System Settings > General > Software Update. Verify hardware compatibility first."
+            ))
+        } else if major == 13 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS 13 (Ventura) is in its final year of security support",
+                detail: "Apple typically supports the current macOS plus the two prior majors — plan an upgrade before security patches stop",
+                path: nil,
+                remediation: "Consider upgrading to macOS 14 (Sonoma) or 15 (Sequoia): System Settings > General > Software Update"
+            ))
         }
     }
 

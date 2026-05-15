@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking AppleScript handlers")
+        scanApplicationScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking modern background tasks (SMAppService)")
+        scanBackgroundTasks(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -96,6 +102,10 @@ public final class PersistenceScanner: Scanner {
         let label = plist["Label"] as? String ?? "unknown"
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
+        let watchPaths = plist["WatchPaths"] as? [String] ?? []
+        let queueDirs = plist["QueueDirectories"] as? [String] ?? []
+        let startInterval = plist["StartInterval"] as? Int
+        let startCalendarInterval = plist["StartCalendarInterval"] != nil
 
         // Get executable path
         var executablePath: String?
@@ -155,6 +165,41 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Investigate: \(execPath) — hidden executables are a strong spyware indicator"
             ))
             return
+        }
+
+        // Event-triggered persistence: WatchPaths runs the executable whenever a path is modified,
+        // QueueDirectories runs it whenever a file appears in a directory. Both are commonly abused
+        // by spyware to fire on user actions (login, screenshot, keychain edits) without RunAtLoad.
+        // We only escalate when the executable is unsigned and outside a trusted prefix.
+        if !isTrustedPath && execExists && (!watchPaths.isEmpty || !queueDirs.isEmpty) {
+            let isSigned = checkIsSigned(path: execPath)
+            if !isSigned {
+                let triggers = watchPaths.prefix(3).joined(separator: ", ") +
+                    (watchPaths.count > 3 ? "…" : "") +
+                    (queueDirs.isEmpty ? "" : " | queue: " + queueDirs.prefix(2).joined(separator: ", "))
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Unsigned event-triggered LaunchAgent (WatchPaths/QueueDirectories)",
+                    detail: "Label: \(label) — fires when these paths change: \(triggers)",
+                    path: path,
+                    remediation: "Investigate — event triggers are a common spyware tactic to run silently on user actions: \(execPath)"
+                ))
+            }
+        }
+
+        // Calendar/interval-based runs from non-trusted paths are also worth surfacing — they're how
+        // implants do periodic exfiltration without keeping a persistent process resident.
+        if !isTrustedPath && execExists && !runAtLoad && (startInterval != nil || startCalendarInterval) {
+            if !checkIsSigned(path: execPath) {
+                let trigger = startInterval.map { "every \($0)s" } ?? "scheduled (StartCalendarInterval)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Unsigned scheduled LaunchAgent (\(trigger))",
+                    detail: "Label: \(label), Dir: \(dirLabel)",
+                    path: path,
+                    remediation: "Investigate this scheduled task: \(execPath)"
+                ))
+            }
         }
 
         // For non-trusted paths, check code signature
@@ -653,6 +698,141 @@ public final class PersistenceScanner: Scanner {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - AppleScript / OSAScript Handlers
+
+    private func scanApplicationScripts(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Application Scripts/<bundle-id>/ is where apps drop AppleScript handlers
+        // that the OS will load on demand. Several 2023-2024 stealers (XCSSET, AMOS variants)
+        // staged their second-stage payloads as .scpt files here because System Settings and
+        // sandboxed apps will silently execute them. Real AppleScript handler directories live
+        // under known Apple/third-party bundle IDs; any unknown bundle directory containing
+        // .scpt or .applescript files is worth a look.
+        let home = ShellRunner.realUserHome
+        let scriptsRoot = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: scriptsRoot),
+              let bundles = try? fm.contentsOfDirectory(atPath: scriptsRoot) else { return }
+
+        let knownPrefixes = ["com.apple.", "com.microsoft.", "com.google.", "com.adobe.",
+                             "com.1password.", "com.tinyspeck.", "com.electron.", "com.docker.",
+                             "com.jetbrains.", "com.figma.", "com.notion.", "com.brave."]
+
+        for bundle in bundles where !bundle.hasPrefix(".") {
+            if knownPrefixes.contains(where: { bundle.hasPrefix($0) }) { continue }
+
+            let bundleDir = "\(scriptsRoot)/\(bundle)"
+            guard let scripts = try? fm.contentsOfDirectory(atPath: bundleDir) else { continue }
+            let scriptFiles = scripts.filter {
+                $0.hasSuffix(".scpt") || $0.hasSuffix(".applescript") || $0.hasSuffix(".scptd")
+            }
+            if scriptFiles.isEmpty { continue }
+
+            // Highlight if the bundle ID mimics Apple's naming or is fake-Apple
+            let mimicsApple = SpywareSignature.isFakeAppleBundleId(bundle)
+            findings.append(Finding(
+                severity: mimicsApple ? .high : .medium,
+                category: .persistence,
+                title: mimicsApple
+                    ? "AppleScript handler in fake-Apple bundle dir"
+                    : "AppleScript handler in unknown bundle dir",
+                detail: "Bundle: \(bundle), Scripts: \(scriptFiles.prefix(3).joined(separator: ", "))" +
+                    (scriptFiles.count > 3 ? " (+\(scriptFiles.count - 3) more)" : ""),
+                path: bundleDir,
+                remediation: "Review the scripts (open with Script Editor) — AppleScripts here run silently when their parent bundle launches"
+            ))
+        }
+    }
+
+    // MARK: - Modern Login Items (SMAppService / Background Task Management)
+
+    private func scanBackgroundTasks(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura+ replaced legacy login items with SMAppService, surfaced in
+        // System Settings > General > Login Items > "Allow in the Background".
+        // The authoritative source is backgroundtaskmanagementd's database
+        // (/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v*.btm).
+        // Reading the .btm directly requires plist-style parsing through `sfltool` (root)
+        // or `osascript`. The simplest user-readable view is `sfltool dumpbtm`.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // sfltool dumpbtm emits one entry per item; we look for entries with a developer-team
+        // ID that's missing/unknown, or paths that aren't in trusted prefixes.
+        var currentEntry: [String: String] = [:]
+        var entries: [[String: String]] = []
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty {
+                if !currentEntry.isEmpty {
+                    entries.append(currentEntry)
+                    currentEntry = [:]
+                }
+                continue
+            }
+            if let colonRange = trimmed.range(of: ":") {
+                let key = String(trimmed[..<colonRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                let value = String(trimmed[colonRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if !key.isEmpty { currentEntry[key] = value }
+            }
+        }
+        if !currentEntry.isEmpty { entries.append(currentEntry) }
+
+        let trustedPrefixes = [
+            "/System/", "/usr/", "/Applications/", "/Library/Apple/",
+            "/Library/Developer/", "/opt/homebrew/", "/Library/PrivilegedHelperTools/",
+        ]
+
+        for entry in entries {
+            let executablePath = entry["Executable Path"] ?? entry["URL"] ?? ""
+            let identifier = entry["Identifier"] ?? entry["Bundle Identifier"] ?? "unknown"
+            let teamID = entry["Team Identifier"] ?? entry["Team ID"] ?? ""
+
+            guard !executablePath.isEmpty else { continue }
+            // Skip Apple-signed / trusted-prefix items
+            if executablePath.hasPrefix("/System/") || identifier.hasPrefix("com.apple.") { continue }
+            let isTrusted = trustedPrefixes.contains { executablePath.hasPrefix($0) }
+            let isUserApp = executablePath.hasPrefix(ShellRunner.realUserHome + "/Applications/")
+
+            // Known spyware by bundle/process name
+            let lastComponent = (executablePath as NSString).lastPathComponent
+            if SpywareSignature.match(processName: lastComponent) != nil ||
+               SpywareSignature.match(bundleId: identifier) != nil {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as background login item",
+                    detail: "Identifier: \(identifier), Path: \(executablePath)",
+                    path: executablePath,
+                    remediation: "Remove in System Settings > General > Login Items > 'Allow in the Background', then delete the app"
+                ))
+                continue
+            }
+
+            // Fake-Apple bundle ID disguised as a login item
+            if SpywareSignature.isFakeAppleBundleId(identifier) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake-Apple login item registered",
+                    detail: "Identifier: \(identifier) — this is not a legitimate Apple service",
+                    path: executablePath,
+                    remediation: "Remove in System Settings > General > Login Items > 'Allow in the Background'"
+                ))
+                continue
+            }
+
+            // Unknown team-ID / hidden path login items — surface for review
+            if (!isTrusted && !isUserApp) || executablePath.contains("/private/tmp/") ||
+               executablePath.split(separator: "/").contains(where: { $0.hasPrefix(".") }) {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Background login item from unusual path",
+                    detail: "Identifier: \(identifier), Team: \(teamID.isEmpty ? "(none)" : teamID), Path: \(executablePath)",
+                    path: executablePath,
+                    remediation: "Review in System Settings > General > Login Items > 'Allow in the Background'"
+                ))
             }
         }
     }
