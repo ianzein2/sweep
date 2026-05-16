@@ -434,6 +434,323 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // Modern macOS malware (2024-2026)
+        SpywareSignature(
+            // DPRK Lazarus subgroup BlueNoroff, Mar 2025. Delivered via fake Zoom invite
+            // that drops a Nim-compiled binary. Persists via two LaunchAgents and stages
+            // crypto-wallet theft via `/Users/Shared/.googl/coregkr`.
+            name: "NimDoor",
+            processNames: ["coregkr", "nimdoor", "GoogleHelper", "zoom_sdk_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Users/Shared/.googl",
+                "/Users/Shared/.googl/coregkr",
+                "~/.zen_error",
+                "~/Library/Application Support/.googl",
+            ],
+            launchAgentLabels: [
+                "com.googl.host",
+                "com.googl.coregkr",
+                "com.google.zoomvideo",
+            ]
+        ),
+        SpywareSignature(
+            // DPRK "Contagious Interview" campaign; second-stage JavaScript dropper used
+            // when developers run a poisoned npm package during a fake job interview.
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "n2.js", "main.js"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "/private/tmp/p.zi",
+                "~/.npl",
+                "~/.n2/pay",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Companion Python implant dropped by BeaverTail; collects browser profiles,
+            // crypto wallets, and SSH keys.
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "pay", "python_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisibleferret",
+                "~/.config/.npl",
+                "~/.python_history.tmp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // DPRK BlueNoroff (Oct 2024); disguised as a "Risk factors for Bitcoin price
+            // decline" PDF. Installs an x86_64 backdoor inside `~/Library/Group Containers`.
+            name: "OSX.HiddenRisk",
+            processNames: ["hiddenrisk", "growth", "macnotifyd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Users/Shared/.growth",
+                "~/Library/Group Containers/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.apple.growth", "com.macnotifyd"]
+        ),
+        SpywareSignature(
+            // ALPHV-linked Mach-O backdoor; persists as `/Library/Application Support/RustDoor`
+            // and drops binaries in `/tmp/test` and `/var/tmp/lock`.
+            name: "OSX.RustDoor",
+            processNames: ["rustdoor", "RustDoor", "ARMv2", "Trembler", "thread"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/RustDoor",
+                "/tmp/test",
+                "/var/tmp/lock",
+                "~/Library/Application Support/.rustdoor",
+            ],
+            launchAgentLabels: ["com.apple.rustdoor", "com.apple.systempreferences.helper.rust"]
+        ),
+        SpywareSignature(
+            // Aug 2025 SHAMOS campaign — AMOS variant distributed by COOKIE SPIDER via
+            // ClickFix-style fake "macOS troubleshooting" pages that ask the user to paste
+            // a malicious `curl … | bash` line into Terminal.
+            name: "SHAMOS (AMOS variant)",
+            processNames: ["shamos", "Shamos", "update.sh", "z.sh", "install.sh"],
+            bundleIdentifiers: ["com.shamos.installer"],
+            filePaths: [
+                "/private/tmp/.shamos",
+                "/private/tmp/update.sh",
+                "/private/tmp/z.sh",
+                "~/Library/Application Support/.shamos",
+            ],
+            launchAgentLabels: ["com.shamos.installer"]
+        ),
+        SpywareSignature(
+            // Feb 2025; redirect-and-prompt campaign that pushes a fake Safari update; once
+            // executed, drops Mach-O stealer modules in /tmp and exfiltrates wallets.
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "DOMAIN", "rd"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "/private/tmp/rd",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            // ClickFix loader — a social-engineering technique where a fake CAPTCHA tells the
+            // user to paste a command. The dropper installs a persistence agent named to look
+            // benign ("System Update Helper", "macOS Update Service").
+            name: "ClickFix Loader",
+            processNames: ["clickfix", "macupdate_helper", "update_helper", "systemupdater"],
+            bundleIdentifiers: ["com.macos.update", "com.system.update.helper"],
+            filePaths: [
+                "/private/tmp/.clickfix",
+                "/private/tmp/update_check",
+                "~/Library/Application Support/.update_helper",
+            ],
+            launchAgentLabels: [
+                "com.macos.update.helper",
+                "com.systemupdater.daemon",
+            ]
+        ),
+        SpywareSignature(
+            // 2024-2025 macOS port of the Windows StealC family; pulls cookies, password
+            // databases, and Apple Notes via a stealthy XPC helper.
+            name: "StealC (macOS)",
+            processNames: ["stealc", "StealC", "stc_macos", "AppleHelperXPC"],
+            bundleIdentifiers: ["com.stealc.macos"],
+            filePaths: [
+                "/private/tmp/.stealc",
+                "~/Library/Application Support/.stealc",
+            ],
+            launchAgentLabels: ["com.stealc.agent", "com.apple.helper.xpc"]
+        ),
+        SpywareSignature(
+            // 2025; OCR-based screenshot scraper extracting seed phrases from saved images.
+            // Variant of the SparkCat trojan ported from Android to Mac via fake AI image
+            // apps and "wallet recovery" utilities.
+            name: "SparkKitty",
+            processNames: ["sparkkitty", "SparkKitty", "ImageDescribe", "spark_ocr"],
+            bundleIdentifiers: [
+                "com.sparkkitty.macos",
+                "com.spark.imagedescribe",
+            ],
+            filePaths: [
+                "~/Library/Application Support/.sparkkitty",
+                "~/Library/Containers/.spark_ocr",
+            ],
+            launchAgentLabels: ["com.sparkkitty.service"]
+        ),
+        SpywareSignature(
+            // Aug 2024 npm-borne backdoor disguised as a "DapiNet" or "Hyper-React" package.
+            // Drops a Python loader and persists via crontab.
+            name: "CherryPie",
+            processNames: ["cherrypie", "CherryPie", "dapinet", "hyper_react"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cherrypie",
+                "~/.cherry_cron",
+                "~/Library/Application Support/.cherrypie",
+            ],
+            launchAgentLabels: ["com.cherrypie.agent"]
+        ),
+        SpywareSignature(
+            // Suspected DPRK-linked remote-access trojan deployed against crypto exchanges
+            // (early 2025). Persists via a fake "TigerVNC" helper.
+            name: "TigerRAT",
+            processNames: ["TigerRAT", "tigerrat", "tigerhelper", "TigerVNCHelper"],
+            bundleIdentifiers: ["com.tigervnc.helper"],
+            filePaths: [
+                "/private/tmp/.tiger",
+                "~/Library/Application Support/.TigerRAT",
+            ],
+            launchAgentLabels: ["com.tigervnc.helper", "com.tiger.agent"]
+        ),
+        SpywareSignature(
+            // Aug 2024 Mach-O backdoor used by Lazarus subgroup TraderTraitor in social
+            // engineering aimed at crypto traders. Persists via a LaunchAgent disguised
+            // as a Discord plugin.
+            name: "TodoSwift",
+            processNames: ["todoswift", "TodoSwift", "DiscordHelper", "todo_app"],
+            bundleIdentifiers: ["com.discord.helper.todo"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: ["com.discord.helper", "com.todoswift.daemon"]
+        ),
+        SpywareSignature(
+            // BlueNoroff 2024 "HappyDoor" — drops a XOR-encrypted dylib in
+            // ~/Library/LaunchAgents and pivots to keychain exfiltration.
+            name: "HappyDoor",
+            processNames: ["happydoor", "HappyDoor", "happy_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.happydoor",
+                "~/Library/Application Support/.happy",
+            ],
+            launchAgentLabels: ["com.happydoor.service", "com.apple.happyhelper"]
+        ),
+        SpywareSignature(
+            // 2024 "Banshee 2.0" / source-leak variants distributed by the BANSHEE-affiliated
+            // panel after the v1 leak; new process names and staging paths.
+            name: "Banshee 2.0 (post-leak variants)",
+            processNames: ["BansheeNext", "banshee_v2", "bn2", "MacOptimizer"],
+            bundleIdentifiers: ["com.banshee.v2", "com.macoptimizer.agent"],
+            filePaths: [
+                "/private/tmp/.banshee2",
+                "/private/tmp/.bn2",
+                "~/Library/Application Support/.MacOptimizer",
+            ],
+            launchAgentLabels: ["com.banshee.v2", "com.macoptimizer.agent"]
+        ),
+        SpywareSignature(
+            // 2024 AMOS spin-off marketed as "Crystal Stealer" on underground forums —
+            // distributed through cracked-software lures (Final Cut Pro, Logic Pro keygens).
+            name: "Crystal Stealer",
+            processNames: ["crystal_stealer", "CrystalStealer", "crystal", "FCPHelper"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        SpywareSignature(
+            // 2024 PyInstaller-packaged stealer that ships its own Python runtime in a
+            // hidden folder. Frequently signed ad-hoc and reuses the AMOS exfil endpoint.
+            name: "MyDoom (macOS port)",
+            processNames: ["mydoom_mac", "MyDoom", "macdoom", "pyinst_helper"],
+            bundleIdentifiers: ["com.mydoom.mac"],
+            filePaths: [
+                "/private/tmp/.mydoom",
+                "~/Library/Application Support/.mydoom",
+            ],
+            launchAgentLabels: ["com.mydoom.agent"]
+        ),
+        SpywareSignature(
+            // 2025 multi-payload backdoor delivered via trojanized "GameInstaller" .pkg files
+            // targeting macOS gaming forums; persists with a fake `gameservice` LaunchDaemon.
+            name: "GamingDoor",
+            processNames: ["gamingdoor", "GameService", "game_service", "macgame_agent"],
+            bundleIdentifiers: ["com.gameservice.agent"],
+            filePaths: [
+                "/private/tmp/.gamingdoor",
+                "/Library/Application Support/.gameservice",
+            ],
+            launchAgentLabels: ["com.gameservice.agent", "com.macgame.daemon"]
+        ),
+        SpywareSignature(
+            // DPRK/Citrine Sleet 2024-2025 — uses the "FrostyFerret" macOS implant after
+            // phishing victims with malicious browser extension installers.
+            name: "FrostyFerret",
+            processNames: ["frostyferret", "FrostyFerret", "FrostHelper", "browserUpdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.frosty",
+                "~/Library/Application Support/.FrostyFerret",
+            ],
+            launchAgentLabels: ["com.browser.update.helper", "com.frosty.service"]
+        ),
+        SpywareSignature(
+            // 2025 Russian-speaking actor distributed loader; common payload is the
+            // open-source Mythic C2 "Poseidon" agent recompiled for macOS.
+            name: "Mythic Poseidon Agent",
+            processNames: ["mythic_poseidon", "PoseidonAgent", "mythicd", "c2_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.mythic",
+                "~/Library/Application Support/.mythic",
+            ],
+            launchAgentLabels: ["com.mythic.poseidon", "com.c2.helper"]
+        ),
+        SpywareSignature(
+            // 2025 dropper that abuses xattr quarantine clearing via osascript before
+            // running an unsigned Mach-O. Often staged under a "Crypto Tools" lure.
+            name: "Xattr Dropper",
+            processNames: ["xattrdrop", "xattr_drop", "CryptoTools", "MacUtilities"],
+            bundleIdentifiers: ["com.cryptotools.macos", "com.macutilities.app"],
+            filePaths: [
+                "/private/tmp/.xattrdrop",
+                "/private/tmp/CryptoTools",
+            ],
+            launchAgentLabels: ["com.cryptotools.agent"]
+        ),
+        SpywareSignature(
+            // 2024 "Coyote" macOS port — originally a Brazilian Windows banker; the macOS
+            // build targets crypto-exchange web sessions via an Electron overlay.
+            name: "Coyote (macOS)",
+            processNames: ["coyote_mac", "Coyote", "coyote_agent", "BankerOverlay"],
+            bundleIdentifiers: ["com.coyote.mac"],
+            filePaths: [
+                "/private/tmp/.coyote",
+                "~/Library/Application Support/.Coyote",
+            ],
+            launchAgentLabels: ["com.coyote.agent"]
+        ),
+        SpywareSignature(
+            // Sep 2024 GoSorry / GoCrypt — Go-based stealer distributed through fake
+            // "DePIN node" installers targeting Helium / IO.net operators.
+            name: "GoSorry / GoCrypt",
+            processNames: ["gosorry", "GoCrypt", "depin_node", "ionet_helper"],
+            bundleIdentifiers: ["com.depin.node", "com.ionet.helper"],
+            filePaths: [
+                "/private/tmp/.gosorry",
+                "~/Library/Application Support/.gocrypt",
+            ],
+            launchAgentLabels: ["com.depin.node", "com.gocrypt.service"]
+        ),
+        SpywareSignature(
+            // 2025 PhantomVPN — fake VPN client trojan with system-extension persistence
+            // that captures network credentials and proxies traffic through C2.
+            name: "PhantomVPN",
+            processNames: ["phantomvpn", "PhantomVPN", "PhantomVPNHelper", "PhantomTunnel"],
+            bundleIdentifiers: ["com.phantomvpn.macos", "com.phantomvpn.helper"],
+            filePaths: [
+                "/Applications/PhantomVPN.app",
+                "~/Library/Application Support/PhantomVPN",
+            ],
+            launchAgentLabels: ["com.phantomvpn.helper", "com.phantomtunnel.daemon"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +767,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Seen in 2024-2025 campaigns (NimDoor, HiddenRisk, ClickFix, FrostyFerret, etc.)
+        "com.apple.growth",
+        "com.apple.happyhelper",
+        "com.apple.helper.xpc",
+        "com.apple.rustdoor",
+        "com.apple.systempreferences.helper.rust",
+        "com.apple.systempreferences.helper",
+        "com.apple.kernel_service",
+        "com.apple.macshare.plist",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Scripting Additions")
+        scanScriptingAdditions(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking Mail rules")
+        scanMailRules(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Items (SMAppService)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking shell history for paste-and-run attacks")
+        scanShellHistory(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +690,353 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Scripting Additions (OSAX)
+
+    private func scanScriptingAdditions(findings: inout [Finding], errors: inout [String]) {
+        // Scripting Additions (.osax bundles) load into every process that runs an AppleScript.
+        // That makes them a powerful, mostly-forgotten persistence and code-injection channel.
+        // /System/Library/ScriptingAdditions is SIP-protected — only the user/admin paths matter here.
+        let dirs = [
+            "/Library/ScriptingAdditions",
+            "\(ShellRunner.realUserHome)/Library/ScriptingAdditions",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+
+                // Apple's bundled additions live under /System; anything in /Library or ~/Library
+                // is third-party. Flag everything and note severity based on signature state.
+                let executablePath = resolveOSAXExecutable(bundlePath: entryPath)
+                let isSigned = executablePath.map { checkIsSigned(path: $0) } ?? false
+
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high,
+                    category: .persistence,
+                    title: isSigned
+                        ? "Third-party Scripting Addition installed"
+                        : "Unsigned Scripting Addition (.osax) installed",
+                    detail: "\(entry) in \(dir) — loads into every AppleScript host process",
+                    path: entryPath,
+                    remediation: "Verify this OSAX is legitimate, then remove if unexpected: sudo rm -rf \"\(entryPath)\""
+                ))
+            }
+        }
+    }
+
+    private func resolveOSAXExecutable(bundlePath: String) -> String? {
+        // Try Info.plist's CFBundleExecutable; fall back to Contents/MacOS/<basename>.
+        let infoPath = "\(bundlePath)/Contents/Info.plist"
+        if let data = FileManager.default.contents(atPath: infoPath),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let exec = plist["CFBundleExecutable"] as? String {
+            return "\(bundlePath)/Contents/MacOS/\(exec)"
+        }
+        let base = URL(fileURLWithPath: bundlePath).deletingPathExtension().lastPathComponent
+        let fallback = "\(bundlePath)/Contents/MacOS/\(base)"
+        return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
+    }
+
+    // MARK: - Folder Actions
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions fire an AppleScript every time a watched folder changes — used both
+        // by Automator workflows and, occasionally, by stealers that want a trigger on
+        // ~/Downloads or the Desktop. They're stored as a dispatcher plist plus scripts in
+        // ~/Library/Scripts/Folder Action Scripts.
+        let home = ShellRunner.realUserHome
+
+        // 1. Check the dispatcher preference for enabled actions
+        let dispatcher = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.FolderActionsDispatcher"
+        ], timeout: 5)
+
+        if dispatcher.success && !dispatcher.stdout.isEmpty &&
+           !dispatcher.stdout.contains("does not exist") {
+            // Any enabled action is worth surfacing — Folder Actions are rarely configured by
+            // accident, and a malicious one can run on every new file in a folder.
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "macOS Folder Actions are configured",
+                detail: "Folder Actions trigger AppleScripts on folder changes",
+                path: nil,
+                remediation: "Review: System Settings is no longer used; run `osascript -e 'tell app \"System Events\" to get folder actions'`"
+            ))
+        }
+
+        // 2. Enumerate the actual script files — flag the ones that don't look benign.
+        let scriptsDir = "\(home)/Library/Scripts/Folder Action Scripts"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: scriptsDir),
+              let scripts = try? fm.contentsOfDirectory(atPath: scriptsDir) else { return }
+
+        for script in scripts where !script.hasPrefix(".") {
+            let scriptPath = "\(scriptsDir)/\(script)"
+            // Apple's default sample scripts ship in /System (which we don't reach); anything
+            // user-installed here is custom. Read for suspicious patterns.
+            guard let content = try? String(contentsOfFile: scriptPath, encoding: .utf8) else { continue }
+            let lc = content.lowercased()
+
+            // `do shell script` + curl|bash is the smoking gun for a folder-action stealer.
+            let suspicious = (lc.contains("do shell script") &&
+                              (lc.contains("curl") || lc.contains("wget") || lc.contains("base64")))
+            findings.append(Finding(
+                severity: suspicious ? .high : .low,
+                category: .persistence,
+                title: suspicious
+                    ? "Folder Action script runs shell commands"
+                    : "Folder Action script present",
+                detail: "Script: \(script) — runs on changes to its attached folder",
+                path: scriptPath,
+                remediation: "Inspect, then remove if unexpected: open \"\(scriptPath)\""
+            ))
+        }
+    }
+
+    // MARK: - Mail.app rules with script actions
+
+    private func scanMailRules(findings: inout [Finding], errors: inout [String]) {
+        // Mail.app supports rules that execute an AppleScript or shell script when a message
+        // arrives — a popular persistence trick because the rules survive reboot and run in
+        // Mail's signed context. The rules live in `MailData/SyncedRules.plist` (and v1/v2
+        // variants) inside a per-account Mail container.
+        let home = ShellRunner.realUserHome
+        let mailRoot = "\(home)/Library/Mail"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: mailRoot),
+              let versions = try? fm.contentsOfDirectory(atPath: mailRoot) else { return }
+
+        for version in versions where version.hasPrefix("V") {
+            let mailDataDir = "\(mailRoot)/\(version)/MailData"
+            guard let plistNames = try? fm.contentsOfDirectory(atPath: mailDataDir) else { continue }
+
+            for plistName in plistNames where plistName.lowercased().contains("rules") &&
+                                              plistName.lowercased().hasSuffix(".plist") {
+                let plistPath = "\(mailDataDir)/\(plistName)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) else {
+                    continue
+                }
+
+                // Format varies — sometimes a top-level array of dicts, sometimes a dict with
+                // a "Rules" key holding the array. Walk the structure looking for AppleScript
+                // or shell-script actions, which Mail represents in its action criteria.
+                let serialized = String(describing: plist).lowercased()
+                let hasAppleScriptAction = serialized.contains("applescript") ||
+                                           serialized.contains("runscript")
+                let hasScriptPath = serialized.contains(".scpt") || serialized.contains(".applescript") ||
+                                    serialized.contains(".sh\"") || serialized.contains(".py\"")
+
+                if hasAppleScriptAction || hasScriptPath {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Mail.app rule executes a script",
+                        detail: "Rules file: \(plistName) in \(version) — Mail triggers a script on incoming messages",
+                        path: plistPath,
+                        remediation: "Open Mail > Settings > Rules and remove any unfamiliar rule that runs a script"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Background Items (SMAppService, macOS 13+)
+
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // Since macOS 13, third-party apps can register Login Items / launch agents through
+        // the SMAppService API. These don't appear in ~/Library/LaunchAgents — they live in
+        // the Background Task Management (BTM) database at
+        // /var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v15.btm.
+        //
+        // The file is a binary plist that's only readable as root, but `sfltool dumpbtm`
+        // produces a textual dump we can parse.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Each record block looks like:
+        //   UUID: ...
+        //   Name: SomeApp
+        //   Developer Name: ...
+        //   Type: legacy daemon (...)
+        //   Disposition: [enabled]
+        //   Bundle path: /Applications/SomeApp.app
+        //   Executable Path: /Applications/SomeApp.app/Contents/MacOS/Helper
+        //   Generation: 1
+        //
+        // We split by blank lines and inspect each record.
+        let records = result.stdout.components(separatedBy: "\n\n")
+
+        for record in records {
+            guard record.contains("Bundle path:") || record.contains("Executable Path:") else { continue }
+
+            let lines = record.split(separator: "\n")
+            var name = "(unknown)"
+            var developer = "(unknown)"
+            var bundlePath: String?
+            var executablePath: String?
+            var disposition = ""
+            var typeString = ""
+
+            for line in lines {
+                let s = String(line).trimmingCharacters(in: .whitespaces)
+                if s.hasPrefix("Name:") {
+                    name = s.replacingOccurrences(of: "Name:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if s.hasPrefix("Developer Name:") {
+                    developer = s.replacingOccurrences(of: "Developer Name:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if s.hasPrefix("Bundle path:") {
+                    bundlePath = s.replacingOccurrences(of: "Bundle path:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if s.hasPrefix("Executable Path:") {
+                    executablePath = s.replacingOccurrences(of: "Executable Path:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if s.hasPrefix("Disposition:") {
+                    disposition = s.replacingOccurrences(of: "Disposition:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if s.hasPrefix("Type:") {
+                    typeString = s.replacingOccurrences(of: "Type:", with: "").trimmingCharacters(in: .whitespaces)
+                }
+            }
+
+            // Only flag enabled items — disabled BTM records are toggled-off Login Items,
+            // they aren't actually running.
+            let isEnabled = disposition.lowercased().contains("enabled") &&
+                            !disposition.lowercased().contains("disabled")
+            guard isEnabled else { continue }
+
+            let target = executablePath ?? bundlePath
+            guard let resolvedTarget = target, !resolvedTarget.isEmpty else { continue }
+
+            // Skip Apple/system-managed items
+            if developer.contains("Apple") { continue }
+            if resolvedTarget.hasPrefix("/System/") || resolvedTarget.hasPrefix("/usr/") { continue }
+
+            // 1. Spyware match wins immediately
+            if let sig = SpywareSignature.match(processName: URL(fileURLWithPath: resolvedTarget).lastPathComponent) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as Background Item: \(sig.name)",
+                    detail: "Name: \(name), Developer: \(developer), Type: \(typeString)",
+                    path: resolvedTarget,
+                    remediation: "System Settings > General > Login Items & Extensions — disable and remove \(sig.name)"
+                ))
+                continue
+            }
+
+            // 2. Hidden path is high-confidence bad
+            let isHiddenPath = resolvedTarget.contains("/.") ||
+                resolvedTarget.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            if isHiddenPath {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Item points to hidden path",
+                    detail: "Name: \(name), Developer: \(developer), Type: \(typeString)",
+                    path: resolvedTarget,
+                    remediation: "Disable in System Settings > General > Login Items & Extensions; investigate the binary"
+                ))
+                continue
+            }
+
+            // 3. Unsigned binary in a Background Item slot is unusual — SMAppService normally
+            //    refuses unsigned helpers, but a Developer-ID-revoked binary is reported as
+            //    unsigned by SecStaticCode. Worth surfacing as MEDIUM.
+            if FileManager.default.fileExists(atPath: resolvedTarget),
+               !checkIsSigned(path: resolvedTarget) {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Unsigned Background Item registered to run at login",
+                    detail: "Name: \(name), Developer: \(developer), Type: \(typeString)",
+                    path: resolvedTarget,
+                    remediation: "Verify this Login Item in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Shell History (ClickFix / paste-and-run forensics)
+
+    private func scanShellHistory(findings: inout [Finding], errors: inout [String]) {
+        // ClickFix-style social engineering tricks the user into pasting a malicious
+        // command into Terminal. The command typically pipes a curl/wget download into
+        // `bash`/`sh`/`zsh`, or invokes `osascript` to run an inline AppleScript that
+        // bypasses Gatekeeper. These attacks leave clear forensic breadcrumbs in the
+        // shell history file, which we scan for the canonical patterns.
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Anchored regexes catch the dangerous shapes without false-positiving on
+        // every Homebrew install snippet (Homebrew's install uses a specific URL).
+        let patterns: [(needle: String, description: String, severity: Severity)] = [
+            ("curl ", "curl-piped-to-shell — common ClickFix dropper", .high),
+            ("wget ", "wget-piped-to-shell — common ClickFix dropper", .high),
+            ("base64 -d", "base64 decode to shell — obfuscated payload", .high),
+            ("base64 --decode", "base64 decode to shell — obfuscated payload", .high),
+            ("eval \"$(curl", "eval of remote content", .high),
+            ("eval \"$(wget", "eval of remote content", .high),
+            ("osascript -e", "inline AppleScript invocation", .medium),
+            ("xattr -d com.apple.quarantine", "manual Gatekeeper bypass", .high),
+            ("xattr -cr ", "wipe extended attributes (Gatekeeper bypass)", .high),
+            ("sudo spctl --master-disable", "Gatekeeper globally disabled", .high),
+            ("python -c \"import", "inline Python execution", .medium),
+            ("python3 -c \"import", "inline Python execution", .medium),
+            ("/dev/tcp/", "bash reverse-shell construct", .high),
+        ]
+
+        // Whitelist legitimate one-liners that users invariably run. Anything matching
+        // a pattern AND a whitelist is suppressed.
+        let benignSubstrings = [
+            "raw.githubusercontent.com/Homebrew/install/",  // Homebrew installer
+            "https://sh.rustup.rs",                           // rustup
+            "https://get.docker.com",                          // Docker
+            "https://nodejs.org/",
+            "https://deno.land/install.sh",
+            "https://bun.sh/install",
+            "https://ohmyposh.dev/install.sh",
+            "https://raw.githubusercontent.com/ohmyzsh/",
+        ]
+
+        for historyFile in historyFiles {
+            guard let content = try? String(contentsOfFile: historyFile, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: historyFile).lastPathComponent
+
+            // Walk lines, surfacing only the most recent ~500 (history files grow large).
+            let lines = content.split(separator: "\n").suffix(500)
+            for line in lines {
+                let raw = String(line)
+                let lc = raw.lowercased()
+                // Pipe to a shell is the signature — `curl X | bash` / `... | sh`
+                let pipedToShell = (lc.contains("| bash") || lc.contains("|bash") ||
+                                    lc.contains("| sh") || lc.contains("|sh") ||
+                                    lc.contains("| zsh") || lc.contains("|zsh"))
+
+                for pattern in patterns {
+                    guard lc.contains(pattern.needle) else { continue }
+
+                    // curl/wget-piped-to-shell only fires when actually piped
+                    if (pattern.needle == "curl " || pattern.needle == "wget ") && !pipedToShell {
+                        continue
+                    }
+                    // Suppress well-known legitimate installers
+                    if benignSubstrings.contains(where: { lc.contains($0.lowercased()) }) { continue }
+
+                    findings.append(Finding(
+                        severity: pattern.severity, category: .persistence,
+                        title: "Suspicious one-liner in \(fileName)",
+                        detail: "\(pattern.description): \(String(raw.prefix(120)))",
+                        path: historyFile,
+                        remediation: "Review your shell history (open \(historyFile)) and the binaries the command downloaded. If you didn't run this, treat the Mac as compromised."
+                    ))
+                    break  // one finding per line is enough
+                }
+            }
         }
     }
 

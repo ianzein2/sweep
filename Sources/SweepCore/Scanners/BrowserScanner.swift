@@ -8,13 +8,38 @@ public final class BrowserScanner: Scanner {
     // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
     // reported malicious extension families and IOCs.
     private let suspiciousEditorExtKeywords: [String] = [
+        // 2024 campaigns
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 marketplace-takedown families (Material/Pretty CSV/AI clones,
+        // EthereumDeploy, Hardhat-helper, Macroscope, ContractGenius, etc.)
+        "ethereumdeploy", "hardhat-helper", "macroscope", "contractgenius",
+        "starknet-foundry-helper", "polychain-helper", "shibarium-tools",
+        "claude-code-companion", "cursor-ai-helper", "ai-rules-companion",
+        // Generic family identifiers seen in malicious manifest descriptions
+        "telemetry-helper", "auto-completion-fix", "ide-update-helper",
+    ]
+
+    /// Specific publisher.name extension IDs that have been confirmed malicious
+    /// (taken down from the VSCode / Open VSX marketplaces). Substring match is enough —
+    /// the publisher prefix alone is high signal.
+    private let knownMaliciousEditorExtIds: [String] = [
+        // Q-Sec / OpenVSX takedowns (2025)
+        "ahbanc.shiba-extensions", "ahbanc.pretty-csv",
+        "marafat.material-theme-icons", "marafat.material-theme",
+        "ev-codes.macroscope",
+        "krxz.solidity-tools", "krxz.eth-debugger",
+        // Lazarus / Contagious Interview marketplace plants
+        "playasm.coding-helper", "playasm.devhelper",
+        "easydeveloper.devtoolkit", "easydeveloper.web3helper",
+        // Crystal Stealer dropper masquerading as a productivity extension
+        "crystaldev.productivity", "crystaldev.smart-rename",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        "wallet-drain", "seed-phrase", "private-key-export",
     ]
 
     // Extensions that are well-known and safe
@@ -336,6 +361,19 @@ public final class BrowserScanner: Scanner {
                 let displayName = (pkg["displayName"] as? String) ?? (pkg["name"] as? String) ?? entry
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
+                let extIdLC = extId.lowercased()
+
+                // Confirmed malicious extension ID (taken down from marketplace) — strongest signal.
+                if let badId = knownMaliciousEditorExtIds.first(where: { extIdLC.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension confirmed malicious",
+                        detail: "Extension: \(displayName) (\(extId)) — matches taken-down ID \"\(badId)\"",
+                        path: extPath,
+                        remediation: "Remove immediately. Rotate any credentials typed while this extension was installed (keychain, wallets, npm tokens)."
+                    ))
+                    continue
+                }
 
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {

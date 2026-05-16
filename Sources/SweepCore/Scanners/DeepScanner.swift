@@ -37,6 +37,17 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for stealer staging artifacts in /private/tmp — AMOS-family infostealers
+        //    drop a `.scpt` AppleScript next to a `password` text file.
+        progress?.update("checking stealer staging artifacts")
+        scanStealerStagingArtifacts(findings: &findings, errors: &errors)
+
+        // 7. Look for recently-downloaded Mach-O binaries that have had their quarantine
+        //    attribute stripped — a common technique to bypass Gatekeeper after the file
+        //    arrived from the Internet.
+        progress?.update("checking quarantine bypass")
+        scanQuarantineBypass(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -278,6 +289,143 @@ public final class DeepScanner: Scanner {
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
         }
+    }
+
+    // MARK: - Stealer Staging Artifacts in /private/tmp
+
+    private func scanStealerStagingArtifacts(findings: inout [Finding], errors: inout [String]) {
+        // AMOS, SHAMOS, Banshee, Poseidon and their derivatives stage themselves in
+        // /private/tmp before exfiltration. The hallmarks: a `.scpt` AppleScript with a
+        // generated name (often AppleScript-XXX.scpt), an unsigned Mach-O dropped alongside
+        // a `password.txt` / `pass.txt`, or a tarball whose name starts with `out.` or
+        // `screenshots.`. None of these are normal contents of /private/tmp.
+        let tempRoots = ["/private/tmp", "/tmp", "/var/tmp"]
+        let fm = FileManager.default
+
+        for root in tempRoots {
+            guard fm.fileExists(atPath: root),
+                  let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            for entry in entries {
+                let path = "\(root)/\(entry)"
+                let lc = entry.lowercased()
+
+                // 1. AppleScript staging files
+                if lc.hasSuffix(".scpt") &&
+                   (lc.contains("applescript-") || lc.contains("update") ||
+                    lc.contains("install") || lc.contains("loader")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "AppleScript staged in temp directory",
+                        detail: "File \(entry) in \(root) — matches AMOS / SHAMOS / Banshee staging filename pattern",
+                        path: path,
+                        remediation: "Inspect with: osadecompile \"\(path)\" — and remove if it's a dropper"
+                    ))
+                    continue
+                }
+
+                // 2. Plaintext password dumps left behind by stealers after `dscl` / keychain extraction
+                if lc == "password.txt" || lc == "pass.txt" || lc == "passwd.txt" ||
+                   lc == "keychain.txt" || lc == "kc.txt" {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Plaintext password dump in temp directory",
+                        detail: "File \(entry) in \(root) — stealers stash extracted credentials here before upload",
+                        path: path,
+                        remediation: "Rotate every password that may have been stored on this Mac. Then remove the file: rm \"\(path)\""
+                    ))
+                    continue
+                }
+
+                // 3. Stealer archive staging
+                if (lc.hasSuffix(".zip") || lc.hasSuffix(".tar.gz") || lc.hasSuffix(".tgz")) &&
+                   (lc.contains("out.") || lc.contains("loot") || lc.contains("data.") ||
+                    lc.contains("dump.") || lc.contains("screenshots") || lc.hasPrefix("bnsh") ||
+                    lc.hasPrefix("amos") || lc.hasPrefix("shamos")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Stealer-style archive in temp directory",
+                        detail: "File \(entry) in \(root) — matches infostealer exfil-bundle naming",
+                        path: path,
+                        remediation: "Inspect contents (unzip -l), then remove. Investigate the process that created the file."
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Quarantine Bypass
+
+    private func scanQuarantineBypass(findings: inout [Finding], errors: inout [String]) {
+        // Browsers and curl/wget (when invoked via Terminal) attach `com.apple.quarantine`
+        // to files they save. If a recently-modified Mach-O binary in ~/Downloads or other
+        // common drop targets is *missing* that attribute, the user (or a script) likely
+        // stripped it — that's the technique recommended by every ClickFix-style malware
+        // installation page ("just run xattr -d com.apple.quarantine to fix the warning").
+        let home = ShellRunner.realUserHome
+        let watchDirs = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "/Users/Shared",
+        ]
+        let fm = FileManager.default
+
+        for dir in watchDirs {
+            guard fm.fileExists(atPath: dir),
+                  let enumerator = fm.enumerator(
+                    at: URL(fileURLWithPath: dir),
+                    includingPropertiesForKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+
+            var checked = 0
+            for case let url as URL in enumerator {
+                // Cap inspection so we don't crawl multi-thousand-file Downloads folders.
+                checked += 1
+                if checked > 200 { break }
+                if enumerator.level > 2 { enumerator.skipDescendants(); continue }
+
+                guard let values = try? url.resourceValues(forKeys: [
+                    .isRegularFileKey, .contentModificationDateKey, .fileSizeKey
+                ]), values.isRegularFile == true,
+                      let modDate = values.contentModificationDate,
+                      let size = values.fileSize, size > 4_000,
+                      modDate.timeIntervalSinceNow > -86400 * 14  // last 14 days
+                else { continue }
+
+                let path = url.path
+
+                // Only inspect Mach-O binaries — that's what stealers drop.
+                guard let fh = FileHandle(forReadingAtPath: path) else { continue }
+                let header = fh.readData(ofLength: 4)
+                fh.closeFile()
+                guard header.count == 4 else { continue }
+                let magic = header.withUnsafeBytes { $0.load(as: UInt32.self) }
+                let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+                guard machoMagics.contains(magic) else { continue }
+
+                // Check for the quarantine xattr. Absent = it was stripped (or the file was
+                // moved out of a browser/curl context). Either way, surface it.
+                let xattrResult = ShellRunner.run("/usr/bin/xattr", arguments: [path], timeout: 3)
+                let hasQuarantine = xattrResult.success &&
+                    xattrResult.stdout.contains("com.apple.quarantine")
+                if hasQuarantine { continue }
+
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "Recent Mach-O binary without quarantine attribute",
+                    detail: "Modified \(formatAge(modDate)) — file lacks com.apple.quarantine, so Gatekeeper / XProtect did not screen it",
+                    path: path,
+                    remediation: "If you didn't intentionally strip the attribute (e.g. with `xattr -d`), treat this binary as untrusted. Verify the signature: codesign -dv \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    private func formatAge(_ date: Date) -> String {
+        let seconds = -date.timeIntervalSinceNow
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 
     // MARK: - Process Environment Inspection

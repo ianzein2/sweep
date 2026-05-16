@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking kernel extension policy")
+        checkKextPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join")
+        checkWiFiAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID / Watch unlock policy")
+        checkUnlockPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking download quarantine")
+        checkDownloadQuarantine(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,139 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Kernel Extension Policy
+
+    private func checkKextPolicy(findings: inout [Finding], errors: inout [String]) {
+        // On Apple silicon, allowing third-party kernel extensions requires lowering the
+        // boot policy to "Reduced Security" — which also disables the Signed System Volume's
+        // strongest protections. We can check via `bputil --display-all` (root-only) or by
+        // looking at the user-approved kext list, which lives in
+        // /Library/Apple/Library/Bundles/TCC_Compatibility.bundle for newer macOS, but the
+        // most portable signal is `systemextensionsctl list` showing third-party providers.
+        let result = ShellRunner.run("/usr/bin/systemextensionsctl", arguments: ["list"], timeout: 10)
+        guard result.success else { return }
+
+        // Each non-Apple system extension is a kernel-adjacent component running with elevated
+        // privileges. Surface each one so the user can confirm it's legitimate (EDR, VPN,
+        // Backblaze, Little Snitch, etc.).
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            // Format: "*       enabled active  com.team.bundleid (version) state"
+            //         starts with a flag column. Skip headers and Apple-prefixed entries.
+            let lowered = lineStr.lowercased()
+            guard lineStr.contains("com.") else { continue }
+            if lowered.contains("com.apple.") { continue }
+            if lowered.contains("--- ") { continue }  // Section dividers
+
+            // Pull the bundle id out (first com.* token)
+            let tokens = lineStr.split(separator: " ", omittingEmptySubsequences: true)
+            let bundleId = tokens.first(where: { $0.hasPrefix("com.") }).map(String.init) ?? "(unknown)"
+
+            // Activated, non-Apple system extensions warrant a notice — known-good ones the
+            // user can dismiss; anything they don't recognize is high-priority to investigate.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Third-party system extension active",
+                detail: "Bundle: \(bundleId) — runs with elevated, kernel-adjacent privileges",
+                path: nil,
+                remediation: "If you don't recognize this developer, disable in System Settings > General > Login Items & Extensions > Endpoint Security / Network Extensions"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join
+
+    private func checkWiFiAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // Auto-joining open / hidden networks lets an attacker stand up a same-SSID rogue AP
+        // and capture traffic. We check the two preference keys most often misconfigured:
+        // RequireAdminNetworkChange and JoinModeFallback.
+        let modeResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.airport.preferences", "JoinModeFallback"
+        ], timeout: 5)
+        if modeResult.success {
+            let mode = modeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // "JoinOpen" / "Prompt" are insecure. "DoNothing" is hardened.
+            if mode.contains("JoinOpen") {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Mac auto-joins open Wi-Fi networks",
+                    detail: "Wi-Fi fallback is set to JoinOpen — Mac connects automatically when no known network is in range",
+                    path: nil,
+                    remediation: "Disable: System Settings > Wi-Fi > Ask to join networks > Off, and disable 'Ask to join hotspots'"
+                ))
+            }
+        }
+
+        // Hidden-network probing leaks every saved SSID — a privacy and tracking concern.
+        let probeResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.airport.preferences", "AlwaysProbeForHiddenNetworks"
+        ], timeout: 5)
+        if probeResult.success {
+            let val = probeResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if val == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Mac actively probes for hidden Wi-Fi networks",
+                    detail: "Active probing broadcasts every saved hidden SSID, enabling location-tracking attacks",
+                    path: nil,
+                    remediation: "Forget hidden networks you no longer need: System Settings > Wi-Fi > Advanced"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Touch ID / Watch Unlock Policy
+
+    private func checkUnlockPolicy(findings: inout [Finding], errors: inout [String]) {
+        // If sudo is configured to authenticate via Touch ID and the system also allows
+        // automatic Watch unlock, an attacker with the laptop and a paired (unlocked) Watch
+        // can issue privileged commands without typing a password. Flag the combo.
+        let pamSudo = try? String(contentsOfFile: "/etc/pam.d/sudo", encoding: .utf8)
+        let pamSudoLocal = try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8)
+        let touchIDForSudo = (pamSudo?.contains("pam_tid.so") == true) ||
+                             (pamSudoLocal?.contains("pam_tid.so") == true)
+
+        // AutoUnlock controls whether an Apple Watch can unlock the Mac.
+        let watchResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "-currentHost", "read", "com.apple.security.autoUnlock", "AutoUnlockEnabled"
+        ], timeout: 5)
+        let watchUnlock = watchResult.success &&
+            watchResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        if touchIDForSudo && watchUnlock {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Touch ID for sudo combined with Apple Watch unlock",
+                detail: "An attacker with this Mac and a paired (unlocked) Apple Watch can satisfy both screen unlock and sudo prompts without your password",
+                path: nil,
+                remediation: "Decide which factor you want: keep Touch ID for sudo, or keep Apple Watch unlock — but consider not enabling both on a high-value Mac"
+            ))
+        }
+    }
+
+    // MARK: - Download Quarantine
+
+    private func checkDownloadQuarantine(findings: inout [Finding], errors: inout [String]) {
+        // LSQuarantine is what triggers the Gatekeeper "this file was downloaded from the
+        // Internet" prompt and feeds XProtect scanning. Disabling it lets every download
+        // execute unimpeded — exactly what some "speed up my Mac" guides recommend, and
+        // exactly what stealers want their victim's Mac to look like.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" || value.lowercased() == "false" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Download quarantine (LSQuarantine) is disabled",
+                detail: "Downloads will skip Gatekeeper / XProtect checks. Re-enable to restore the 'downloaded from the Internet' warning.",
+                path: nil,
+                remediation: "Re-enable: defaults write com.apple.LaunchServices LSQuarantine -bool true"
+            ))
         }
     }
 
