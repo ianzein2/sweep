@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions / AppleScript persistence")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook / Spotlight / SafariNetExtension plugins")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking shell environment files")
+        scanShellEnvironments(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +683,174 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Folder Actions (AppleScript persistence)
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach an AppleScript to a directory; the script runs whenever the folder
+        // changes. Several 2024-2025 droppers use this as a quiet, GUI-survivable persistence
+        // channel — there's no LaunchAgent and the path doesn't show up in Login Items.
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Folder Actions Setup writes the binding to this preference domain.
+        let prefsPath = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: prefsPath),
+           let data = fm.contents(atPath: prefsPath),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let folders = plist["folders"] as? [[String: Any]] ?? plist["FolderActions"] as? [[String: Any]] {
+            for entry in folders {
+                let folder = (entry["folder"] as? String) ?? (entry["Folder"] as? String) ?? "?"
+                let script = (entry["script"] as? String) ?? (entry["Script"] as? String) ?? "?"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Folder Action attached to \(URL(fileURLWithPath: folder).lastPathComponent)",
+                    detail: "Folder: \(folder), Script: \(script) — script runs whenever the folder changes",
+                    path: prefsPath,
+                    remediation: "Remove via Finder > Services > Folder Actions Setup, or delete \(prefsPath) if you didn't add this."
+                ))
+            }
+        }
+
+        // Scripts directory is where the AppleScripts themselves live. Anything user-installed here
+        // that isn't an empty default is worth surfacing.
+        let scriptDirs = [
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        for dir in scriptDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(dir)/\(entry)"
+                // Skip Apple's defaults shipped in /Library/Scripts
+                let appleDefaults: Set<String> = [
+                    "add - new item alert.scpt", "close - close sub-folders.scpt",
+                    "convert - PostScript to PDF.scpt", "Image - Add Icon.scpt",
+                    "Image - Duplicate as JPEG.scpt", "Image - Duplicate as PNG.scpt",
+                    "Image - Duplicate as TIFF.scpt", "Image - Flip Horizontal.scpt",
+                    "Image - Flip Vertical.scpt", "Image - Info to Comment.scpt",
+                    "Image - Rotate Left.scpt", "Image - Rotate Right.scpt",
+                ]
+                if dir.hasPrefix("/Library") && appleDefaults.contains(entry) { continue }
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Custom Folder Action script: \(entry)",
+                    detail: "Folder Action scripts run on directory changes — make sure this is yours.",
+                    path: path,
+                    remediation: "Inspect: open \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Plugin bundles (QuickLook, Spotlight importers, Safari Network Extensions)
+
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        // These plugin types are loaded automatically by macOS subsystems — no GUI required.
+        // QuickLook plugins run when the user just *previews* a file with Space; Spotlight
+        // importers run on every file Spotlight indexes; Safari Network Extensions sit
+        // inline between Safari and the network.
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct PluginDir { let path: String; let ext: String; let kind: String; let why: String }
+        let dirs: [PluginDir] = [
+            PluginDir(path: "\(home)/Library/QuickLook", ext: "qlgenerator",
+                      kind: "QuickLook generator",
+                      why: "QuickLook generators execute on file preview (Space bar) — code runs without an explicit user 'open'"),
+            PluginDir(path: "/Library/QuickLook", ext: "qlgenerator",
+                      kind: "QuickLook generator",
+                      why: "QuickLook generators execute on file preview (Space bar) — code runs without an explicit user 'open'"),
+            PluginDir(path: "\(home)/Library/Spotlight", ext: "mdimporter",
+                      kind: "Spotlight importer",
+                      why: "Spotlight importers run on every file Spotlight indexes — a persistent execution channel"),
+            PluginDir(path: "/Library/Spotlight", ext: "mdimporter",
+                      kind: "Spotlight importer",
+                      why: "Spotlight importers run on every file Spotlight indexes — a persistent execution channel"),
+            PluginDir(path: "\(home)/Library/Internet Plug-Ins", ext: "plugin",
+                      kind: "Internet plug-in (legacy)",
+                      why: "Legacy NPAPI-style plug-in that runs in browsers that still load this directory"),
+            PluginDir(path: "/Library/Internet Plug-Ins", ext: "plugin",
+                      kind: "Internet plug-in (legacy)",
+                      why: "Legacy NPAPI-style plug-in that runs in browsers that still load this directory"),
+            PluginDir(path: "\(home)/Library/Audio/Plug-Ins/HAL", ext: "driver",
+                      kind: "Audio HAL plug-in",
+                      why: "Audio HAL plug-ins load into coreaudiod and can hook microphone input"),
+            PluginDir(path: "/Library/Audio/Plug-Ins/HAL", ext: "driver",
+                      kind: "Audio HAL plug-in",
+                      why: "Audio HAL plug-ins load into coreaudiod and can hook microphone input"),
+            PluginDir(path: "\(home)/Library/ColorSync/Profiles", ext: "icc",
+                      kind: "ColorSync profile",
+                      why: "ColorSync profiles can carry payloads via embedded scripts in some exploit chains"),
+        ]
+
+        for plugin in dirs {
+            guard fm.fileExists(atPath: plugin.path),
+                  let entries = try? fm.contentsOfDirectory(atPath: plugin.path) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                guard entry.lowercased().hasSuffix(".\(plugin.ext)") else { continue }
+                let bundlePath = "\(plugin.path)/\(entry)"
+
+                // ColorSync .icc files are tiny binaries — skip the code-signature flow.
+                let isBundle = plugin.ext != "icc"
+                let signed = !isBundle || checkIsSigned(path: bundlePath)
+
+                let severity: Severity = signed ? .medium : .high
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: "\(plugin.kind) installed: \(entry)\(signed ? "" : " (unsigned)")",
+                    detail: plugin.why,
+                    path: bundlePath,
+                    remediation: "Remove if you don't recognize it: rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Shell environment files
+
+    private func scanShellEnvironments(findings: inout [Finding], errors: inout [String]) {
+        // .zshenv runs in ALL zsh invocations — even non-interactive subshells. That makes it the
+        // single most attractive shell persistence target: an attacker who can write here gets
+        // execution in every shell, including scripts. We compare its modification time against
+        // .zshrc as a sanity check (most users edit .zshrc, not .zshenv).
+        let home = ShellRunner.realUserHome
+        let zshenv = "\(home)/.zshenv"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: zshenv),
+              let content = try? String(contentsOfFile: zshenv, encoding: .utf8) else { return }
+
+        let nonEmpty = content.split(separator: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+        }
+        guard !nonEmpty.isEmpty else { return }
+
+        // Anything that runs at every shell start is worth surfacing. Be conservative —
+        // only escalate if the content has a known dropper marker.
+        let riskyMarkers = ["curl ", "wget ", "base64", "eval ", "exec ", "DYLD_INSERT_LIBRARIES", "/tmp/"]
+        let hasRisky = nonEmpty.contains { line in
+            riskyMarkers.contains { line.contains($0) }
+        }
+
+        if hasRisky {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: ".zshenv contains executable patterns",
+                detail: "~/.zshenv runs in every zsh invocation, including non-interactive subshells (\(nonEmpty.count) active lines).",
+                path: zshenv,
+                remediation: "Inspect: cat ~/.zshenv — move anything you actually need into ~/.zshrc instead."
+            ))
+        } else if nonEmpty.count > 5 {
+            findings.append(Finding(
+                severity: .low, category: .persistence,
+                title: ".zshenv has \(nonEmpty.count) lines",
+                detail: "~/.zshenv runs in every zsh invocation. Most users keep this file empty and put config in ~/.zshrc.",
+                path: zshenv,
+                remediation: "Move shell config into ~/.zshrc unless you have a specific reason to use ~/.zshenv"
             ))
         }
     }

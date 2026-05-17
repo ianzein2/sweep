@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking login window display policy")
+        checkLoginWindowDisplay(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo timeout")
+        checkSudoTimeout(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH key hygiene")
+        checkSSHKeyHygiene(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server hardening")
+        checkSSHDConfig(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +483,264 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My is the only thing that lets a stolen Mac be tracked, remote-locked, or wiped.
+        // The configuration lives in com.apple.icloud.findmydeviced; the underlying daemons run
+        // as findmydeviced (Apple Silicon) or fmfd. We surface this as LOW because not every user
+        // signs in with iCloud, but missing Find My on an iCloud-bound Mac is a real gap.
+        let fmd = ShellRunner.run("/bin/launchctl", arguments: [
+            "list", "com.apple.findmymacd"
+        ], timeout: 5)
+        let helper = ShellRunner.run("/bin/launchctl", arguments: [
+            "list", "com.apple.icloud.findmydeviced"
+        ], timeout: 5)
+
+        // Both should be running when Find My Mac is enabled. If neither is, and an iCloud
+        // account is configured, flag it.
+        let fmdRunning = fmd.success && !fmd.stdout.isEmpty
+        let helperRunning = helper.success && !helper.stdout.isEmpty
+        if fmdRunning || helperRunning { return }
+
+        // Probe for an iCloud account before warning.
+        let iCloud = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "MobileMeAccounts", "Accounts"
+        ], timeout: 5)
+        let hasICloud = iCloud.success && iCloud.stdout.contains("AccountID")
+        if !hasICloud { return }
+
+        findings.append(Finding(
+            severity: .medium, category: .hardening,
+            title: "Find My Mac appears disabled while iCloud is signed in",
+            detail: "Find My is the only remote lock/wipe lever if this Mac is stolen.",
+            path: nil,
+            remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+        ))
+    }
+
+    // MARK: - Login window display policy
+
+    private func checkLoginWindowDisplay(findings: inout [Finding], errors: inout [String]) {
+        // When the login window shows a list of users, an attacker only needs the password.
+        // When it requires name+password, they need both. CIS recommends the latter.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.loginwindow", "SHOWFULLNAME"
+        ], timeout: 5)
+        // Default behavior (no key set) is to show user list.
+        var showsList = true
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" { showsList = false }
+        }
+        if showsList {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Login window shows a list of user accounts",
+                detail: "Attackers gain half the credential (the username) just by waking the Mac.",
+                path: nil,
+                remediation: "Require name and password: sudo defaults write /Library/Preferences/com.apple.loginwindow SHOWFULLNAME -bool true"
+            ))
+        }
+    }
+
+    // MARK: - Sudo timeout
+
+    private func checkSudoTimeout(findings: inout [Finding], errors: inout [String]) {
+        // sudo caches authentication for `timestamp_timeout` minutes (default 5 on macOS).
+        // A value of -1 means "cache forever for this session", which is a meaningful
+        // privilege-escalation window if another process compromises the terminal.
+        guard let content = try? String(contentsOfFile: "/etc/sudoers", encoding: .utf8) else { return }
+        var allConfig = content
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                if let extra = try? String(contentsOfFile: "/etc/sudoers.d/\(entry)", encoding: .utf8) {
+                    allConfig.append("\n")
+                    allConfig.append(extra)
+                }
+            }
+        }
+
+        for raw in allConfig.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            guard line.contains("timestamp_timeout") else { continue }
+            // Match "timestamp_timeout=<value>" — sudo accepts whitespace around the equals sign
+            // sometimes, so be lenient.
+            let parts = line.split(separator: "=").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count >= 2 else { continue }
+            // Find the numeric token at the start of the trailing portion.
+            let tail = parts.last ?? ""
+            let numStr = tail.split(whereSeparator: { !$0.isNumber && $0 != "-" }).first.map(String.init) ?? ""
+            guard let value = Int(numStr) else { continue }
+            if value < 0 {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "sudo timestamp_timeout is set to never expire (\(value))",
+                    detail: "A negative timestamp_timeout caches sudo authentication for the lifetime of the terminal session.",
+                    path: "/etc/sudoers",
+                    remediation: "Set to a small positive value (default is 5): sudo visudo"
+                ))
+            } else if value > 60 {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "sudo authentication cached for \(value) minutes",
+                    detail: "Long sudo caching widens the window in which compromised processes can escalate.",
+                    path: "/etc/sudoers",
+                    remediation: "Lower to <=15 minutes: sudo visudo"
+                ))
+            }
+            break  // first match wins; sudoers is parsed in order
+        }
+    }
+
+    // MARK: - SSH key hygiene
+
+    private func checkSSHKeyHygiene(findings: inout [Finding], errors: inout [String]) {
+        // Unencrypted private keys are bearer credentials: anything that reads the file gets
+        // your access. Stealers from 2024-2025 specifically harvest these. We can detect an
+        // unencrypted key by header signature alone — no need to attempt to load it.
+        let home = ShellRunner.realUserHome
+        let dir = "\(home)/.ssh"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+
+        for entry in entries {
+            // Look only at things that smell like private keys
+            let lower = entry.lowercased()
+            guard lower.hasPrefix("id_") || lower.hasSuffix(".pem") || lower == "identity" else { continue }
+            if lower.hasSuffix(".pub") { continue }
+            let path = "\(dir)/\(entry)"
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            // Confirm it's actually a private key
+            guard content.contains("BEGIN") && content.contains("PRIVATE KEY") else { continue }
+
+            // Classic PEM keys advertise "Proc-Type: 4,ENCRYPTED" + "DEK-Info" when encrypted.
+            // OpenSSH-format keys carry the cipher name in a length-prefixed binary header at
+            // the start of the base64 body — see hasOpenSSHCipher for the decode.
+            let isOpenSSH = content.contains("BEGIN OPENSSH PRIVATE KEY")
+            let encrypted: Bool
+            if isOpenSSH {
+                encrypted = hasOpenSSHCipher(content)
+            } else {
+                encrypted = content.contains("Proc-Type: 4,ENCRYPTED") ||
+                            content.contains("DEK-Info:")
+            }
+            if !encrypted {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SSH private key has no passphrase: \(entry)",
+                    detail: "Anything that read this file (stealer, backup, leaked sync) gets your SSH access.",
+                    path: path,
+                    remediation: "Add a passphrase: ssh-keygen -p -f \"\(path)\""
+                ))
+            }
+
+            // Group/world-readable permissions on a private key — OpenSSH refuses to use these
+            // anyway, but their existence is sloppy and stealer-friendly.
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let posix = attrs[.posixPermissions] as? Int {
+                let groupOrWorldReadable = (posix & 0o077) != 0
+                if groupOrWorldReadable {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "SSH private key has overly permissive mode: \(entry)",
+                        detail: String(format: "Mode: 0%o — other users on the system can read this key.", posix),
+                        path: path,
+                        remediation: "Restrict to user only: chmod 600 \"\(path)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    /// True if an OpenSSH-format private key body looks encrypted (cipher field is not "none").
+    private func hasOpenSSHCipher(_ content: String) -> Bool {
+        guard let startRange = content.range(of: "BEGIN OPENSSH PRIVATE KEY"),
+              let endRange = content.range(of: "END OPENSSH PRIVATE KEY") else { return false }
+        let body = content[startRange.upperBound..<endRange.lowerBound]
+            .components(separatedBy: .newlines)
+            .joined()
+        // The body is base64; the binary preamble begins "openssh-key-v1\0" followed by a length
+        // and the cipher name. Decoding the first ~32 bytes is enough to read the cipher.
+        guard let data = Data(base64Encoded: body, options: .ignoreUnknownCharacters), data.count > 32 else {
+            return false
+        }
+        // Look for "none" as a length-prefixed string near the start.
+        if let nameRange = data.range(of: Data("none".utf8)), nameRange.lowerBound < 64 {
+            return false  // cipher is literally "none" — key is unencrypted
+        }
+        return true
+    }
+
+    // MARK: - SSH server hardening
+
+    private func checkSSHDConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only relevant when Remote Login is enabled, but even with it disabled a permissive
+        // sshd_config means the next time it gets toggled on, the Mac is exposed.
+        let candidates = [
+            "/etc/ssh/sshd_config",
+            "/private/etc/ssh/sshd_config",
+        ]
+        var content: String?
+        var path: String?
+        for c in candidates {
+            if let body = try? String(contentsOfFile: c, encoding: .utf8) {
+                content = body
+                path = c
+                break
+            }
+        }
+        guard let body = content, let configPath = path else { return }
+
+        var permitRootLogin = "prohibit-password"   // OpenSSH default
+        var passwordAuth = "yes"                    // OpenSSH default
+        var permitEmpty = "no"                      // OpenSSH default
+
+        for raw in body.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].lowercased()
+            let value = String(parts[1]).trimmingCharacters(in: .whitespaces).lowercased()
+            switch key {
+            case "permitrootlogin":   permitRootLogin = value
+            case "passwordauthentication": passwordAuth = value
+            case "permitemptypasswords": permitEmpty = value
+            default: break
+            }
+        }
+
+        if permitRootLogin == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd allows direct root login over SSH",
+                detail: "PermitRootLogin yes — root can SSH in directly with just a password.",
+                path: configPath,
+                remediation: "Set 'PermitRootLogin no' in sshd_config, then sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+        if permitEmpty == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sshd allows empty passwords",
+                detail: "PermitEmptyPasswords yes — accounts with no password set can SSH in.",
+                path: configPath,
+                remediation: "Set 'PermitEmptyPasswords no' in sshd_config and restart the daemon."
+            ))
+        }
+        if passwordAuth == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "sshd allows password authentication",
+                detail: "PasswordAuthentication yes — brute-force is possible. Key-based auth is preferred.",
+                path: configPath,
+                remediation: "Switch to keys: add your public key to ~/.ssh/authorized_keys, then set 'PasswordAuthentication no'."
+            ))
         }
     }
 }
