@@ -17,6 +17,37 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome extension IDs from the December 2024 / January 2025 supply-chain wave that began
+    // with the Cyberhaven extension compromise (CVE pending). Each entry was a legitimate
+    // extension whose publisher account was phished and whose store update pushed a malicious
+    // build that exfiltrated cookies, Facebook session tokens, and OAuth grants. Even if the
+    // user has since updated to a clean version, an older cached build may still be on disk
+    // — surface it so they can verify.
+    private let compromisedExtensionIds: [String: String] = [
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (Dec 2024 hijack wave)",
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "VPNCity (Dec 2024 hijack wave)",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Internxt VPN (Dec 2024 hijack wave)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice (Dec 2024 hijack wave)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "ParrotTalks (Dec 2024 hijack wave)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "Reader Mode (Dec 2024 hijack wave)",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "Castorus (Dec 2024 hijack wave)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Vidnoz Flex (Dec 2024 hijack wave)",
+        "egmennebgadmncfjafcemlecimkepcle": "AI Assistant — ChatGPT for Gmail (Dec 2024 hijack wave)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Bookmark Favicon Changer (Dec 2024 hijack wave)",
+        "cplhlgabfijoiabgkigdafklbhhdkahj": "Bard AI Chat Extension (Dec 2024 hijack wave)",
+        "bibjgkidgpfbblifamdlkdlhgihmfohh": "Search Copilot AI by Bing (Dec 2024 hijack wave)",
+        "ekaiojkmleidciacgceigooaloibdmnp": "Wayin AI (Dec 2024 hijack wave)",
+        "fbmlcjhdkilnmjnmlnllonpaiojiapnd": "Visual Effects for Google Meet (Dec 2024 hijack wave)",
+    ]
+
+    // Domains seen exfiltrating data in the Cyberhaven-wave malicious builds. Hits in extension
+    // JS are very high-signal because none of these would appear in a legitimate extension bundle.
+    private let knownExtensionC2Domains: [String] = [
+        "cyberhavenext.pro", "internetdownloadmanager.pro", "captureselectedscreen.com",
+        "graphqlnetwork.pro", "bookmarkfc.com", "readermodeapi.com", "casttour.com",
+        "vidnozflex.com",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -161,6 +192,30 @@ public final class BrowserScanner: Scanner {
                     guard let data = fm.contents(atPath: manifestPath),
                           let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
 
+                    // Known-compromised extension ID — the Dec 2024 supply-chain wave pushed
+                    // malicious updates to dozens of legit Chrome extensions. We surface every
+                    // version still on disk so the user can confirm they've moved to a clean build.
+                    if let hijackName = compromisedExtensionIds[extId] {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension was hit by a known supply-chain hijack",
+                            detail: "\(hijackName), extension ID \(extId), installed version \(latest)",
+                            path: extVersionDir,
+                            remediation: "Remove in \(browserName) > Extensions, change passwords and revoke OAuth sessions for any account you used while it was installed"
+                        ))
+                    }
+
+                    // Scan the extension's JS files for known C2 domains
+                    if let c2Hit = scanChromeExtensionForC2(extVersionDir: extVersionDir) {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "\(browserName) extension talks to a known malicious host",
+                            detail: "Extension ID \(extId) — JS references \(c2Hit)",
+                            path: extVersionDir,
+                            remediation: "Remove this extension immediately and rotate browser-stored credentials"
+                        ))
+                    }
+
                     var name = manifest["name"] as? String ?? "Unknown"
                     name = resolveExtensionName(name, extVersionDir: extVersionDir)
 
@@ -216,6 +271,34 @@ public final class BrowserScanner: Scanner {
                 ))
             }
         }
+    }
+
+    /// Looks for known malicious C2 domains inside an unpacked Chrome extension. We scan a
+    /// small set of likely entry points (background, content scripts) and cap each at 5 MB to
+    /// avoid pathological cases — modern extension bundles are bigger than they used to be, but
+    /// the malicious supply-chain builds were all small.
+    private func scanChromeExtensionForC2(extVersionDir: String) -> String? {
+        let fm = FileManager.default
+        let candidates = [
+            "\(extVersionDir)/background.js",
+            "\(extVersionDir)/service_worker.js",
+            "\(extVersionDir)/content.js",
+            "\(extVersionDir)/scripts/background.js",
+            "\(extVersionDir)/js/background.js",
+        ]
+
+        for path in candidates {
+            guard fm.fileExists(atPath: path),
+                  let attrs = try? fm.attributesOfItem(atPath: path),
+                  let size = attrs[.size] as? Int, size < 5_000_000,
+                  let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            let lower = content.lowercased()
+            for domain in knownExtensionC2Domains where lower.contains(domain) {
+                return domain
+            }
+        }
+        return nil
     }
 
     // MARK: - Safari Extensions

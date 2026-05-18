@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Gatekeeper assessment policy")
+        checkGatekeeperAssessment(findings: &findings, errors: &errors)
+
+        progress?.update("checking automatic install of macOS updates")
+        checkAutoInstallUpdates(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo Touch ID")
+        checkSudoTouchID(findings: &findings, errors: &errors)
+
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkWifiMacRandomization(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +486,202 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Gatekeeper Assessment Policy
+
+    private func checkGatekeeperAssessment(findings: inout [Finding], errors: inout [String]) {
+        // `spctl --status` reports the master enable/disable; `--test-devid-status` and
+        // `--assess` reveal whether the assessment policy still trusts developer IDs.
+        // Setting "Allow apps from: Anywhere" (silently re-enabled with `sudo spctl --master-disable`)
+        // is a strong indicator that the user (or attacker) bypassed Apple's notarization gate.
+        let assessmentMaster = ShellRunner.run("/usr/sbin/spctl",
+                                               arguments: ["--status", "--verbose"], timeout: 5)
+        let output = assessmentMaster.stdout + assessmentMaster.stderr
+        if output.lowercased().contains("assessments disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper assessments are disabled",
+                detail: "spctl reports assessments disabled — any unsigned or unnotarized app can launch without warning",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --master-enable"
+            ))
+            return
+        }
+
+        // Newer macOS releases hide the "Anywhere" option from System Settings, but it can still be
+        // enabled via the command line. Even with master assessments on, an empty policy means
+        // unsigned apps from /Applications run without prompt.
+        let policy = ShellRunner.run("/usr/sbin/spctl",
+                                     arguments: ["--list", "--type", "execute"], timeout: 5)
+        if policy.success && policy.stdout.lowercased().contains("disabled") &&
+           policy.stdout.contains("Notarized Developer ID") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Gatekeeper notarization rule is disabled",
+                detail: "The 'Notarized Developer ID' assessment rule is off — apps notarized by Apple aren't enforced",
+                path: nil,
+                remediation: "Restore the default rule: sudo spctl --enable --label \"Notarized Developer ID\""
+            ))
+        }
+    }
+
+    // MARK: - Automatic Install of macOS Updates
+
+    private func checkAutoInstallUpdates(findings: inout [Finding], errors: inout [String]) {
+        // AutomaticallyInstallMacOSUpdates controls whether the major-version security updates
+        // (e.g., 14.x → 14.y) install on their own. Even with auto-check on, an attacker who can
+        // socially-engineer a user away from updating still wins — this setting closes that gap.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticallyInstallMacOSUpdates"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Automatic install of macOS updates is disabled",
+                    detail: "macOS security updates are downloaded but require manual install — delaying patches for actively exploited bugs",
+                    path: nil,
+                    remediation: "Enable: System Settings > General > Software Update > (i) > Install macOS updates"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Sudo Touch ID
+
+    private func checkSudoTouchID(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon supports pam_tid for sudo as of macOS Sonoma+ (and via custom edit prior).
+        // /etc/pam.d/sudo_local is the recommended override — it survives system updates that
+        // overwrite /etc/pam.d/sudo. A configured sudo_local is a positive hardening signal.
+        let localPath = "/etc/pam.d/sudo_local"
+        let sudoPath = "/etc/pam.d/sudo"
+        let fm = FileManager.default
+
+        let hasLocalTid: Bool = {
+            guard let content = try? String(contentsOfFile: localPath, encoding: .utf8) else { return false }
+            return content.split(separator: "\n").contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("#") && trimmed.contains("pam_tid.so")
+            }
+        }()
+
+        let hasSudoTid: Bool = {
+            guard let content = try? String(contentsOfFile: sudoPath, encoding: .utf8) else { return false }
+            return content.split(separator: "\n").contains { line in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                return !trimmed.hasPrefix("#") && trimmed.contains("pam_tid.so")
+            }
+        }()
+
+        if !hasLocalTid && !hasSudoTid && fm.fileExists(atPath: "/usr/bin/bioutil") {
+            // Only suggest on machines that actually have biometrics available.
+            let bioCheck = ShellRunner.run("/usr/bin/bioutil", arguments: ["-r"], timeout: 5)
+            let hasTouchID = bioCheck.success && bioCheck.stdout.lowercased().contains("touch id")
+            if hasTouchID {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Sudo Touch ID is not configured",
+                    detail: "sudo still requires typing your password — Touch ID can replace it on Apple Silicon for faster, phishing-resistant auth",
+                    path: nil,
+                    remediation: "Enable: echo 'auth sufficient pam_tid.so' | sudo tee /etc/pam.d/sudo_local"
+                ))
+            }
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // AirPlay Receiver lets nearby Apple devices send screens / audio TO this Mac. On a hostile
+        // network (cafés, hotels, conferences) it widens the attack surface — CVE-2025-31200 was
+        // an AirPlay-derived zero-click. Disable when not actively presenting.
+        let plist = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "AirplayRecieverEnabled"
+        ], timeout: 5)
+        let altPlist = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.RemoteDesktop", "AirplayRecieverEnabled"
+        ], timeout: 5)
+
+        let value = plist.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let altValue = altPlist.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if value == "1" || altValue == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "Other devices can stream to this Mac — exposes an additional network listener. Past AirPlay parsing bugs have allowed RCE.",
+                path: nil,
+                remediation: "Disable when not in use: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi MAC Randomization
+
+    private func checkWifiMacRandomization(findings: inout [Finding], errors: inout [String]) {
+        // Disabling private Wi-Fi address makes the Mac trackable across networks. This is mostly
+        // a privacy concern, not a compromise indicator, so we keep it low severity.
+        let result = ShellRunner.run("/usr/sbin/networksetup",
+                                     arguments: ["-listpreferredwirelessnetworks", "en0"], timeout: 5)
+        guard result.success else { return }
+
+        // PrivateMACAddressMode is per-network and lives in
+        // /Library/Preferences/SystemConfiguration/com.apple.airport.preferences.plist.
+        let plistPath = "/Library/Preferences/SystemConfiguration/com.apple.airport.preferences.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
+
+        // KnownNetworks dict — each key is a network with a PrivateMACAddressMode int. 0 = off,
+        // 1 = static (per-network), 2 = rotating. Anything other than 1/2 on a current network is risky.
+        guard let known = plist["KnownNetworks"] as? [String: [String: Any]] else { return }
+
+        var offNetworks: [String] = []
+        for (_, entry) in known {
+            let mode = entry["PrivateMACAddressMode"] as? Int ?? 1
+            let ssid = entry["SSIDString"] as? String ?? "unknown"
+            if mode == 0 { offNetworks.append(ssid) }
+        }
+
+        // Only surface this if multiple networks are affected — single one-offs are typically intentional (corp Wi-Fi).
+        if offNetworks.count >= 3 {
+            let preview = offNetworks.prefix(3).joined(separator: ", ")
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Private Wi-Fi Address is off for \(offNetworks.count) networks",
+                detail: "Networks: \(preview)\(offNetworks.count > 3 ? "…" : "") — your real Wi-Fi MAC is being broadcast, making you trackable",
+                path: plistPath,
+                remediation: "For each network: System Settings > Wi-Fi > (i) next to network > Private Wi-Fi address: Rotating"
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is a recovery feature, not strictly hardening, but its absence means a stolen
+        // Mac can't be remotely wiped. Only emit a finding when we can read the plist AND the value
+        // is explicitly 0 — a permission failure on /Library/Preferences/com.apple.FindMyMac.plist
+        // would otherwise produce a false positive every time sweep runs as a non-admin user.
+        let plistPath = "/Library/Preferences/com.apple.FindMyMac.plist"
+        guard FileManager.default.fileExists(atPath: plistPath) else { return }
+
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "If this Mac is lost or stolen, you can't locate or remote-wipe it from iCloud",
+                path: nil,
+                remediation: "Sign in to iCloud and enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
         }
     }
 }

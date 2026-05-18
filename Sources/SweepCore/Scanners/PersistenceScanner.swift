@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking cloud-synced LaunchAgents")
+        scanCloudSyncedLaunchAgents(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Action scripts")
+        scanFolderActionScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight / QuickLook plugins")
+        scanMetadataPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking Audio Unit plugins")
+        scanAudioUnitPlugins(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +687,207 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Cloud-synced LaunchAgents
+
+    private func scanCloudSyncedLaunchAgents(findings: inout [Finding], errors: inout [String]) {
+        // LaunchAgents pulled from iCloud Drive, Dropbox, Google Drive, OneDrive, or Box are a
+        // modern persistence vector: any device sharing the folder propagates the agent on next sync,
+        // and the underlying executable can be silently swapped by whoever controls the cloud account.
+        // The ~/Library/LaunchAgents directory itself is not synced, but a plist whose Program path
+        // points into a cloud folder achieves the same outcome.
+        let home = ShellRunner.realUserHome
+        let cloudPrefixes: [(name: String, prefix: String)] = [
+            ("iCloud Drive", "\(home)/Library/Mobile Documents/com~apple~CloudDocs"),
+            ("iCloud Drive", "\(home)/Library/Mobile Documents"),
+            ("Dropbox",      "\(home)/Dropbox"),
+            ("Dropbox",      "\(home)/Library/CloudStorage/Dropbox"),
+            ("Google Drive", "\(home)/Google Drive"),
+            ("Google Drive", "\(home)/Library/CloudStorage/GoogleDrive"),
+            ("OneDrive",     "\(home)/OneDrive"),
+            ("OneDrive",     "\(home)/Library/CloudStorage/OneDrive"),
+            ("Box",          "\(home)/Library/CloudStorage/Box"),
+        ]
+
+        let agentDirs = [
+            "\(home)/Library/LaunchAgents",
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
+        ]
+
+        let fm = FileManager.default
+        for dir in agentDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".plist") {
+                let plistPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { continue }
+
+                var execPath: String?
+                if let program = plist["Program"] as? String {
+                    execPath = program
+                } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
+                    execPath = first
+                }
+                guard let target = execPath else { continue }
+
+                if let cloud = cloudPrefixes.first(where: { target.hasPrefix($0.prefix) }) {
+                    let label = plist["Label"] as? String ?? "unknown"
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent runs a binary from \(cloud.name)",
+                        detail: "Label: \(label) — executable lives in \(cloud.name) (\(target)) so it can change on every cloud sync without local approval",
+                        path: plistPath,
+                        remediation: "Inspect the cloud account that owns this file. Move the binary to a local path or remove the agent: sudo rm \"\(plistPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Folder Action Scripts
+
+    private func scanFolderActionScripts(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach AppleScript handlers that fire when files arrive in a watched folder —
+        // a quiet persistence channel that runs the script every time the user downloads, screenshots,
+        // or saves. Two checks here:
+        //   1. Scripts dropped into ~/Library/Scripts/Folder Action Scripts/ — this directory doesn't
+        //      exist by default, so anything here was put there deliberately. (We deliberately skip
+        //      /Library/Scripts/Folder Action Scripts/ since Apple ships ~11 sample scripts there.)
+        //   2. The dispatcher plist, which lists folders with an *active* attachment.
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        let userScriptDir = "\(home)/Library/Scripts/Folder Action Scripts"
+        if fm.fileExists(atPath: userScriptDir),
+           let entries = try? fm.contentsOfDirectory(atPath: userScriptDir) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let scriptPath = "\(userScriptDir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "User-installed Folder Action script",
+                    detail: "Script: \(entry) — runs automatically when files are added to its attached folder(s)",
+                    path: scriptPath,
+                    remediation: "Inspect with: open -e \"\(scriptPath)\". Detach via Finder > right-click folder > Services > Folder Actions Setup… if not needed."
+                ))
+            }
+        }
+
+        // Folder Action configuration plist — lists actively attached folders. Note: the dispatcher
+        // is opt-in (`FolderActionsEnabled = 1`), so an empty FolderActions array is harmless.
+        let configPlist = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if let data = fm.contents(atPath: configPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let folders = plist["FolderActions"] as? [[String: Any]],
+           !folders.isEmpty {
+            let names = folders.compactMap { $0["FolderPath"] as? String }.prefix(3).joined(separator: ", ")
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "Folder Actions are attached to \(folders.count) folder(s)",
+                detail: "Folders: \(names)\(folders.count > 3 ? "…" : "") — AppleScript handlers fire on file events",
+                path: configPlist,
+                remediation: "Right-click the folder in Finder > Services > Folder Actions Setup… to review or remove"
+            ))
+        }
+    }
+
+    // MARK: - Spotlight Importers and Quick Look Generators
+
+    private func scanMetadataPlugins(findings: inout [Finding], errors: inout [String]) {
+        // mdimporter and qlgenerator bundles are loaded automatically by `mds` and `quicklookd`
+        // when the matching file type is encountered. A malicious plugin executes the moment a
+        // user navigates to a directory containing the trigger file — a stealth persistence channel
+        // that has been used in the wild (e.g., OSX.iWorm variants, several APT loaders).
+        // System bundles live under /System and /Library/Spotlight; anything outside those, or in
+        // a hidden subdirectory, deserves a closer look.
+        let home = ShellRunner.realUserHome
+        let scanDirs: [(path: String, kind: String, ext: String)] = [
+            ("\(home)/Library/Spotlight",          "mdimporter", "mdimporter"),
+            ("/Library/Spotlight",                 "mdimporter", "mdimporter"),
+            ("\(home)/Library/QuickLook",          "qlgenerator", "qlgenerator"),
+            ("/Library/QuickLook",                 "qlgenerator", "qlgenerator"),
+        ]
+
+        let fm = FileManager.default
+        for entry in scanDirs {
+            guard fm.fileExists(atPath: entry.path),
+                  let bundles = try? fm.contentsOfDirectory(atPath: entry.path) else { continue }
+
+            for bundle in bundles where bundle.hasSuffix(".\(entry.ext)") {
+                let bundlePath = "\(entry.path)/\(bundle)"
+
+                // Inspect Info.plist for sketchy executables or fake Apple identifiers.
+                let infoPath = "\(bundlePath)/Contents/Info.plist"
+                let bundleId = (fm.contents(atPath: infoPath)
+                    .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+                    ?? [:])["CFBundleIdentifier"] as? String ?? ""
+
+                let isFakeApple = SpywareSignature.isFakeAppleBundleId(bundleId)
+                let isUnsigned = !checkIsSigned(path: bundlePath)
+                let isHiddenName = bundle.hasPrefix(".")
+
+                if isFakeApple || isHiddenName {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious \(entry.kind) plugin installed",
+                        detail: "Bundle: \(bundle), CFBundleIdentifier: \(bundleId.isEmpty ? "(none)" : bundleId) — \(isFakeApple ? "fake Apple ID" : "hidden bundle name")",
+                        path: bundlePath,
+                        remediation: "Inspect and remove if unexpected: rm -rf \"\(bundlePath)\""
+                    ))
+                } else if isUnsigned {
+                    // Many legit vendors ship unsigned mdimporters/qlgenerators (Adobe, JetBrains,
+                    // small open-source projects), so unsigned alone is low severity.
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Unsigned \(entry.kind) plugin",
+                        detail: "Bundle: \(bundle), CFBundleIdentifier: \(bundleId.isEmpty ? "(none)" : bundleId)",
+                        path: bundlePath,
+                        remediation: "Verify this plugin is from a vendor you trust"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Audio Unit Plugins
+
+    private func scanAudioUnitPlugins(findings: inout [Finding], errors: inout [String]) {
+        // Audio Unit (.component) plugins are loaded by GarageBand, Logic, Final Cut, and many
+        // third-party DAWs into the host process. A rogue AU runs code in a foreign app's context
+        // — useful for evading per-app TCC prompts. Apple ships its own AUs under /System; user
+        // and /Library plugin folders are open territory.
+        let home = ShellRunner.realUserHome
+        let pluginDirs = [
+            "\(home)/Library/Audio/Plug-Ins/Components",
+            "/Library/Audio/Plug-Ins/Components",
+        ]
+
+        let fm = FileManager.default
+        for dir in pluginDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".component") {
+                let bundlePath = "\(dir)/\(entry)"
+                let infoPath = "\(bundlePath)/Contents/Info.plist"
+                let bundleId = (fm.contents(atPath: infoPath)
+                    .flatMap { try? PropertyListSerialization.propertyList(from: $0, format: nil) as? [String: Any] }
+                    ?? [:])["CFBundleIdentifier"] as? String ?? ""
+
+                // Hidden bundle names or fake-Apple identifiers in an AU folder are very suspicious.
+                if entry.hasPrefix(".") || SpywareSignature.isFakeAppleBundleId(bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious Audio Unit plugin",
+                        detail: "Bundle: \(entry), ID: \(bundleId.isEmpty ? "(none)" : bundleId) — Audio Units load into DAW host processes",
+                        path: bundlePath,
+                        remediation: "Inspect and remove if unexpected: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
         }
     }
 
