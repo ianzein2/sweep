@@ -64,6 +64,12 @@ public final class BrowserScanner: Scanner {
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
 
+        // 5. Browser Web Push subscriptions — increasingly weaponized for scam alerts,
+        //    fake antivirus pop-ups, and credential phishing. Newer 2024-2025 campaigns
+        //    (e.g. "FakeBat", "WebPushNotify" abuse) rely on persistent Push grants.
+        progress?.update("scanning web-push subscriptions")
+        scanWebPushSubscriptions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -374,6 +380,78 @@ public final class BrowserScanner: Scanner {
                         path: extPath,
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Web Push Subscriptions
+
+    /// Top-level domain / hostname fragments seen in 2024-2025 push-notification
+    /// scam campaigns (fake antivirus, fake delivery, fake giveaways). We don't
+    /// attempt a blocklist — we surface counts and let the user review.
+    private let suspiciousPushDomainFragments: [String] = [
+        "push-notif", "push.notify", "notify-now", "win-prize",
+        "free-gift", "verify-now", "antivirus-alert", "system-warning",
+        "captcha-verify", "secure-pc",
+    ]
+
+    private func scanWebPushSubscriptions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Safari Web Push — kept under a per-domain UUID folder.
+        let safariPushRoot = "\(home)/Library/Safari/PushNotifications"
+        if let entries = try? fm.contentsOfDirectory(atPath: safariPushRoot) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let plistPath = "\(safariPushRoot)/\(entry)/PushNotifications.plist"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { continue }
+
+                // Each entry has a Subject (website host); flag if it matches known scam patterns.
+                let subject = (plist["Subject"] as? String) ?? entry
+                let subjectLC = subject.lowercased()
+                if let fragment = suspiciousPushDomainFragments.first(where: { subjectLC.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "Safari has Web Push enabled for a suspicious site",
+                        detail: "Site: \(subject) — matches scam-campaign pattern \"\(fragment)\"",
+                        path: plistPath,
+                        remediation: "Revoke in Safari > Settings > Websites > Notifications"
+                    ))
+                }
+            }
+        }
+
+        // Chromium-family browsers store push grants inside the profile's Preferences.
+        let chromiumProfiles: [(browser: String, root: String)] = [
+            ("Chrome", "\(home)/Library/Application Support/Google/Chrome"),
+            ("Brave", "\(home)/Library/Application Support/BraveSoftware/Brave-Browser"),
+            ("Edge", "\(home)/Library/Application Support/Microsoft Edge"),
+            ("Arc", "\(home)/Library/Application Support/Arc/User Data"),
+        ]
+        for (browser, root) in chromiumProfiles {
+            guard let profiles = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for profile in profiles {
+                let prefsPath = "\(root)/\(profile)/Preferences"
+                guard let data = fm.contents(atPath: prefsPath),
+                      let prefs = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let profilePrefs = prefs["profile"] as? [String: Any],
+                      let contentSettings = profilePrefs["content_settings"] as? [String: Any],
+                      let exceptions = contentSettings["exceptions"] as? [String: Any],
+                      let notifications = exceptions["notifications"] as? [String: Any] else { continue }
+
+                for (origin, _) in notifications {
+                    let originLC = origin.lowercased()
+                    if let fragment = suspiciousPushDomainFragments.first(where: { originLC.contains($0) }) {
+                        findings.append(Finding(
+                            severity: .medium, category: .networkActivity,
+                            title: "\(browser) has Web Push enabled for a suspicious site",
+                            detail: "Origin: \(origin) — matches scam-campaign pattern \"\(fragment)\"",
+                            path: prefsPath,
+                            remediation: "Revoke in \(browser) > Settings > Privacy & Security > Site Settings > Notifications"
+                        ))
+                    }
                 }
             }
         }

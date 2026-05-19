@@ -434,6 +434,262 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // ===== 2024-2025 macOS threats =====
+        // DPRK Lazarus "Contagious Interview" campaign — fake job-interview lures drop
+        // BeaverTail (Node.js-based stealer) and InvisibleFerret (Python-based RAT)
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "bow.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "/private/var/tmp/.python",
+            ],
+            launchAgentLabels: []
+        ),
+        // Ferret family — companion droppers in the Contagious Interview campaign
+        // (reported by Apple/JAMF/SentinelOne in Feb-Apr 2025)
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FROSTYFERRET_UI", "frostyferret"],
+            bundleIdentifiers: ["com.frostyferret.update"],
+            filePaths: [
+                "/private/tmp/.frostyferret",
+                "~/Library/Application Support/.frostyferret",
+            ],
+            launchAgentLabels: ["com.frostyferret.update"]
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["FRIENDLYFERRET_SECD", "friendlyferret", "secd_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.friendlyferret"],
+            launchAgentLabels: ["com.apple.secd.helper"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FerretHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.FlexibleFerret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MultiFrostyFerret",
+            processNames: ["MULTI_FROSTYFERRET_CMDCODES", "multifrostyferret"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.mffcc"],
+            launchAgentLabels: []
+        ),
+        // DPRK BlueNoroff — TodoSwift (Dec 2024) disguised as PDF/document viewer
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift"],
+            bundleIdentifiers: ["com.todoswift.app", "com.bluenoroff.todo"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.helper"]
+        ),
+        // Lazarus 2024-2025 modular implants
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "AppleNotify"],
+            bundleIdentifiers: ["com.rustyattr.app"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.rustyattr.helper"]
+        ),
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "Visual Studio Updater"],
+            bundleIdentifiers: ["com.rustdoor.helper"],
+            filePaths: [
+                "/private/tmp/.test-x86_64-apple",
+                "~/Public/.test-x86_64-apple",
+                "~/Public/.test-arm64-apple",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "CloudChat",
+            processNames: ["CloudChat", "cloudchat", "CloudChatHelper"],
+            bundleIdentifiers: ["com.cloudchat.app"],
+            filePaths: [
+                "/private/tmp/.cloudchat",
+                "~/Library/Application Support/.CloudChat",
+            ],
+            launchAgentLabels: ["com.cloudchat.helper"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "ZoomShareHelper"],
+            bundleIdentifiers: ["com.nimdoor.helper"],
+            filePaths: [
+                "/private/tmp/.NimDoor",
+                "/private/tmp/.coreklog",
+                "~/Library/Application Support/.NimDoor",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent.helper"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost",
+            processNames: ["PylangGhost", "pylangghost", "py_ghost"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pylangghost",
+                "~/Library/Caches/.pylang",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "GolangGhost",
+            processNames: ["GolangGhost", "golangghost", "go_ghost", "goghost"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.golangghost",
+                "~/Library/Caches/.goghost",
+            ],
+            launchAgentLabels: []
+        ),
+        // Gh0stRAT macOS port (2024) — Chinese-language threat actor toolset
+        SpywareSignature(
+            name: "CherryPie (Gh0stRAT macOS)",
+            processNames: ["CherryPie", "cherrypie", "gh0st", "ghost_helper"],
+            bundleIdentifiers: ["com.cherrypie.helper"],
+            filePaths: [
+                "/private/tmp/.cherrypie",
+                "~/Library/Application Support/.cherrypie",
+            ],
+            launchAgentLabels: ["com.cherrypie.helper"]
+        ),
+        // HZ Rat — Russian-speaking threat-actor RAT ported to macOS (mid-2024)
+        SpywareSignature(
+            name: "HZ Rat",
+            processNames: ["HZRat", "hzrat", "hz_rat", "wxinfo"],
+            bundleIdentifiers: ["com.hzrat.helper"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: []
+        ),
+        // LightSpy (originally iOS, ported to macOS 2024) — surveillance framework
+        SpywareSignature(
+            name: "LightSpy",
+            processNames: ["LightSpy", "lightspy", "irc_loader"],
+            bundleIdentifiers: ["com.light.spy"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+            ],
+            launchAgentLabels: ["com.light.spy.daemon"]
+        ),
+        // DigitStealer (early 2025) — newer macOS infostealer family
+        SpywareSignature(
+            name: "DigitStealer",
+            processNames: ["DigitStealer", "digitstealer", "digit_agent"],
+            bundleIdentifiers: ["com.digitstealer.app"],
+            filePaths: [
+                "/private/tmp/.digit",
+                "~/Library/Application Support/.DigitStealer",
+            ],
+            launchAgentLabels: ["com.digitstealer.service"]
+        ),
+        // AppleProcessHub (2025) — masquerades as Apple system process
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "ProcessHub"],
+            bundleIdentifiers: ["com.apple.processhub", "com.apple.process.hub"],
+            filePaths: [
+                "/private/tmp/.processhub",
+                "~/Library/Application Support/.ProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        // SparkCat / SparkKitty (early 2025) — OCR-based crypto wallet seed-phrase stealer
+        // distributed via fake App Store / TestFlight builds, also seen on Mac
+        SpywareSignature(
+            name: "SparkCat",
+            processNames: ["SparkCat", "sparkcat", "sparkkitty", "SparkKitty"],
+            bundleIdentifiers: ["com.sparkcat.app", "com.sparkkitty.app"],
+            filePaths: [
+                "/private/tmp/.sparkcat",
+                "~/Library/Application Support/.SparkCat",
+                "~/Library/Application Support/.SparkKitty",
+            ],
+            launchAgentLabels: ["com.sparkcat.helper"]
+        ),
+        // NotLockBit (Oct 2024) — macOS ransomware/stealer hybrid imitating LockBit
+        SpywareSignature(
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macos"],
+            bundleIdentifiers: ["com.notlockbit.app"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.NotLockBit",
+            ],
+            launchAgentLabels: []
+        ),
+        // BlueNoroff "Hidden Risk" campaign (late 2024) — fake crypto news PDFs
+        SpywareSignature(
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["Hidden_Risk", "hiddenrisk", "Crypto_news_app"],
+            bundleIdentifiers: ["com.bluenoroff.hiddenrisk"],
+            filePaths: [
+                "/Library/InputMethods/.hiddenrisk",
+                "~/Library/Application Support/.HiddenRisk",
+            ],
+            launchAgentLabels: ["com.google.zxcvbn"]
+        ),
+        // Tucker / Crypter / TylerStealer (2024) — commodity AMOS-fork stealers
+        SpywareSignature(
+            name: "TylerStealer",
+            processNames: ["TylerStealer", "tylerstealer", "tyler_stealer"],
+            bundleIdentifiers: ["com.tylerstealer.app"],
+            filePaths: [
+                "/private/tmp/.tyler",
+                "~/Library/Application Support/.TylerStealer",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Crypter macOS",
+            processNames: ["crypter_macos", "macCrypter"],
+            bundleIdentifiers: ["com.crypter.macos"],
+            filePaths: [
+                "/private/tmp/.crypter",
+                "~/Library/Application Support/.Crypter",
+            ],
+            launchAgentLabels: []
+        ),
+        // Clipboard hijackers / "clippers" — wallet-address swappers seen in
+        // AMOS forks and fake-app campaigns (2023-2025)
+        SpywareSignature(
+            name: "MacClipper",
+            processNames: ["MacClipper", "macclipper", "clipboardmon"],
+            bundleIdentifiers: ["com.macclipper.agent"],
+            filePaths: [
+                "/private/tmp/.clipper",
+                "~/Library/Application Support/.Clipper",
+            ],
+            launchAgentLabels: ["com.macclipper.agent"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
