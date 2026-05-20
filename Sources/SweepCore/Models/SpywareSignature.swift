@@ -434,6 +434,114 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 DPRK / "Contagious Interview" macOS family. Distributed through fake
+        // Zoom/Teams/Skype installers and npm packages. BeaverTail is the JS stager; the
+        // payload it drops is InvisibleFerret (Python/JS RAT) which fetches the Tsunami /
+        // FerretCard secondary modules.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/.n2",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "ipy", "p.zi", "pay"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.p",
+                "~/Library/Caches/.p",
+                "~/.npl_payload",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Ferret / FlexibleFerret",
+            processNames: ["ferret", "Ferret", "FlexibleFerret", "ChromeUpdate", "FrostyFerret"],
+            bundleIdentifiers: ["com.ferret.agent"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Caches/.ChromeUpdate",
+            ],
+            launchAgentLabels: ["com.google.chrome.update", "com.ferret.agent"]
+        ),
+        // RustDoor / ThiefBucket — 2024 macOS backdoor likely BlueNoroff/APT-linked, distributed
+        // via fake Visual Studio updates and cracked apps.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "Visual Studio Updater", "zshrc.dat"],
+            bundleIdentifiers: ["com.visual-studio.updater"],
+            filePaths: [
+                "/private/var/tmp/.rustdoor",
+                "~/Public/.rustdoor",
+                "~/.zshenv.dat",
+            ],
+            launchAgentLabels: ["com.apple.systempreferences.cache", "com.microsoft.vsupdater"]
+        ),
+        // HZ Rat — Chinese-language RAT (2024) distributed via trojanized OpenVPN installers.
+        SpywareSignature(
+            name: "HZ Rat",
+            processNames: ["HZRat", "hzrat", "OpenVPN-Helper"],
+            bundleIdentifiers: ["com.openvpn.helper"],
+            filePaths: [
+                "/Library/PrivilegedHelperTools/com.openvpn.helper",
+                "~/Library/Application Support/.openvpn",
+            ],
+            launchAgentLabels: ["com.openvpn.client.helper"]
+        ),
+        // NimDoor — 2025 Nim-based backdoor used by DPRK threat actors, targets crypto firms.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "GoogleHelper", "ZoomHelper", "installer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nim",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "~/Library/Application Support/.zoom_helper",
+            ],
+            launchAgentLabels: ["com.google.update", "com.zoom.helper"]
+        ),
+        // Sliver — open-source C2 implant (used by both red teams and threat actors); the macOS
+        // implant is usually a Mach-O dropped under unusual paths.
+        SpywareSignature(
+            name: "Sliver Implant",
+            processNames: ["sliver", "Sliver", "sliver-client", "sliver-server"],
+            bundleIdentifiers: ["io.bishopfox.sliver"],
+            filePaths: [
+                "/private/tmp/.sliver",
+                "~/Library/Application Support/.sliver",
+            ],
+            launchAgentLabels: ["com.sliver.agent"]
+        ),
+        // CloudFake / ClickFix-delivered stealer family — drops via fake CAPTCHA pages that
+        // tell users to paste curl|sh in Terminal (2024-2025 surge in macOS infections).
+        SpywareSignature(
+            name: "ClickFix Stealer",
+            processNames: ["clickfix", "ClickFix", "captcha_helper", "verify_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.captcha",
+                "/private/tmp/.verify",
+                "~/Library/Application Support/.clickfix",
+            ],
+            launchAgentLabels: ["com.apple.verify.helper", "com.captcha.service"]
+        ),
+        // CrowdStrike-tracked stealer (2025) — distributes via cracked design software.
+        SpywareSignature(
+            name: "AMOS Variant (Saiph / 2025)",
+            processNames: ["saiph", "Saiph", "appleupdate"],
+            bundleIdentifiers: ["com.saiph.agent"],
+            filePaths: [
+                "/private/tmp/.saiph",
+                "~/Library/Application Support/.saiph",
+            ],
+            launchAgentLabels: ["com.saiph.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

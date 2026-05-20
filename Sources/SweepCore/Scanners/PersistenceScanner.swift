@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Items (btm)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +677,108 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Background Items (btm.db)
+
+    /// Modern macOS persistence: SMAppService / "Background Items" registered in the
+    /// background task management database (`btm.db`). Since Ventura, this is the channel
+    /// most legitimate apps use — and the channel a growing number of malware families
+    /// have moved to in order to avoid scrutiny of plain LaunchAgents. `sfltool dumpbtm`
+    /// dumps the database in a human-readable form. Each item has at minimum a Name,
+    /// Identifier (UUID), Type (legacy daemon / agent / login item / managed login item),
+    /// and URL/Executable Path.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // sfltool returns useful data without root for the current user's items; root gets
+        // both system-wide and per-user items. Either way is fine — we don't add an error
+        // when running unprivileged.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // The output is grouped into stanzas separated by blank lines. We walk one stanza at
+        // a time, pulling the Name / URL / Bundle identifier / Type lines we care about, and
+        // then evaluate the stanza as a whole.
+        var current: [String: String] = [:]
+        var stanzas: [[String: String]] = []
+
+        for rawLine in result.stdout.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                if !current.isEmpty { stanzas.append(current); current = [:] }
+                continue
+            }
+            // Sfltool fields look like `Name: Foo` / `URL: file:///…`. Split on the first colon.
+            guard let sep = line.firstIndex(of: ":") else { continue }
+            let key = String(line[..<sep]).trimmingCharacters(in: .whitespaces)
+            let value = String(line[line.index(after: sep)...]).trimmingCharacters(in: .whitespaces)
+            if !key.isEmpty { current[key] = value }
+        }
+        if !current.isEmpty { stanzas.append(current) }
+
+        for item in stanzas {
+            evaluateBackgroundItem(item, findings: &findings)
+        }
+    }
+
+    private func evaluateBackgroundItem(_ item: [String: String], findings: inout [Finding]) {
+        let url = item["URL"] ?? item["Executable Path"] ?? item["Path"] ?? ""
+        let identifier = item["Identifier"] ?? item["Bundle identifier"] ?? ""
+        let name = item["Name"] ?? identifier
+        let type = item["Type"] ?? ""
+
+        // Trim the file:// prefix sfltool wraps URLs with.
+        let cleanedURL = url
+            .replacingOccurrences(of: "file://", with: "")
+            .removingPercentEncoding ?? url
+
+        // Skip empty placeholders and Apple-shipped items.
+        if cleanedURL.isEmpty && identifier.isEmpty { return }
+        if identifier.hasPrefix("com.apple.") { return }
+        if cleanedURL.hasPrefix("/System/") || cleanedURL.hasPrefix("/usr/libexec/") { return }
+
+        // Spyware signature first — same database used by the other persistence checks.
+        if let sig = SpywareSignature.match(label: identifier) ??
+                     SpywareSignature.match(processName: URL(fileURLWithPath: cleanedURL).lastPathComponent) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Known spyware registered as a Background Item: \(sig.name)",
+                detail: "Name: \(name), Identifier: \(identifier), Type: \(type)",
+                path: cleanedURL.isEmpty ? nil : cleanedURL,
+                remediation: "Open System Settings > General > Login Items & Extensions and remove \(name), then delete \(cleanedURL)"
+            ))
+            return
+        }
+
+        // Fake-Apple bundle identifiers in btm are an unambiguous spyware indicator —
+        // a real Apple background item never uses generic .agent / .helper suffixes.
+        if SpywareSignature.isFakeAppleBundleId(identifier) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Fake Apple Background Item",
+                detail: "Identifier '\(identifier)' is registered in btm.db but is not a real Apple service",
+                path: cleanedURL.isEmpty ? nil : cleanedURL,
+                remediation: "Remove in System Settings > General > Login Items & Extensions and inspect: \(cleanedURL)"
+            ))
+            return
+        }
+
+        // Path-based red flags: hidden directories, /tmp, ~/Downloads. None of these are
+        // valid locations for a real Background Item — anything that registers from them
+        // is almost certainly malicious.
+        let lower = cleanedURL.lowercased()
+        let inTemp = lower.hasPrefix("/tmp/") || lower.hasPrefix("/private/tmp/") || lower.hasPrefix("/var/tmp/")
+        let inDownloads = lower.contains("/downloads/")
+        let isHidden = cleanedURL.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+
+        if inTemp || inDownloads || isHidden {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Background Item launches from an unusual location",
+                detail: "Name: \(name), Path: \(cleanedURL) — \(inTemp ? "tmp" : isHidden ? "hidden directory" : "Downloads")",
+                path: cleanedURL,
+                remediation: "Remove in System Settings > General > Login Items & Extensions"
             ))
         }
     }

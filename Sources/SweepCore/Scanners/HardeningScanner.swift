@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking accessory security")
+        checkAccessoryRestriction(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID for sudo")
+        checkTouchIDForSudo(findings: &findings, errors: &errors)
+
+        progress?.update("checking FileVault recovery key")
+        checkFileVaultRecoveryKey(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,115 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Accessory Restriction (macOS Sequoia+, Apple Silicon)
+
+    private func checkAccessoryRestriction(findings: inout [Finding], errors: inout [String]) {
+        // On Apple Silicon, macOS Sequoia introduced the "Allow accessories to connect" setting
+        // controlling whether unknown USB/Thunderbolt devices can communicate when the screen is
+        // unlocked. The default is "Ask every time" (value 1); "Always" (value 0) lets a hostile
+        // accessory enumerate as soon as it's plugged in — relevant for evil-maid scenarios.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security", "AllowNewUSBAccessoryConnections"
+        ], timeout: 5)
+
+        // We treat a missing key as "default" and don't penalise. Only flag when explicitly set to 0/always.
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "0" || value.lowercased() == "always" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "USB / Thunderbolt accessories are allowed without prompting",
+                detail: "Any newly-plugged accessory can communicate immediately — useful for daily use, risky if your Mac is left unattended",
+                path: nil,
+                remediation: "Switch to 'Ask Every Time' or 'Ask for New Accessories': System Settings > Privacy & Security > Security > Allow accessories to connect"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // iCloud+ Private Relay tunnels Safari traffic through two hops, hiding the user's IP
+        // and unencrypted DNS from networks and trackers. Disabling it (or having it auto-disabled
+        // by a profile / network admin) silently degrades the privacy posture, so we surface its
+        // state informationally — not a hard finding, since not every user has iCloud+.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "-currentHost", "read", "com.apple.networkserviceproxy", "NSPDisabledForAllPaths"
+        ], timeout: 5)
+        // When the key isn't present, Private Relay is at its default state — usually on for iCloud+ users.
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is disabled",
+                detail: "Safari traffic isn't being routed through Private Relay — your IP and unencrypted DNS are visible to your network",
+                path: nil,
+                remediation: "If you have iCloud+ and want privacy, re-enable: System Settings > Apple ID > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Touch ID for sudo
+
+    private func checkTouchIDForSudo(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma+ persists the `pam_tid.so` `sudo_local` setting across upgrades, but only
+        // if the user enables it explicitly. Surfacing the absence isn't a security warning per se —
+        // it's a privacy / phishing-resistance improvement we recommend to all users on Touch ID Macs.
+        let stockPath = "/etc/pam.d/sudo_local"
+        let configured = (try? String(contentsOfFile: stockPath, encoding: .utf8))?
+            .contains("pam_tid.so") == true
+
+        // Only emit a finding when we can confirm the Mac has a fingerprint reader. `bioutil -rs`
+        // is the cheapest way to check; an error suggests no Touch ID hardware.
+        let biocheck = ShellRunner.run("/usr/bin/bioutil", arguments: ["-rs"], timeout: 3)
+        let hasTouchID = biocheck.success && biocheck.stdout.contains("Biometrics for unlock")
+
+        if hasTouchID && !configured {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Touch ID is not enabled for sudo",
+                detail: "Touch ID hardware is available but `sudo` still requires your password. Enabling pam_tid.so makes admin authentication phishing-resistant.",
+                path: stockPath,
+                remediation: "Run: sudo sh -c 'echo \"auth sufficient pam_tid.so\" > /etc/pam.d/sudo_local'"
+            ))
+        }
+    }
+
+    // MARK: - FileVault Recovery Key Escrow
+
+    private func checkFileVaultRecoveryKey(findings: inout [Finding], errors: inout [String]) {
+        // If FileVault is on, a recovery method MUST exist or the user is one forgotten password
+        // away from losing every file on the disk. The `haspersonalrecoverykey` query needs root —
+        // running it as a regular user would say "no key" even when one exists, producing a false
+        // positive. Skip the check entirely when unprivileged.
+        guard getuid() == 0 else { return }
+
+        let status = ShellRunner.run("/usr/bin/fdesetup", arguments: ["status"], timeout: 5)
+        guard status.success, status.stdout.contains("FileVault is On") else { return }
+
+        let hasPersonalKey = ShellRunner.run("/usr/bin/fdesetup",
+                                             arguments: ["haspersonalrecoverykey"], timeout: 5)
+        let hasInstitutionalKey = ShellRunner.run("/usr/bin/fdesetup",
+                                                  arguments: ["hasinstitutionalrecoverykey"], timeout: 5)
+
+        // Both commands print "true"/"false". If neither is true AND there's no iCloud recovery
+        // mention in status, the user has no escrow and a forgotten password is permanent data loss.
+        let personalOK = hasPersonalKey.success && hasPersonalKey.stdout.contains("true")
+        let institutionalOK = hasInstitutionalKey.success && hasInstitutionalKey.stdout.contains("true")
+        let icloudOK = status.stdout.contains("escrowed to iCloud") || status.stdout.contains("recovery key")
+
+        if !personalOK && !institutionalOK && !icloudOK {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "FileVault is on but no recovery method is configured",
+                detail: "If you forget your password and there is no recovery key, every file on the disk is lost. This isn't a spyware risk — it's a data-loss risk worth fixing now.",
+                path: nil,
+                remediation: "Generate a personal recovery key: System Settings > Privacy & Security > FileVault > Set Up"
+            ))
         }
     }
 
