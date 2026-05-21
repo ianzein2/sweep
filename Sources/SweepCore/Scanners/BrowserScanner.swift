@@ -64,6 +64,11 @@ public final class BrowserScanner: Scanner {
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
 
+        // 5. Chrome enterprise managed-storage / default-search-engine hijack — a 2024-2025
+        //    browser-hijacker pattern that forces extensions and search providers via MDM/policy.
+        progress?.update("scanning Chrome managed policies / search hijack")
+        scanChromeManagedPoliciesAndSearch(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -373,6 +378,112 @@ public final class BrowserScanner: Scanner {
                             (scriptResult.hasShellExec ? " — spawns child_process commands" : ""),
                         path: extPath,
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Chrome Managed Policies / Search Hijack
+
+    private func scanChromeManagedPoliciesAndSearch(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // 1. Force-installed extensions via enterprise policy. Browser-hijacker installers drop
+        //    Chrome policy plists that force-install adware/spyware extensions that can't be
+        //    removed from the UI. Apple's Managed Preferences live in /Library/Managed Preferences.
+        let policyPaths = [
+            "/Library/Managed Preferences/com.google.Chrome.plist",
+            "/Library/Managed Preferences/\(NSUserName())/com.google.Chrome.plist",
+            "/Library/Preferences/com.google.Chrome.plist",
+            "/Library/Managed Preferences/com.microsoft.Edge.plist",
+            "/Library/Managed Preferences/com.brave.Browser.plist",
+            "\(home)/Library/Preferences/com.google.Chrome.plist",
+        ]
+        for path in policyPaths {
+            guard let data = fm.contents(atPath: path),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { continue }
+
+            if let forced = plist["ExtensionInstallForcelist"] as? [String], !forced.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Browser policy is force-installing \(forced.count) extension(s)",
+                    detail: "Policy file: \(path) — entries: \(forced.prefix(3).joined(separator: ", "))",
+                    path: path,
+                    remediation: "If you didn't deploy this MDM policy, this is a hijacker. Remove the policy plist (sudo rm \"\(path)\") and a configuration profile may also need to be removed."
+                ))
+            }
+            // HomepageLocation / NewTabPageLocation override is a classic hijack.
+            for key in ["HomepageLocation", "NewTabPageLocation", "RestoreOnStartupURLs"] {
+                if let val = plist[key] {
+                    let str = "\(val)".lowercased()
+                    // Whitelist common search engines / orgs — flag everything else.
+                    let benign = ["google.com", "duckduckgo.com", "bing.com", "yahoo.com",
+                                  "ecosia.org", "kagi.com", "startpage.com",
+                                  "company.com", "intranet"]
+                    if !benign.contains(where: { str.contains($0) }) {
+                        findings.append(Finding(
+                            severity: .medium, category: .permission,
+                            title: "Browser policy overrides \(key)",
+                            detail: "\(key) = \(val) — policy-driven homepage hijacks are common adware/PUP behavior",
+                            path: path,
+                            remediation: "Remove the policy plist if you didn't deploy it: sudo rm \"\(path)\""
+                        ))
+                    }
+                }
+            }
+        }
+
+        // 2. Per-profile default-search-engine hijack. Inside ~/Library/Application Support/Google/Chrome/<Profile>/Preferences,
+        //    the JSON has default_search_provider_data.template_url_data which malicious extensions
+        //    swap to a low-reputation provider. We flag anything that isn't a name-brand engine.
+        let chromeRoots = [
+            "\(home)/Library/Application Support/Google/Chrome",
+            "\(home)/Library/Application Support/Brave Software/Brave-Browser",
+            "\(home)/Library/Application Support/Microsoft Edge",
+            "\(home)/Library/Application Support/Arc/User Data",
+        ]
+        let knownSearchHosts: Set<String> = [
+            "google.com", "duckduckgo.com", "bing.com", "yahoo.com",
+            "ecosia.org", "kagi.com", "startpage.com", "qwant.com",
+            "you.com", "perplexity.ai", "brave.com", "baidu.com",
+            "yandex.com", "yandex.ru", "naver.com",
+        ]
+
+        for root in chromeRoots {
+            guard fm.fileExists(atPath: root),
+                  let profiles = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            for profile in profiles {
+                let prefsPath = "\(root)/\(profile)/Preferences"
+                guard let data = fm.contents(atPath: prefsPath),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let dsp = json["default_search_provider_data"] as? [String: Any],
+                      let templ = dsp["template_url_data"] as? [String: Any] else { continue }
+
+                let keyword = (templ["keyword"] as? String) ?? ""
+                let shortName = (templ["short_name"] as? String) ?? "?"
+                let url = (templ["url"] as? String) ?? ""
+
+                // Extract the host. If it's clearly not a brand-name engine, surface it.
+                var host = ""
+                if let comps = URLComponents(string: url), let h = comps.host {
+                    host = h.lowercased()
+                } else if let firstSlash = url.range(of: "//") {
+                    let rest = url[firstSlash.upperBound...]
+                    host = String(rest.split(separator: "/").first ?? "").lowercased()
+                }
+                guard !host.isEmpty else { continue }
+
+                let isKnown = knownSearchHosts.contains(where: { host.hasSuffix($0) })
+                if !isKnown {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Browser default search engine has been replaced",
+                        detail: "Profile \"\(profile)\": \(shortName) (keyword: \(keyword)) → \(host) — this is the textbook browser-hijacker symptom",
+                        path: prefsPath,
+                        remediation: "Reset in the browser's Settings > Search Engine; if it keeps reverting, an extension or policy is enforcing it"
                     ))
                 }
             }

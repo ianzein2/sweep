@@ -60,6 +60,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Check for SSH key / developer credential staging — DPRK and AMOS-family stealers
+        //    consistently exfil ~/.ssh, ~/.aws, ~/.gnupg, .env files.
+        progress?.update("checking SSH/dev credential staging")
+        scanForDevCredentialStaging(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -549,6 +554,81 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+            }
+        }
+    }
+
+    // MARK: - SSH / Developer Credential Staging
+
+    /// Filenames that should never legitimately appear outside their canonical home — when they
+    /// surface in /tmp or hidden directories, that's high-confidence stealer staging.
+    private let stagedDevCredFiles: Set<String> = [
+        "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",   // SSH private keys
+        "known_hosts", "config",                          // SSH config (only flagged alongside keys)
+        "credentials", "config.aws",                      // AWS CLI
+        "gh_config.yml", "hosts.yml",                     // gh CLI
+        ".npmrc", ".pypirc", ".docker_config.json",       // Package-registry tokens
+        "secring.gpg", "pubring.gpg", "trustdb.gpg",     // GPG keyrings
+        ".env", ".env.local", ".env.production",
+        "google_drive_credentials.json", "service_account.json",
+    ]
+
+    private func scanForDevCredentialStaging(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let searchRoots = ["/tmp", "/private/tmp", "/var/tmp",
+                           "\(home)/Library/Application Support",
+                           "\(home)/Library/Caches",
+                           "\(home)/.local"]
+
+        // Locations where these files ARE supposed to live.
+        let canonicalRoots: [String] = [
+            "\(home)/.ssh",
+            "\(home)/.aws",
+            "\(home)/.config",
+            "\(home)/.gnupg",
+            "\(home)/Documents",
+            "\(home)/Developer",
+            "\(home)/src", "\(home)/code", "\(home)/projects", "\(home)/dev",
+        ]
+
+        for root in searchRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 5 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let filename = url.lastPathComponent
+                guard stagedDevCredFiles.contains(filename) else { continue }
+                let filePath = url.path
+                if canonicalRoots.contains(where: { filePath.hasPrefix($0) }) { continue }
+                if isKnownAppPath(filePath) { continue }
+
+                // SSH keys / .env / credentials in /tmp or a hidden dir = staging.
+                let isStaging = filePath.hasPrefix("/tmp") || filePath.hasPrefix("/private/tmp") ||
+                                filePath.hasPrefix("/var/tmp") ||
+                                filePath.split(separator: "/").contains(where: {
+                                    let s = String($0)
+                                    return s.hasPrefix(".") && s != ".local" && s != ".config"
+                                })
+                guard isStaging else { continue }
+
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                guard size > 32 else { continue }  // skip empty placeholders
+
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Developer credential file staged in suspicious location",
+                    detail: "\"\(filename)\" at \(filePath) — DPRK and AMOS-family stealers exfil SSH/AWS/GPG keys and .env files",
+                    path: filePath,
+                    remediation: "Rotate any credentials this file may contain (SSH keys, AWS access keys, API tokens) and investigate the process that placed it"
+                ))
             }
         }
     }

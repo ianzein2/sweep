@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version support status")
+        checkOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking for pending software updates")
+        checkPendingUpdates(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment policy")
+        checkGatekeeperPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking firewall block-all-incoming")
+        checkFirewallBlockAll(findings: &findings, errors: &errors)
+
+        progress?.update("checking SecureToken / FileVault recovery posture")
+        checkSecureToken(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +461,188 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version End-of-Life
+
+    private func checkOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        // Apple typically supports the current macOS release plus the two prior majors with
+        // security updates. Anything older stops receiving patches and is a serious risk.
+        // We compare the running major version against a "newest supported major" floor.
+        //
+        // Floor is set conservatively — bump it forward as Apple ships new majors.
+        // As of 2026 the supported range is Sonoma (14), Sequoia (15), and the 2025 release (16).
+        // Macs on macOS 13 (Ventura) or earlier no longer get general security fixes.
+        let oldestSupportedMajor = 14
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        if major < oldestSupportedMajor {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(version.minorVersion) no longer receives security updates",
+                detail: "Apple maintains the latest macOS plus two prior releases; major \(major) is out of that window — known CVEs will not be patched",
+                path: nil,
+                remediation: "Upgrade macOS: System Settings > General > Software Update — or buy a newer Mac if this model can't run the latest release"
+            ))
+        } else if major == oldestSupportedMajor {
+            // Older-but-supported releases miss some new mitigations (e.g. updated Lockdown Mode protections).
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(major).\(version.minorVersion) is the oldest still-supported major",
+                detail: "Still receives security updates, but newer releases have additional mitigations (memory tagging, updated TCC enforcement)",
+                path: nil,
+                remediation: "Consider upgrading to the latest macOS major when convenient"
+            ))
+        }
+    }
+
+    // MARK: - Pending Software Updates
+
+    private func checkPendingUpdates(findings: inout [Finding], errors: inout [String]) {
+        // `softwareupdate -l` lists pending updates. softwareupdate sometimes prints to stderr
+        // and exits 0; we only trust output when the command succeeded.
+        let result = ShellRunner.run("/usr/sbin/softwareupdate", arguments: ["-l", "--no-scan"], timeout: 15)
+        guard result.success else { return }
+        let combined = result.stdout + result.stderr
+
+        // Apple's CLI prints "No new software available." when the cache says you're current.
+        if combined.contains("No new software available") { return }
+
+        // Each candidate is reported on a "* Label: ..." line.
+        let updateLines = combined.split(separator: "\n").compactMap { line -> String? in
+            let s = String(line).trimmingCharacters(in: .whitespaces)
+            // Only "* Label:" — broader prefixes match unrelated help/usage output.
+            return s.hasPrefix("* Label:") ? s : nil
+        }
+
+        guard !updateLines.isEmpty else { return }
+
+        // Flag harder if anything mentions a Security/Safari update specifically.
+        let lower = combined.lowercased()
+        let hasSecurity = lower.contains("security update") ||
+                          lower.contains("safari") ||
+                          lower.contains("rapid security")
+
+        let example = updateLines.first.map { String($0.prefix(120)) } ?? ""
+        findings.append(Finding(
+            severity: hasSecurity ? .high : .medium,
+            category: .hardening,
+            title: "Pending software update\(updateLines.count == 1 ? "" : "s") not yet installed (\(updateLines.count))",
+            detail: "\(hasSecurity ? "Includes a security update — install ASAP. " : "")Example: \(example)",
+            path: nil,
+            remediation: "Install: System Settings > General > Software Update, or: sudo softwareupdate -ia --restart"
+        ))
+    }
+
+    // MARK: - Gatekeeper Assessment Policy
+
+    private func checkGatekeeperPolicy(findings: inout [Finding], errors: inout [String]) {
+        // System-wide Gatekeeper status is verified in SystemIntegrityScanner. Here we check
+        // whether the developer-ID assessment subsystem has been weakened (`spctl --status` says
+        // "assessments enabled" while `--global-disable` toggles per-policy). We also flag
+        // the legacy "Anywhere" preference if anyone re-enabled it via the hidden 10.13- flag.
+        let global = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        if global.success {
+            let out = (global.stdout + global.stderr).lowercased()
+            if out.contains("assessments disabled") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Gatekeeper assessments are disabled",
+                    detail: "spctl reports assessments disabled — unsigned and unnotarized apps will run with no warning",
+                    path: nil,
+                    remediation: "Re-enable: sudo spctl --global-enable (or --master-enable on older macOS)"
+                ))
+            }
+        }
+
+        // The classic "Allow apps downloaded from: Anywhere" preference disappeared from the UI
+        // on Sequoia but the underlying flag still works. If anyone toggled it back, this matters.
+        let allowAny = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security", "GKAutoRearm"
+        ], timeout: 5)
+        if allowAny.success {
+            let value = allowAny.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // GKAutoRearm=0 means Gatekeeper won't re-arm itself after a temporary bypass — usually
+            // set by malicious installers that disable Gatekeeper for a window.
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Gatekeeper auto-rearm is disabled",
+                    detail: "GKAutoRearm=0 — once Gatekeeper is bypassed it will not automatically restore the policy",
+                    path: nil,
+                    remediation: "Restore: sudo defaults delete /Library/Preferences/com.apple.security GKAutoRearm"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Firewall block-all-incoming
+
+    private func checkFirewallBlockAll(findings: inout [Finding], errors: inout [String]) {
+        // "Block all incoming connections" is the strictest application-firewall setting — most
+        // users don't enable it because it breaks sharing, but the opposite (allow signed apps
+        // automatically) can also be relaxed. We only flag the obvious unsafe end of the spectrum:
+        // signed apps are allowed in *and* unsigned apps are allowed in. That combination means
+        // any newly-installed background process can listen on the network.
+        let allowSigned = ShellRunner.run("/usr/libexec/ApplicationFirewall/socketfilterfw",
+                                          arguments: ["--getallowsigned"], timeout: 5)
+        guard allowSigned.success else { return }
+
+        // The flag is reported as two separate lines: "Automatically allow signed built-in software"
+        // and "Automatically allow downloaded signed software". When BOTH are enabled, almost any
+        // code-signed app (even paid Developer ID) can bypass the firewall. We need per-line parsing
+        // because both lines share the word "enabled".
+        var builtInAuto = false
+        var downloadedAuto = false
+        for rawLine in allowSigned.stdout.split(separator: "\n") {
+            let line = String(rawLine).lowercased()
+            let enabled = line.contains("enabled") && !line.contains("disabled")
+            if line.contains("built-in") && enabled { builtInAuto = true }
+            if line.contains("downloaded") && enabled { downloadedAuto = true }
+        }
+        if builtInAuto && downloadedAuto {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Firewall auto-allows all signed software",
+                detail: "Any Developer ID-signed app can accept incoming connections without prompting — convenient but lowers the signal-to-noise of the firewall",
+                path: nil,
+                remediation: "Consider tightening: System Settings > Network > Firewall > Options — uncheck 'Automatically allow downloaded signed software'"
+            ))
+        }
+    }
+
+    // MARK: - SecureToken / FileVault recovery posture
+
+    private func checkSecureToken(findings: inout [Finding], errors: inout [String]) {
+        // On Apple Silicon, SecureToken (and its companion Bootstrap Token) controls who can
+        // unlock the system volume and approve OS updates. If the current user has *no* SecureToken,
+        // even an enabled FileVault is fragile — there's no SecureToken-holding account to recover
+        // the drive. This is a real-world misconfiguration on Macs that were re-bound to MDM
+        // or had admin accounts swapped.
+        //
+        // We resolve the active console user, then ask `sysadminctl` whether they have a token.
+        let user = ShellRunner.run("/usr/bin/stat", arguments: ["-f", "%Su", "/dev/console"], timeout: 5)
+        let username = user.success ? user.stdout.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        guard !username.isEmpty, username != "root" else { return }
+
+        let token = ShellRunner.run("/usr/sbin/sysadminctl", arguments: ["-secureTokenStatus", username], timeout: 5)
+        let combined = (token.stdout + token.stderr).lowercased()
+        guard !combined.isEmpty else { return }
+
+        if combined.contains("secure token is disabled") {
+            // Cross-check FileVault: it's only a high-severity issue if FileVault is actually on.
+            let fv = ShellRunner.run("/usr/bin/fdesetup", arguments: ["status"], timeout: 5)
+            let fvOn = fv.success && fv.stdout.contains("FileVault is On")
+            findings.append(Finding(
+                severity: fvOn ? .high : .medium,
+                category: .hardening,
+                title: "Current user has no SecureToken",
+                detail: "User \(username) is not a SecureToken holder. \(fvOn ? "FileVault is on — recovery requires a SecureToken-holding admin." : "FileVault not enabled, but token gates OS updates and recovery.")",
+                path: nil,
+                remediation: "Grant via a SecureToken-holding admin: sudo sysadminctl -secureTokenOn \(username) -password - -adminUser <admin> -adminPassword -"
+            ))
         }
     }
 

@@ -40,6 +40,12 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        50050,                                 // Cobalt Strike Beacon team server default
+        50051,                                 // Sliver gRPC default mTLS listener
+        7505, 7506,                            // Empire / Starkiller default agents
+        2222,                                  // Common SSH-tunnel/backdoor pivot
+        4445, 4446, 4447,                      // Mythic C2 / Apollo defaults
+        53531,                                 // Recent DPRK NimDoor C2 port seen in 2025 IOCs
     ]
 
     private let blockedAppleDomains: Set<String> = [

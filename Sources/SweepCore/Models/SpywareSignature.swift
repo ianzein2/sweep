@@ -434,6 +434,218 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / North Korean campaigns (2024-2026)
+        SpywareSignature(
+            // BlueNoroff loader chain documented by SentinelOne in Aug 2024 — masquerades as
+            // crypto/PDF documents and drops a stage-2 Mach-O written in Swift.
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "TodoForMac", "swift_pdf_helper"],
+            bundleIdentifiers: ["com.todoswift.app", "com.app.todoswift"],
+            filePaths: [
+                "/private/var/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.service"]
+        ),
+        SpywareSignature(
+            // DPRK loader (Nov 2024, Group-IB / Jamf) — abuses extended attributes
+            // (xattr "test") to hide a second-stage Rust/AppleScript payload.
+            name: "RustyAttr (DPRK)",
+            processNames: ["RustyAttr", "rustyattr", "rustdoor_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustyattr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // BlueNoroff "Hidden Risk" campaign (SentinelOne, Nov 2024) — fake crypto-news
+            // PDFs that drop a stage-2 zsh + Swift backdoor.
+            name: "Hidden Risk (BlueNoroff)",
+            processNames: ["HiddenRisk", "growth", "growth_helper", "CryptoBoom"],
+            bundleIdentifiers: ["com.growth.assistant", "com.cryptoboom.helper"],
+            filePaths: [
+                "~/Library/Caches/com.apple.softwareupdate.zshenv",
+                "~/.zshenv.public",
+                "/private/var/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate.zshenv"]
+        ),
+        SpywareSignature(
+            // DPRK Nim-based backdoor (Huntress / SentinelOne, mid-2025). Notable because
+            // Nim binaries dodge most YARA rules and ship a custom in-memory C2 channel.
+            name: "NimDoor (DPRK)",
+            processNames: ["NimDoor", "nimdoor", "GoogIeDrive", "ZoomVideo_helper", "CoreKitAgent"],
+            bundleIdentifiers: ["com.zoom.video.helper", "com.google.drive.helper"],
+            filePaths: [
+                "/private/var/tmp/.nimdoor",
+                "~/Library/CoreKitAgent",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent", "com.zoom.client.helper"]
+        ),
+        SpywareSignature(
+            // DPRK "Contagious Interview" campaign — fake job-interview NPM packages drop
+            // BeaverTail (JS infostealer) which fetches InvisibleFerret (Python RAT).
+            name: "BeaverTail (DPRK)",
+            processNames: ["BeaverTail", "beavertail", "qnodeservice", "p.js", "nvm_setup"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.beavertail",
+                "~/.npl",
+                "~/Library/Application Support/.BeaverTail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Stage-2 Python RAT delivered by BeaverTail.
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["invisible_ferret", "invferret", "pyp.py", "pay.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.n2/bow",
+                "~/.n2/mlip",
+                "/private/var/tmp/.invferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // OtterCookie (NTT, late 2024) — DPRK Contagious Interview successor to BeaverTail,
+            // adds clipboard hijacking and broader wallet coverage.
+            name: "OtterCookie (DPRK)",
+            processNames: ["OtterCookie", "ottercookie", "otter_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.ottercookie",
+                "~/.ott",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // PylangGhost (Cisco Talos, mid-2025) — Famous Chollima / DPRK Python+CGo loader
+            // distributed via fake Coinbase/Robinhood "skills tests".
+            name: "PylangGhost (DPRK)",
+            processNames: ["PylangGhost", "pylangghost", "nvidia_release.py", "ChromeWrapper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.pyenv/versions/.pylang",
+                "/private/var/tmp/.pylangghost",
+            ],
+            launchAgentLabels: ["com.nvidia.release.helper"]
+        ),
+        // 2024-2026 macOS infostealers / loaders
+        SpywareSignature(
+            // Proofpoint, Feb 2025 — TA569's macOS-targeted twin of "SmartApeSG" via fake
+            // browser-update overlays ("Safari Update Required").
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "DiskAnalyzer", "SafariUpdate"],
+            bundleIdentifiers: ["com.safari.update", "com.diskanalyzer.helper"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.safari.update.helper"]
+        ),
+        SpywareSignature(
+            // Kaspersky GReAT, April 2025 — modular stealer distributed via cracked apps;
+            // notable for using mach_inject-style task port abuse for Telegram/wallet theft.
+            name: "PasivRobber",
+            processNames: ["PasivRobber", "pasivrobber", "wsus", "macUpdater"],
+            bundleIdentifiers: ["com.apple.macupdater", "com.wsus.daemon"],
+            filePaths: [
+                "/private/tmp/.pasiv",
+                "/Library/Application Support/.PasivRobber",
+                "~/Library/Application Support/.PasivRobber",
+            ],
+            launchAgentLabels: ["com.wsus.daemon", "com.apple.macupdater.agent"]
+        ),
+        SpywareSignature(
+            // Kandji Threat Research, 2025 — Go-based stealer that fingerprints Apple Silicon
+            // and exfils 1Password / iCloud Keychain copies.
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "ProcessHub", "applehubd"],
+            bundleIdentifiers: ["com.apple.processhub", "com.apple.hub.agent"],
+            filePaths: [
+                "/private/tmp/.appleprocesshub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        SpywareSignature(
+            // macOS.ZuRu resurfaced in 2025 (Trend Micro / Patrick Wardle) — trojanized
+            // Termius / iTerm2 installers, drops Khepri C2 framework.
+            name: "macOS.ZuRu",
+            processNames: ["zuru", "ZuRu", "Khepri", "khepri_macos", "iTerm2_helper"],
+            bundleIdentifiers: ["com.googleusercontent.apps.zuru", "com.iterm2.helper"],
+            filePaths: [
+                "~/Library/.Trash/.fseventsd",
+                "/private/tmp/.zuru",
+                "~/Library/Application Support/.ZuRu",
+            ],
+            launchAgentLabels: ["com.iterm2.helper", "com.zuru.agent"]
+        ),
+        SpywareSignature(
+            // ThreatFabric / BlackBerry, 2024 — macOS variant of the LightSpy iOS implant;
+            // modular surveillance with audio, screenshot, and contact-stealing plugins.
+            name: "LightSpy (macOS)",
+            processNames: ["LightSpy", "lightspy", "macos_plugin", "lightSpyService", "macsync"],
+            bundleIdentifiers: ["com.macsync.service"],
+            filePaths: [
+                "~/Library/Application Support/.LightSpy",
+                "/private/var/tmp/.lightspy",
+            ],
+            launchAgentLabels: ["com.macsync.service"]
+        ),
+        SpywareSignature(
+            // Crystal Stealer (a.k.a. CrystalRAT), 2024-2025 — Russian-language MaaS targeting
+            // macOS browsers and crypto wallets, sold on dark-web forums.
+            name: "Crystal Stealer",
+            processNames: ["Crystal", "crystal_stealer", "crystalUI", "crystld"],
+            bundleIdentifiers: ["com.crystal.stealer", "com.crystal.agent"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        SpywareSignature(
+            // GhostStealer / Encore (2025) — Go-based stealer marketed alongside AMOS clones;
+            // uses Apple Help Viewer abuse for execution on Sequoia+.
+            name: "GhostStealer",
+            processNames: ["GhostStealer", "ghoststealer", "ghst", "applehelp_runner"],
+            bundleIdentifiers: ["com.ghost.stealer"],
+            filePaths: [
+                "/private/tmp/.ghoststealer",
+                "~/Library/Application Support/.GhostStealer",
+            ],
+            launchAgentLabels: ["com.ghost.agent"]
+        ),
+        SpywareSignature(
+            // ToyMaker / KeySteal (Sequoia-era, 2024) — abuses macOS Sequoia keychain
+            // export prompt phishing to harvest credentials.
+            name: "KeySteal",
+            processNames: ["KeySteal", "keysteal", "ksUpdater", "keychain_helper"],
+            bundleIdentifiers: ["com.keychain.helper"],
+            filePaths: [
+                "/private/tmp/.keysteal",
+                "~/Library/Application Support/.KeySteal",
+            ],
+            launchAgentLabels: ["com.keychain.helper"]
+        ),
+        SpywareSignature(
+            // Embargo (Rust-based ransomware crew, 2024-2025) — known macOS encryptor variant
+            // delivered alongside AMOS-family stealers on cracked-software pages.
+            name: "Embargo Ransomware",
+            processNames: ["Embargo", "embargo_rs", "embargo_encryptor"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.embargo",
+                "~/Library/Application Support/.Embargo",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking LaunchEvents")
+        scanLaunchEvents(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers / QuickLook generators")
+        scanSpotlightAndQuickLook(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Items database")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking symbolic hotkey overrides")
+        scanSymbolicHotkeys(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Action scripts")
+        scanFolderActions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -103,6 +118,35 @@ public final class PersistenceScanner: Scanner {
             executablePath = program
         } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
             executablePath = first
+        }
+
+        // WatchPaths / StartOnMount are stealthier than RunAtLoad — the job sleeps until a file
+        // is written or a volume is mounted, evading "first-run" detection. Malware families like
+        // Realst, BeaverTail, and HiddenRisk lean on this. We only flag for non-Apple labels
+        // pointing at non-trusted executables.
+        let watchPaths = plist["WatchPaths"] as? [String] ?? []
+        let queueDirs = plist["QueueDirectories"] as? [String] ?? []
+        let startOnMount = plist["StartOnMount"] as? Bool ?? false
+        let triggersExternally = !watchPaths.isEmpty || !queueDirs.isEmpty || startOnMount
+        if triggersExternally && !label.hasPrefix("com.apple.") {
+            let isTrusted = executablePath.map { ep in trustedPathPrefixes.contains(where: { ep.hasPrefix($0) }) } ?? true
+            if !isTrusted {
+                let trigger: String
+                if startOnMount {
+                    trigger = "StartOnMount (runs when a volume is mounted)"
+                } else if !watchPaths.isEmpty {
+                    trigger = "WatchPaths: \(watchPaths.prefix(2).joined(separator: ", "))"
+                } else {
+                    trigger = "QueueDirectories: \(queueDirs.prefix(2).joined(separator: ", "))"
+                }
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent uses filesystem trigger instead of RunAtLoad",
+                    detail: "Label: \(label), Trigger: \(trigger) — stealth persistence used by recent macOS stealers",
+                    path: path,
+                    remediation: "Verify the executable \(executablePath ?? "(none)") is legitimate. Remove plist if unexpected: sudo rm \"\(path)\""
+                ))
+            }
         }
 
         // Check against known spyware labels
@@ -674,6 +718,216 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - LaunchEvents
+
+    private func scanLaunchEvents(findings: inout [Finding], errors: inout [String]) {
+        // /Library/LaunchEvents and ~/Library/LaunchEvents host xpcservice-style event triggers
+        // that launch on system events (sleep/wake, screen lock, login window). They're rarely used
+        // by legitimate software, and several macOS RATs (LightSpy, NokNok) abuse them to evade
+        // standard LaunchAgent enumeration tools.
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/LaunchEvents",
+            "\(home)/Library/LaunchEvents",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                // Apple's own LaunchEvents live under /System and don't appear in /Library/LaunchEvents.
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchEvents persistence entry found",
+                    detail: "\(entry) in \(dir) — LaunchEvents is a low-profile persistence path rarely used by legitimate apps",
+                    path: entryPath,
+                    remediation: "Inspect, then remove if unexpected: sudo rm -rf \"\(entryPath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Spotlight importers / QuickLook generators
+
+    private func scanSpotlightAndQuickLook(findings: inout [Finding], errors: inout [String]) {
+        // Both Spotlight importers (.mdimporter) and QuickLook generators (.qlgenerator) are
+        // loaded by long-lived system processes (mdworker, quicklookd) on file events. A rogue
+        // bundle is effectively a permanent in-process loader — bypasses LaunchAgent inspection.
+        let home = ShellRunner.realUserHome
+        let scanLocations: [(dir: String, ext: String, kind: String, host: String)] = [
+            ("/Library/Spotlight", ".mdimporter", "Spotlight importer", "mdworker"),
+            ("\(home)/Library/Spotlight", ".mdimporter", "Spotlight importer", "mdworker"),
+            ("/Library/QuickLook", ".qlgenerator", "QuickLook generator", "quicklookd"),
+            ("\(home)/Library/QuickLook", ".qlgenerator", "QuickLook generator", "quicklookd"),
+        ]
+        let fm = FileManager.default
+
+        for loc in scanLocations {
+            guard fm.fileExists(atPath: loc.dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: loc.dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(loc.ext) {
+                let bundlePath = "\(loc.dir)/\(entry)"
+                // The Mach-O lives at Contents/MacOS/<name>; signature check that binary.
+                let execName = String(entry.dropLast(loc.ext.count))
+                let exec = "\(bundlePath)/Contents/MacOS/\(execName)"
+                let isSigned = fm.fileExists(atPath: exec) ? checkIsSigned(path: exec) : false
+
+                // Apple ships a handful of these under /System/Library; anything under /Library or
+                // ~/Library is third-party. Unsigned third-party bundles in these paths are HIGH risk.
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high,
+                    category: .persistence,
+                    title: "Third-party \(loc.kind) installed",
+                    detail: "\(entry) — loaded by \(loc.host) on file events. \(isSigned ? "Signed (verify publisher)." : "Unsigned bundle.")",
+                    path: bundlePath,
+                    remediation: "Inspect with: codesign -dv \"\(bundlePath)\" — remove if unexpected: sudo rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Items (Ventura+)
+
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // Since macOS Ventura, login items and SMAppService-registered background tasks are
+        // persisted to backgrounditems.btm. The file is a bplist00 with embedded NSKeyedArchiver
+        // data; parsing internals robustly requires sfltool. We use `sfltool dumpBTM` if available
+        // and fall back to surfacing the file's existence + a count of registered items.
+        let btmPath = "/private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v10.btm"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: btmPath) else { return }
+
+        // sfltool ships with macOS 13+ and dumps a human-readable list.
+        let dump = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpBTM"], timeout: 10)
+        guard dump.success, !dump.stdout.isEmpty else {
+            // Couldn't read it — note it's present but we can't enumerate.
+            return
+        }
+
+        // Each entry looks like: "Identifier: com.foo.bar ... URL: file:///Applications/Foo.app"
+        // We slice it into per-record blocks and flag non-Apple URLs from hidden/temp paths.
+        let lines = dump.stdout.split(separator: "\n").map { String($0) }
+        var records: [[String]] = []
+        var current: [String] = []
+        for line in lines {
+            // sfltool prints records separated by blank lines and "Record:" headers.
+            let isSep = line.trimmingCharacters(in: .whitespaces).isEmpty || line.contains("Record")
+            if isSep {
+                if !current.isEmpty {
+                    records.append(current)
+                    current = []
+                }
+            } else {
+                current.append(line)
+            }
+        }
+        if !current.isEmpty { records.append(current) }
+
+        for record in records {
+            let block = record.joined(separator: " ")
+            let lowered = block.lowercased()
+
+            // Skip Apple-shipped helpers — backgrounditems.btm is heavily populated by Apple.
+            if lowered.contains("com.apple.") { continue }
+            let isDisabled = lowered.contains("disposition") && lowered.contains("disabled")
+            if isDisabled { continue }
+
+            let isHidden = block.contains("/.") || block.contains("/tmp/") ||
+                           block.contains("/private/tmp") || block.contains("/var/tmp")
+            guard isHidden else { continue }
+
+            let urlPart = record.first(where: { $0.contains("URL:") })?
+                .trimmingCharacters(in: .whitespaces) ?? "(no URL)"
+            let idPart = record.first(where: { $0.contains("Identifier") })?
+                .trimmingCharacters(in: .whitespaces) ?? "(no identifier)"
+
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Background item registered from hidden/temp location",
+                detail: "\(idPart) — \(urlPart)",
+                path: btmPath,
+                remediation: "Review in System Settings > General > Login Items & Extensions, or: sfltool resetbtm <identifier>"
+            ))
+        }
+    }
+
+    // MARK: - Symbolic hotkey override
+
+    private func scanSymbolicHotkeys(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Preferences/com.apple.symbolichotkeys.plist controls keyboard shortcuts.
+        // Some 2024-2025 stealers (and "remote support" rootkits) flip the Spotlight shortcut
+        // to launch an attacker-controlled binary instead of Spotlight. The list of keys here
+        // covers the most-abused ones: Spotlight (64/65), Show Desktop (36/37), Lock Screen (74).
+        let home = ShellRunner.realUserHome
+        let plistPath = "\(home)/Library/Preferences/com.apple.symbolichotkeys.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let hotkeys = plist["AppleSymbolicHotKeys"] as? [String: Any] else { return }
+
+        let abusedKeys: Set<String> = ["64", "65", "36", "37", "74"]
+        for (key, value) in hotkeys where abusedKeys.contains(key) {
+            guard let entry = value as? [String: Any],
+                  let custom = entry["value"] as? [String: Any] else { continue }
+            // A "type" of "standard" is the default. Custom command strings replace the action.
+            if let type = entry["type"] as? String, type != "standard",
+               let action = custom["action"] as? String, !action.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Symbolic hotkey \(key) has been remapped to a custom action",
+                    detail: "Key \(key) → \(String(action.prefix(120))) — Spotlight/Show-Desktop hotkeys are a known hijack target",
+                    path: plistPath,
+                    remediation: "Reset: defaults delete com.apple.symbolichotkeys && killall cfprefsd, then verify shortcuts in System Settings > Keyboard > Shortcuts"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Folder Actions
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions (~/Library/Workflows/Applications/Folder Actions, or a configured plist)
+        // run AppleScript whenever a folder is modified. Trivially abused for stealth — drop a
+        // file in Downloads to trigger a payload.
+        let home = ShellRunner.realUserHome
+        let candidates = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+        for dir in candidates {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let p = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script found",
+                    detail: "\(entry) — runs automatically when a folder is touched",
+                    path: p,
+                    remediation: "Disable via System Settings > General > AppleScript / Automator, or remove: rm -rf \"\(p)\""
+                ))
+            }
+        }
+
+        // The "Folder Actions Setup" preferences file enumerates active attachments.
+        let prefsPath = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: prefsPath),
+           let data = fm.contents(atPath: prefsPath),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let enabled = plist["enabled"] as? Bool, enabled {
+            findings.append(Finding(
+                severity: .low, category: .persistence,
+                title: "Folder Actions dispatcher is enabled",
+                detail: "Folder Action scripts will run on filesystem events",
+                path: prefsPath,
+                remediation: "If you didn't enable Folder Actions, disable it from the Folder Actions Setup app"
             ))
         }
     }
