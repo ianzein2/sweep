@@ -72,17 +72,19 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, plug-in bundles (QuickLook/Spotlight/Mail/Services/PrefPanes/HAL/etc.), ScriptingAdditions (OSAX), DirectoryServices plug-ins |
+| **Evidence** | Looks for stored screenshots, keystroke logs, screen recordings, staged browser/crypto wallet/dev credentials, and macOS ransomware indicators (ransom notes, marker extensions, active encryption processes) |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy/PAC hijacking |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions and VSCode/Cursor/Windsurf extensions for dangerous permissions or malicious code |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS-style checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, Rapid Security Response, Find My Mac, Time Machine encryption, audit log, Gatekeeper overrides |
+
+The built-in signature database includes the 2023-2025 macOS threat landscape: infostealers (AMOS, Banshee, Cthulhu, Poseidon, MetaStealer, Realst, MacStealer, JaskaGo, Astral, Spectre, CookieSpider), DPRK clusters (RustBucket, KandyKorn, ObjCShellz, SpectralBlur, NimDoor, HiddenRisk, RustyAttr, AppleProcessHub, the Contagious Interview / FERRET family — BeaverTail, InvisibleFerret, FlexibleFerret, FrostyFerret, FriendlyFerret, PylangGhost, TodoSwift), commercial mercenary spyware (Pegasus, Predator, Chrysaor, LightSpy, QuadDream), macOS ransomware (NotLockBit, MacRansom, EvilQuest/ThiefQuest), and the long tail of consumer stalkerware.
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

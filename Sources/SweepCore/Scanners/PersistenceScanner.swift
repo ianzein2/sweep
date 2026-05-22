@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in directories")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking ScriptingAdditions")
+        scanScriptingAdditions(findings: &findings, errors: &errors)
+
+        progress?.update("checking DirectoryServices plugins")
+        scanDirectoryServicePlugins(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,236 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plug-in based persistence (QuickLook, Spotlight, Mail bundles, etc.)
+    //
+    // Each of these directories registers code that macOS loads on demand the next time the
+    // corresponding system service runs. They've been used as quiet persistence channels
+    // (cf. F-Secure 2018 paper on Spotlight importers, Wardle's 2020 "Persistent Threats" deck,
+    // and 2024 incident reports for DPRK clusters dropping bundles into ~/Library/Services).
+
+    private struct PluginLocation {
+        let path: String
+        let label: String
+        let detail: String
+    }
+
+    private func pluginLocations() -> [PluginLocation] {
+        let home = ShellRunner.realUserHome
+        return [
+            // QuickLook generators run inside qlmanage / Finder previews.
+            PluginLocation(path: "\(home)/Library/QuickLook",
+                           label: "QuickLook generator",
+                           detail: "QuickLook generators are loaded by Finder when previewing files"),
+            PluginLocation(path: "/Library/QuickLook",
+                           label: "QuickLook generator (system)",
+                           detail: "System-wide QuickLook generator — runs for every user"),
+            // Spotlight importers run inside mdworker — they handle indexable file types.
+            PluginLocation(path: "\(home)/Library/Spotlight",
+                           label: "Spotlight importer",
+                           detail: "Spotlight importers are loaded by mdworker to index files"),
+            PluginLocation(path: "/Library/Spotlight",
+                           label: "Spotlight importer (system)",
+                           detail: "System-wide Spotlight importer — runs for every user"),
+            // Mail.app bundles execute inside Mail and get full Mail entitlements.
+            PluginLocation(path: "\(home)/Library/Mail/Bundles",
+                           label: "Mail bundle",
+                           detail: "Mail bundles run inside Mail.app and can read all messages"),
+            PluginLocation(path: "/Library/Mail/Bundles",
+                           label: "Mail bundle (system)",
+                           detail: "System-wide Mail bundle — runs for every Mail.app launch"),
+            // Services appear in the Services menu and can be triggered by selecting text.
+            PluginLocation(path: "\(home)/Library/Services",
+                           label: "User Service",
+                           detail: "Services run when invoked from the Services menu"),
+            // Internet Plug-Ins are legacy NPAPI / WebPlugin loaders.
+            PluginLocation(path: "\(home)/Library/Internet Plug-Ins",
+                           label: "Internet plug-in",
+                           detail: "Internet plug-ins are legacy NPAPI binaries loaded by browsers"),
+            PluginLocation(path: "/Library/Internet Plug-Ins",
+                           label: "Internet plug-in (system)",
+                           detail: "System-wide Internet plug-in — legacy NPAPI persistence"),
+            // PreferencePanes load into System Settings (formerly Preferences).
+            PluginLocation(path: "\(home)/Library/PreferencePanes",
+                           label: "PreferencePane",
+                           detail: "PreferencePanes load when opened from System Settings"),
+            PluginLocation(path: "/Library/PreferencePanes",
+                           label: "PreferencePane (system)",
+                           detail: "System-wide PreferencePane"),
+            // Screen savers can run arbitrary code while the screen is locked.
+            PluginLocation(path: "\(home)/Library/Screen Savers",
+                           label: "Screen Saver",
+                           detail: "Screen savers run arbitrary code when the screen locks"),
+            // Color pickers load into NSColorPanel and every Cocoa app's color UI.
+            PluginLocation(path: "\(home)/Library/Colors",
+                           label: "Color picker",
+                           detail: "Color pickers are loaded into every Cocoa app's color UI"),
+            PluginLocation(path: "\(home)/Library/ColorPickers",
+                           label: "Color picker",
+                           detail: "Color pickers are loaded into every Cocoa app's color UI"),
+            // Audio Plug-Ins (HAL, AU, AAX) load into coreaudiod, microphone-facing apps, and DAWs.
+            PluginLocation(path: "\(home)/Library/Audio/Plug-Ins/HAL",
+                           label: "Audio Plug-In (HAL)",
+                           detail: "HAL audio plug-ins load into coreaudiod with full audio device access"),
+            PluginLocation(path: "/Library/Audio/Plug-Ins/HAL",
+                           label: "Audio Plug-In (HAL, system)",
+                           detail: "System HAL audio plug-in — loaded into coreaudiod for every audio session"),
+            // Address Book / Contacts plug-ins load into Contacts.app.
+            PluginLocation(path: "\(home)/Library/Address Book Plug-Ins",
+                           label: "Address Book plug-in",
+                           detail: "Address Book plug-ins load inside Contacts.app"),
+        ]
+    }
+
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        for location in pluginLocations() {
+            guard fm.fileExists(atPath: location.path),
+                  let contents = try? fm.contentsOfDirectory(atPath: location.path) else { continue }
+
+            // Bundles end in .qlgenerator, .mdimporter, .mailbundle, .service, .webplugin,
+            // .prefPane, .saver, .colorPicker, .driver, .component, .bundle, .plugin, .app.
+            let bundleExtensions: Set<String> = [
+                "qlgenerator", "mdimporter", "mailbundle", "service", "webplugin",
+                "plugin", "prefpane", "saver", "colorpicker", "driver",
+                "component", "bundle", "app",
+            ]
+
+            for entry in contents where !entry.hasPrefix(".") {
+                let ext = (entry as NSString).pathExtension.lowercased()
+                guard bundleExtensions.contains(ext) else { continue }
+
+                let entryPath = "\(location.path)/\(entry)"
+
+                // Inspect the bundle's Info.plist to surface the bundle identifier and
+                // determine whether it's Apple-signed code (often legitimate).
+                let plistPath = "\(entryPath)/Contents/Info.plist"
+                var bundleId: String?
+                if let data = fm.contents(atPath: plistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    bundleId = plist["CFBundleIdentifier"] as? String
+                }
+
+                // Apple-signed Apple bundle IDs in these locations are usually shipped by macOS.
+                if let id = bundleId, id.hasPrefix("com.apple.") { continue }
+
+                // Match against the known spyware database first.
+                if let id = bundleId, let sig = SpywareSignature.match(bundleId: id) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware installed as \(location.label): \(sig.name)",
+                        detail: "Bundle: \(id), \(location.detail)",
+                        path: entryPath,
+                        remediation: "Remove: rm -rf \"\(entryPath)\""
+                    ))
+                    continue
+                }
+
+                // Otherwise, check signature and flag unsigned/ad-hoc third-party plug-ins.
+                let isSigned = checkIsSigned(path: entryPath)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned \(location.label) installed",
+                        detail: "Bundle: \(entry)" + (bundleId.map { " (\($0))" } ?? "") +
+                            " — \(location.detail). Plug-ins in this directory load automatically.",
+                        path: entryPath,
+                        remediation: "Inspect, then remove if unexpected: rm -rf \"\(entryPath)\""
+                    ))
+                } else if let id = bundleId {
+                    // Surface signed third-party plug-ins at MEDIUM — they're rare and worth review.
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Third-party \(location.label) installed",
+                        detail: "Bundle: \(id) — \(location.detail)",
+                        path: entryPath,
+                        remediation: "Verify this plug-in is expected — remove if unrecognized"
+                    ))
+                }
+            }
+        }
+    }
+
+    // ScriptingAdditions (a.k.a. OSAX) intercept Apple Events application-wide. /Library/ScriptingAdditions
+    // is empty on a stock install — any .osax there is a strong persistence indicator.
+    private func scanScriptingAdditions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/ScriptingAdditions",
+            "\(home)/Library/ScriptingAdditions",
+            "/System/Library/ScriptingAdditions",  // for completeness — usually only Apple's StandardAdditions
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in contents where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                let ext = (entry as NSString).pathExtension.lowercased()
+                guard ext == "osax" || ext == "bundle" else { continue }
+
+                // Apple's own StandardAdditions.osax lives in /System/Library/ScriptingAdditions.
+                if dir == "/System/Library/ScriptingAdditions" &&
+                   (entry == "StandardAdditions.osax" || entry == "Digital Hub Scripting.osax") {
+                    continue
+                }
+
+                let plistPath = "\(entryPath)/Contents/Info.plist"
+                var bundleId: String?
+                if let data = fm.contents(atPath: plistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    bundleId = plist["CFBundleIdentifier"] as? String
+                }
+                if let id = bundleId, id.hasPrefix("com.apple.") { continue }
+
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Custom ScriptingAddition (OSAX) installed",
+                    detail: "OSAX: \(entry)" + (bundleId.map { " (\($0))" } ?? "") +
+                        " — ScriptingAdditions are loaded into every AppleScript-aware app and can intercept Apple Events",
+                    path: entryPath,
+                    remediation: "OSAX persistence is extremely rare in legitimate software — inspect contents, then remove: sudo rm -rf \"\(entryPath)\""
+                ))
+            }
+        }
+    }
+
+    // DirectoryServices plugins run inside opendirectoryd with elevated privileges.
+    // The system ships with Apple-signed plug-ins only; any third-party plug-in is suspect.
+    private func scanDirectoryServicePlugins(findings: inout [Finding], errors: inout [String]) {
+        let dirs = [
+            "/Library/DirectoryServices/PlugIns",
+            "/Library/OpenDirectory/PlugIns",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in contents where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                let plistPath = "\(entryPath)/Contents/Info.plist"
+                var bundleId: String?
+                if let data = fm.contents(atPath: plistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    bundleId = plist["CFBundleIdentifier"] as? String
+                }
+                if let id = bundleId, id.hasPrefix("com.apple.") { continue }
+
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Third-party DirectoryServices plug-in",
+                    detail: "Plug-in: \(entry)" + (bundleId.map { " (\($0))" } ?? "") +
+                        " — runs inside opendirectoryd with elevated privileges",
+                    path: entryPath,
+                    remediation: "Inspect and remove if not from your enterprise directory tool: sudo rm -rf \"\(entryPath)\""
+                ))
+            }
         }
     }
 

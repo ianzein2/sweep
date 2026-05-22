@@ -434,6 +434,227 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" / FERRET cluster — fake job-interview lures targeting
+        // developers, crypto staff, and infosec researchers from 2024 through 2025.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node_beavertail"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.npl",
+                "/private/tmp/.npl",
+                "~/Library/Application Support/Microsoft/.Updater",
+                "~/.n2/p.js",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/mptmp",
+                "/private/tmp/mptmp",
+                "~/.n2/ssid.json",
+                "~/Library/Application Support/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FrostyFerret_ui"],
+            bundleIdentifiers: ["com.zoom.zoomui", "com.flexibleferret.app"],
+            filePaths: [
+                "/private/tmp/zoom_sdk_support.scpt",
+                "/tmp/.zoom_helper",
+                "~/Library/Application Support/com.zoom.zoomui",
+            ],
+            launchAgentLabels: ["com.flexibleferret.agent", "com.zoom.update"]
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "frostyferret", "ChromeUpdate"],
+            bundleIdentifiers: ["com.frostyferret.app"],
+            filePaths: [
+                "/private/tmp/.frostyferret",
+                "~/Library/Application Support/.FrostyFerret",
+            ],
+            launchAgentLabels: ["com.frostyferret.agent"]
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["FriendlyFerret", "friendlyferret"],
+            bundleIdentifiers: ["com.friendlyferret.app"],
+            filePaths: ["/private/tmp/.friendlyferret"],
+            launchAgentLabels: ["com.friendlyferret.agent"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost",
+            processNames: ["PylangGhost", "pylangghost", "nvidia.py", "Visual_Studio.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.pylang",
+                "/private/tmp/.pylang",
+                "~/Library/Caches/com.pylang.cache",
+            ],
+            launchAgentLabels: ["com.python.pylangd"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIe LLC", "CoreKitAgent", "InjectWithDyldArm64"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.cur_dir",
+                "/private/tmp/.cur_dir",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "~/Library/Application Support/.googleupdates",
+            ],
+            launchAgentLabels: ["com.google.update", "com.apple.keystone.agent"]
+        ),
+        SpywareSignature(
+            name: "HiddenRisk",
+            processNames: ["HiddenRisk", "hiddenrisk", "PoolFinder", "RustyAttr"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.hiddenrisk",
+                "/private/tmp/.hiddenrisk",
+                "~/Library/Application Support/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.googleupdate.helper"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rusty",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "macshellinit"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.processhub",
+                "/Library/Application Support/.appleprocesshub",
+            ],
+            launchAgentLabels: ["com.apple.process.hub"]
+        ),
+        SpywareSignature(
+            name: "JaskaGo (GoStealer)",
+            processNames: ["JaskaGo", "jaskago"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.jaska",
+            ],
+            launchAgentLabels: ["com.appe.helper"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "TodoApp"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.agent"]
+        ),
+        // macOS ransomware — emerged into mainstream threat status late 2024 / 2025.
+        SpywareSignature(
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit", "ransom_mac"],
+            bundleIdentifiers: ["com.notlockbit.encryptor"],
+            filePaths: [
+                "/tmp/.lockbit",
+                "/private/tmp/.lockbit",
+                "~/Documents/restore_files.txt",
+                "~/Desktop/HOW_TO_DECRYPT.txt",
+            ],
+            launchAgentLabels: ["com.lockbit.service"]
+        ),
+        SpywareSignature(
+            name: "MacRansom",
+            processNames: ["MacRansom", "macransom", "ransom.bin"],
+            bundleIdentifiers: ["com.macransom.app"],
+            filePaths: [
+                "/private/tmp/.macransom",
+                "~/Library/Application Support/.MacRansom",
+            ],
+            launchAgentLabels: ["com.macransom.service"]
+        ),
+        SpywareSignature(
+            name: "EvilQuest / ThiefQuest",
+            processNames: ["EvilQuest", "ThiefQuest", "patch", "Player", "tubux"],
+            bundleIdentifiers: ["com.apple.questd", "com.evilquest.agent"],
+            filePaths: [
+                "/Library/AppQuest",
+                "~/Library/AppQuest",
+                "/private/var/root/Library/Application Support/com.apple.questd",
+            ],
+            launchAgentLabels: ["com.apple.questd", "com.apple.questagent"]
+        ),
+        // Additional 2024-2025 infostealers
+        SpywareSignature(
+            name: "CookieSpider",
+            processNames: ["CookieSpider", "cookiespider", "browserdata_grabber"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cookiespider",
+                "~/Library/Application Support/.CookieSpider",
+            ],
+            launchAgentLabels: ["com.cookiespider.agent"]
+        ),
+        SpywareSignature(
+            name: "Astral Stealer",
+            processNames: ["AstralStealer", "astral_stealer", "astral.app"],
+            bundleIdentifiers: ["com.astral.stealer"],
+            filePaths: [
+                "/private/tmp/.astral",
+                "~/Library/Application Support/.Astral",
+            ],
+            launchAgentLabels: ["com.astral.service"]
+        ),
+        SpywareSignature(
+            name: "Spectre Stealer",
+            processNames: ["SpectreStealer", "spectre_stealer", "specstealer"],
+            bundleIdentifiers: ["com.spectre.stealer"],
+            filePaths: [
+                "/private/tmp/.spectre",
+                "~/Library/Application Support/.SpectreStealer",
+            ],
+            launchAgentLabels: ["com.spectre.service"]
+        ),
+        SpywareSignature(
+            name: "CrackedCantil",
+            processNames: ["CrackedCantil", "crackedcantil", "cantil_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.crackedcantil",
+                "~/Library/Application Support/.cantil",
+            ],
+            launchAgentLabels: ["com.crackedcantil.service"]
+        ),
+        // Commercial mercenary spyware (post-Pegasus disclosures)
+        SpywareSignature(
+            name: "OSX.LightSpy",
+            processNames: ["LightSpy", "lightspy", "lightspymac"],
+            bundleIdentifiers: ["com.lightspy.agent"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.LightSpy",
+            ],
+            launchAgentLabels: ["com.lightspy.service"]
+        ),
+        SpywareSignature(
+            name: "OSX.NSO.QuadDream",
+            processNames: ["QuadDream", "quaddream", "reign_agent"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.quaddream"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

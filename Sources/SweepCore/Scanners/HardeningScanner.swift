@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking system audit log")
+        checkAuditLog(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessments")
+        checkGatekeeperAssessments(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +480,123 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is what lets you remote-lock or wipe a stolen device. There is no command-line
+        // toggle, but `fmm-tool` and the FindMyMac preferences plist expose state. We only warn LOW
+        // when it's clearly off — many Macs share an iCloud account where the answer is intentional.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "If this Mac is lost or stolen, you won't be able to locate, lock, or remotely erase it",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // An unencrypted Time Machine destination contains plaintext copies of every file on the Mac
+        // — including the keychain. We use `tmutil destinationinfo` and look for an Encrypted flag.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 8)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // tmutil output is a series of "Name : Value" pairs separated by blank lines.
+        // Each "block" describes one destination. We look at every block independently.
+        let blocks = result.stdout.components(separatedBy: "\n\n")
+        for block in blocks {
+            guard !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            // Parse simple key:value lines into a dict.
+            var info: [String: String] = [:]
+            for line in block.split(separator: "\n") {
+                let parts = line.split(separator: ":", maxSplits: 1).map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                }
+                guard parts.count == 2 else { continue }
+                info[parts[0]] = parts[1]
+            }
+            guard let name = info["Name"] else { continue }
+            // The "Encrypted" key is present on macOS 11+; absence usually means unencrypted.
+            let encryptedRaw = info["Encrypted"]?.lowercased() ?? "no"
+            let isEncrypted = encryptedRaw.contains("yes") || encryptedRaw == "1" || encryptedRaw == "true"
+            if !isEncrypted {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine destination is not encrypted",
+                    detail: "Destination \"\(name)\" stores backups in plaintext — anyone with physical access to the drive can read every file you've backed up",
+                    path: nil,
+                    remediation: "Erase and re-add the destination with encryption enabled: System Settings > General > Time Machine > (i) > Encrypt Backups"
+                ))
+            }
+        }
+    }
+
+    // MARK: - System Audit Log (auditd)
+
+    private func checkAuditLog(findings: inout [Finding], errors: inout [String]) {
+        // The BSM audit subsystem (/etc/security/audit_control) is macOS's tamper-evident security
+        // log. Several recent in-the-wild stealers run `audit -s` with a stripped policy to suppress
+        // their own activity from the audit pipeline, or kill `auditd` outright.
+        // Apple deprecated auditd in Sonoma and removed it from later releases — only flag when the
+        // audit_control file is present (i.e. the OS still ships auditd) but the daemon is not running.
+        let auditConfig = "/etc/security/audit_control"
+        guard FileManager.default.fileExists(atPath: auditConfig) else { return }
+
+        let ps = ShellRunner.run("/bin/ps", arguments: ["-axco", "comm"], timeout: 5)
+        let isAuditdRunning = ps.success && ps.stdout.split(separator: "\n").contains(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "auditd"
+        })
+
+        if !isAuditdRunning {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "System audit daemon (auditd) is not running",
+                detail: "auditd records security events to /var/audit and is configured (\(auditConfig) is present) but the daemon isn't running — its absence reduces forensic visibility, and some malware kills auditd to suppress its own logs",
+                path: auditConfig,
+                remediation: "Start: sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.auditd.plist (or use an EndpointSecurity-based monitor like LuLu/Santa)"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper Per-Bundle Assessments
+
+    private func checkGatekeeperAssessments(findings: inout [Finding], errors: inout [String]) {
+        // `spctl --status` is checked by the SystemIntegrityScanner already. Here we look at whether
+        // the user has *individually* disabled Gatekeeper assessments for any app — `spctl --list`
+        // shows manually allowed entries, and any "anchor apple generic" wildcard is a red flag.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--list", "--type", "execute"], timeout: 8)
+        guard result.success else { return }
+
+        var manuallyAllowed: [String] = []
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            // Lines like "12345[GKE]   anchor apple generic ..." represent overrides.
+            // Stock macOS ships with a couple of these; an unexpectedly large list is unusual.
+            if lineStr.contains("anchor") && lineStr.contains("[GKE]") {
+                manuallyAllowed.append(lineStr.trimmingCharacters(in: .whitespaces))
+            }
+        }
+        if manuallyAllowed.count > 5 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "\(manuallyAllowed.count) manual Gatekeeper override(s) configured",
+                detail: "spctl has \(manuallyAllowed.count) execute-type rules — manual overrides bypass Gatekeeper's quarantine checks for those apps",
+                path: nil,
+                remediation: "Review: sudo spctl --list — remove unexpected entries with `sudo spctl --remove --label <label>`"
+            ))
         }
     }
 }

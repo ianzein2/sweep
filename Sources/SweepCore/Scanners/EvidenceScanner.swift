@@ -60,6 +60,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Check for macOS ransomware indicators — became a real threat in late 2024
+        //    with NotLockBit and copycats targeting macOS for the first time.
+        progress?.update("checking ransomware indicators")
+        scanForRansomwareIndicators(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -434,17 +439,33 @@ public final class EvidenceScanner: Scanner {
     /// explicitly target. Finding copies of these files staged in /tmp or hidden directories
     /// is strong evidence of an active stealer campaign on the machine.
     private let walletFingerprints: [(label: String, marker: String)] = [
-        ("MetaMask", "nkbihfbeogaeaoehlefnkodbefgpgknn"),   // Chromium extension dir
+        // Chromium wallet extensions (id is the directory under Extensions/)
+        ("MetaMask", "nkbihfbeogaeaoehlefnkodbefgpgknn"),
         ("Phantom",  "bfnaelmomeimhlpmgjnjophhpkkoljpa"),
         ("Coinbase Wallet", "hnfanknocfeofbddgcijnmhnfnkdnaad"),
         ("Ronin",    "fnjhmkhhmkbjkkabndcnnogagogbneec"),
         ("TronLink", "ibnejdfjmmkpcnlpebklmnkoeoihofec"),
+        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Brave Wallet", "odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Math Wallet", "afbcbjpbpfadlkmhmclhkeeodmamcflc"),
+        ("Rabby Wallet", "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Backpack Wallet", "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Petra (Aptos)", "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("Sui Wallet", "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("XDEFI Wallet", "hmeobnfnfcmdkdcmlblgagmfpfboieaf"),
+        ("Argent X (Starknet)", "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        // Desktop wallets — distinctive on-disk names
         ("Exodus",   "Exodus"),
         ("Electrum", ".electrum"),
         ("Atomic Wallet", "Atomic"),
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
-        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        ("MyEtherWallet", "MyEtherWallet"),
+        ("Wasabi Wallet", "WalletWasabi"),
+        ("Sparrow Wallet", "Sparrow"),
+        ("Frame Wallet", "frame-wallet"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -452,6 +473,39 @@ public final class EvidenceScanner: Scanner {
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+    ]
+
+    /// Developer / cloud credential files that have shown up in 2024-2025 infostealer payloads.
+    /// We flag them only when found in clear staging locations (tmp dirs or hidden subdirs of tmp),
+    /// because filenames like "config" or "credentials" are otherwise too generic for a name-only match.
+    private let devCredFingerprints: [(label: String, marker: String)] = [
+        ("SSH private key (RSA)", "id_rsa"),
+        ("SSH private key (ECDSA)", "id_ecdsa"),
+        ("SSH private key (ed25519)", "id_ed25519"),
+        ("GnuPG private keyring", "secring.gpg"),
+        ("npm auth token file", ".npmrc"),
+        ("PyPI token file", ".pypirc"),
+        ("kubeconfig", "kube-config"),
+        ("Google cloud SDK creds", "application_default_credentials.json"),
+        ("Telegram desktop session", "tdata"),
+    ]
+
+    /// Filename markers for macOS ransomware drops (NotLockBit, MacRansom, EvilQuest, KeRanger).
+    private let ransomNoteFilenames: Set<String> = [
+        "how_to_decrypt.txt", "how_to_decrypt.html",
+        "decrypt_instructions.txt", "decrypt_instructions.html",
+        "restore_files.txt", "restore_files.html",
+        "your_files_are_encrypted.txt", "readme_for_decrypt.txt",
+        "ransom_note.txt", "ransomnote.txt",
+        "!recovery_instructions!.txt", "_readme.txt",
+        "all_your_files_are_encrypted.txt",
+    ]
+
+    /// Extensions used by macOS ransomware to mark encrypted files.
+    private let ransomExtensions: Set<String> = [
+        "locked", "encrypted", "enc", "crypt", "crypted",
+        "lockbit", "notlockbit", "thiefquest", "evilquest", "macransom",
+        "keranger", "keraos", "filecoder",
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
@@ -531,6 +585,26 @@ public final class EvidenceScanner: Scanner {
                         }
                     }
                 }
+
+                // Developer / cloud credentials staged in a tmp directory — this is the canonical
+                // signal that an AMOS-family stealer has already collected them and is about to
+                // upload them. Restrict to /tmp-style staging locations to keep false positives low.
+                if devCredFingerprints.contains(where: { $0.marker == filename }) {
+                    let isStaging = filePath.hasPrefix("/tmp/") ||
+                                    filePath.hasPrefix("/private/tmp/") ||
+                                    filePath.hasPrefix("/var/tmp/")
+                    if isStaging {
+                        if let label = devCredFingerprints.first(where: { $0.marker == filename })?.label {
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "Developer credentials staged in temp directory",
+                                detail: "\(label) (\"\(filename)\") at \(filePath) — stealers copy these files into /tmp before exfiltration",
+                                path: filePath,
+                                remediation: "Rotate the affected credentials and investigate the process that created this file"
+                            ))
+                        }
+                    }
+                }
             }
         }
 
@@ -547,6 +621,113 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Ransomware Indicators
+    //
+    // Until 2024, macOS ransomware was largely theoretical (KeRanger, EvilQuest). Late-2024 and
+    // 2025 saw functional families ported to macOS (NotLockBit, MacRansom and clones). The signals
+    // we look for are point-in-time and post-encryption: ransom notes dropped in user dirs, files
+    // renamed with a marker extension, and processes currently iterating user files.
+    private func scanForRansomwareIndicators(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        let userDirs = [
+            "\(home)/Desktop", "\(home)/Documents", "\(home)/Downloads",
+            "\(home)/Pictures", "\(home)/Movies", "\(home)/Music",
+        ]
+
+        var ransomNoteHits: [String] = []
+        var encryptedFileSamples: [String: Int] = [:]   // extension -> count
+        var encryptedExamples: [String] = []
+
+        for dir in userDirs {
+            guard fm.fileExists(atPath: dir),
+                  let enumerator = fm.enumerator(
+                      at: URL(fileURLWithPath: dir),
+                      includingPropertiesForKeys: [.isRegularFileKey],
+                      options: [.skipsPackageDescendants]
+                  ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 4 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                let nameLower = url.lastPathComponent.lowercased()
+                let ext = url.pathExtension.lowercased()
+
+                if ransomNoteFilenames.contains(nameLower) {
+                    ransomNoteHits.append(url.path)
+                }
+                if ransomExtensions.contains(ext) {
+                    encryptedFileSamples[ext, default: 0] += 1
+                    if encryptedExamples.count < 3 {
+                        encryptedExamples.append(url.lastPathComponent)
+                    }
+                }
+                // Cap the encryption-extension scan to avoid hot loops on legitimate huge libraries.
+                if encryptedFileSamples.values.reduce(0, +) > 500 {
+                    enumerator.skipDescendants()
+                    break
+                }
+            }
+        }
+
+        // A ransom note in a user-facing directory is a near-certain compromise signal.
+        for note in ransomNoteHits.prefix(5) {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousFile,
+                title: "Possible ransom note in user directory",
+                detail: "File: \(note) — matches the canonical ransom-note filename pattern dropped by NotLockBit-class ransomware",
+                path: note,
+                remediation: "Disconnect from the network and from external storage immediately, then preserve disk state for forensics"
+            ))
+        }
+
+        // Multiple files renamed with a ransomware marker extension = active encryption underway.
+        for (ext, count) in encryptedFileSamples where count >= 3 {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousFile,
+                title: "\(count) files with ransomware marker extension \".\(ext)\"",
+                detail: "Examples: \(encryptedExamples.joined(separator: ", ")) — ransomware renames encrypted files with a marker extension",
+                path: nil,
+                remediation: "Disconnect network/storage, identify the encrypting process via `lsof` or Activity Monitor, then preserve disk state"
+            ))
+        }
+
+        // Catch the encryption process itself — common patterns from macOS ransomware analyses.
+        // We grep for shell invocations that pair `find` with `openssl`/`xattr`/`zip -P` over user dirs.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        if psResult.success {
+            for line in psResult.stdout.split(separator: "\n") {
+                let lineStr = String(line)
+                let lower = lineStr.lowercased()
+                // openssl-driven encryption walking the user's home is the classic ransomware loop.
+                if (lower.contains("openssl enc") || lower.contains("openssl aes")) &&
+                   (lower.contains("/users/") || lower.contains("/desktop") || lower.contains("/documents")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Process encrypting user files via openssl",
+                        detail: "Active: \(String(lineStr.prefix(180)))",
+                        path: nil,
+                        remediation: "Likely active ransomware — kill the process and disconnect from network/storage immediately"
+                    ))
+                }
+                // `find ... -exec zip -P` over the home directory is JaskaGo / NotLockBit behaviour.
+                if lower.contains("find") && lower.contains("zip") && lower.contains("-p") &&
+                   lower.contains("/users/") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Process bulk-archiving user files with password",
+                        detail: "Active: \(String(lineStr.prefix(180)))",
+                        path: nil,
+                        remediation: "Mass password-protected archive creation in user dirs is a ransomware/stealer pattern — investigate now"
                     ))
                 }
             }
