@@ -434,6 +434,227 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS threats
+        // DPRK "Contagious Interview" campaign — fake recruiter lures developers into running
+        // npm-delivered loaders that drop BeaverTail (JS info-stealer) and InvisibleFerret (Python RAT).
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "node_beaver"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["InvisibleFerret", "invisibleferret", "pay", "p.py", "pyp"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisible",
+                "~/Library/Application Support/.ferret",
+                "~/.npl/",
+            ],
+            launchAgentLabels: []
+        ),
+        // Lazarus / BlueNoroff fake-PDF and crypto-targeting RATs (2023-2025)
+        SpywareSignature(
+            name: "RustDoor / Trello",
+            processNames: ["RustDoor", "rustdoor", "Trello", "trellox"],
+            bundleIdentifiers: ["com.trello.notify"],
+            filePaths: [
+                "/private/tmp/.test",
+                "~/Library/Application Support/.trello",
+                "/Library/.notify",
+            ],
+            launchAgentLabels: ["com.trello.notify"]
+        ),
+        SpywareSignature(
+            name: "OSX.RustyAttr (BlueNoroff)",
+            processNames: ["RustyAttr", "rustyattr", "tabview", "FinderHelper"],
+            bundleIdentifiers: ["com.finder.helper"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PondRAT (Lazarus)",
+            processNames: ["PondRAT", "pondrat", "pondbinary", "pyperclip"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pond",
+                "~/Library/Application Support/.pondrat",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK)",
+            processNames: ["TodoSwift", "todoswift", "todolist_agent"],
+            bundleIdentifiers: ["com.todoswift.agent"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "CloudKeeper (DPRK)",
+            processNames: ["CloudKeeper", "cloudkeeper", "ckeeper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.cloudkeeper"],
+            launchAgentLabels: []
+        ),
+        // China-linked espionage targeting WeChat / DingTalk users (2024)
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZRat", "hzrat", "OpenVPNConnect", "wechat_helper", "dingtalk_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hz",
+                "~/Library/Application Support/.hzrat",
+                "/Library/LaunchAgents/com.apple.wechathelper.plist",
+            ],
+            launchAgentLabels: ["com.apple.wechathelper", "com.dingtalk.helper"]
+        ),
+        // 2024 Go-based crypto stealer
+        SpywareSignature(
+            name: "JaskaGO",
+            processNames: ["JaskaGO", "jaskago", "jgo_stealer"],
+            bundleIdentifiers: ["com.jaska.go"],
+            filePaths: [
+                "/private/tmp/.jaska",
+                "~/Library/Application Support/.jaskago",
+            ],
+            launchAgentLabels: ["com.jaska.go"]
+        ),
+        // macOS ransomware (2024-2025)
+        SpywareSignature(
+            name: "OSX.NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macos"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/.lockbit",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OSX.Turtle (LockBit macOS)",
+            processNames: ["turtle", "Turtle"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.turtle"],
+            launchAgentLabels: []
+        ),
+        // North-Korea-linked RATs (2024)
+        SpywareSignature(
+            name: "MoonPeak RAT",
+            processNames: ["MoonPeak", "moonpeak", "mpeak"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.moonpeak"],
+            launchAgentLabels: []
+        ),
+        // 2024-2025 infostealers seen distributed via cracked apps & malvertising
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "applehubd"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.applehub",
+                "~/Library/Application Support/.applehub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "CrackedCantil",
+            processNames: ["CrackedCantil", "crackedcantil", "cracantil"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.crackedcantil"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Banshee 3.0",
+            processNames: ["Banshee3", "banshee3", "bnsh3", "bansheeUI3"],
+            bundleIdentifiers: ["com.banshee3.stealer"],
+            filePaths: [
+                "/private/tmp/.banshee3",
+                "~/Library/Application Support/.Banshee3",
+            ],
+            launchAgentLabels: ["com.banshee3.service"]
+        ),
+        // 2024-2025 backdoors used by red-team-tool-turned-criminal frameworks
+        SpywareSignature(
+            name: "macOS.Sliver Implant",
+            processNames: ["sliver", "Sliver", "sliver-client", "sliver-server"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.sliver",
+                "~/Library/.sliver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "macOS.Mythic Apfell",
+            processNames: ["apfell", "Apfell", "apfell-jxa", "mythic_apfell"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.apfell"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "macOS.Poseidon (Mythic)",
+            processNames: ["poseidon-mythic", "poseidonImplant"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.mythic_poseidon"],
+            launchAgentLabels: []
+        ),
+        // DPRK ransomware-as-a-lure (2024)
+        SpywareSignature(
+            name: "macOS.CageyChameleon",
+            processNames: ["CageyChameleon", "cageychameleon"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.cageychameleon"],
+            launchAgentLabels: []
+        ),
+        // Adload / Bundlore variants that remained active through 2024-2025
+        SpywareSignature(
+            name: "OSX.Adload",
+            processNames: ["Adload", "adload", "playerhelper", "Mining"],
+            bundleIdentifiers: ["com.adload.service"],
+            filePaths: [
+                "~/Library/Application Support/.adload",
+                "/Library/Application Support/.adload",
+            ],
+            launchAgentLabels: ["com.adload.agent"]
+        ),
+        SpywareSignature(
+            name: "OSX.Bundlore (modern variants)",
+            processNames: ["Bundlore", "bundlore", "mediadownloader", "playerinstaller"],
+            bundleIdentifiers: ["com.bundlore.installer"],
+            filePaths: ["/private/tmp/.bundlore"],
+            launchAgentLabels: ["com.bundlore.service"]
+        ),
+        // North-Korean fake-job lures shipping disguised as crypto / DeFi tooling
+        SpywareSignature(
+            name: "FERRET (DPRK contagious interview loader)",
+            processNames: ["FERRET", "ferret", "ChromeUpdater", "FerretService"],
+            bundleIdentifiers: ["com.google.chrome.updater"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "/Users/Shared/Library/.ferret",
+            ],
+            launchAgentLabels: ["com.google.chrome.updater"]
+        ),
+        // FROSTYFERRET / phishing-driven keychain stealer (2025)
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "frostyferret", "ffhelper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.frostyferret"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +671,18 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 imposter labels seen in BeaverTail, RustDoor, HZ RAT, FERRET, MoonPeak
+        "com.apple.systempreferences.helper",
+        "com.apple.wechathelper",
+        "com.apple.processhub",
+        "com.apple.metadata.refresh",
+        "com.apple.spotlight.helper",
+        "com.apple.gatekeeper.helper",
+        "com.apple.notify",
+        "com.apple.xprotect.helper",
+        "com.apple.bird.sync",
+        "com.apple.cloudd.helper",
+        "com.apple.coreservices.daemon",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +707,14 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 imposter names observed in the wild
+        "ChromeUpdater",         // Real Chrome uses GoogleSoftwareUpdate
+        "SafariHelper",          // Real: Safari Web Content (different naming)
+        "FinderHelper",          // Not a real Apple process — RustyAttr lure
+        "wechat_helper",         // Used by HZ RAT to blend in on Chinese-language Macs
+        "dingtalk_helper",       // Used by HZ RAT
+        "applehubd",             // AppleProcessHub Stealer
+        "GoogleSoftwareUpdater", // Real: GoogleSoftwareUpdate (no trailing 'r')
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Mail Privacy Protection")
+        checkMailPrivacyProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Sensitive Content Warning")
+        checkSensitiveContentWarning(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect / MRT freshness")
+        checkXProtectFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking app-management permissions")
+        checkAppManagementPermission(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen-recording disclosures")
+        checkScreenRecordingDisclosure(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -445,6 +463,186 @@ public final class HardeningScanner: Scanner {
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+    //
+    // Private Relay (Ventura+) hides your IP from websites by relaying Safari traffic through
+    // two relays. If a user signed up for iCloud+ but the feature is off, we surface it as a
+    // privacy hint — it does not deduct points by default because not every user wants it.
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // The user-facing toggle is stored as "PrivateRelayEnabled" in com.apple.networkserviceproxy
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "PrivateRelayEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Only surface this when the key exists and is explicitly disabled (0). If the user
+        // has never enabled iCloud+, the key is missing and there's nothing to suggest.
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is disabled",
+                detail: "Private Relay hides your IP from websites in Safari. You appear to have iCloud+ but the feature is off.",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Mail Privacy Protection
+
+    /// Mail Privacy Protection (Monterey+) blocks remote-image tracking pixels in Apple Mail.
+    /// Disabling it lets senders track when and where you read messages — a known surveillance vector.
+    private func checkMailPrivacyProtection(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.mail-shared", "DisableURLLoading"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // DisableURLLoading = 0 means "remote images load freely" → tracking pixels work
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Mail Privacy Protection is disabled",
+                    detail: "Remote images load automatically in Apple Mail — senders can track when you open messages",
+                    path: nil,
+                    remediation: "Enable: Mail > Settings > Privacy > Protect Mail Activity"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Sensitive Content Warning
+
+    /// Sensitive Content Warning (macOS Sonoma+) detects nude images received in Messages,
+    /// AirDrop, FaceTime, and Contact Posters on-device and blurs them before display.
+    /// Disabled by default, so we only suggest enabling — never deduct heavily.
+    private func checkSensitiveContentWarning(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.SensitiveContentAnalysis", "CheckEnabled"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Key exists but is set to off → user previously enabled & then disabled. We can hint.
+        if value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Sensitive Content Warning is disabled",
+                detail: "On-device nudity detection in Messages / AirDrop / FaceTime is turned off. Re-enabling it protects against unsolicited imagery.",
+                path: nil,
+                remediation: "Enable: System Settings > Privacy & Security > Sensitive Content Warning"
+            ))
+        }
+    }
+
+    // MARK: - XProtect / MRT freshness
+
+    /// Apple's bundled signature databases (XProtect, MRT, XProtectRemediator) are pushed
+    /// out-of-band. If they haven't been updated in 30+ days, the Mac is missing recent
+    /// IOCs for active campaigns. This is a strong signal that automatic updates are broken
+    /// or have been intentionally disabled.
+    private func checkXProtectFreshness(findings: inout [Finding], errors: inout [String]) {
+        let xprotectPaths = [
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist",
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.yara",
+            "/private/var/protected/xprotect/XProtect.bundle/Contents/Resources/XProtect.plist",
+            "/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/Info.plist",
+        ]
+
+        var latestModification: Date?
+        var checkedPath: String?
+        for path in xprotectPaths {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let mod = attrs[.modificationDate] as? Date {
+                if latestModification == nil || mod > latestModification! {
+                    latestModification = mod
+                    checkedPath = path
+                }
+            }
+        }
+
+        guard let mod = latestModification else { return }
+        let ageDays = -mod.timeIntervalSinceNow / 86_400
+
+        if ageDays > 60 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "XProtect signatures are very stale (\(Int(ageDays)) days old)",
+                detail: "Apple's malware signature database has not been refreshed in \(Int(ageDays)) days. Either automatic updates are broken or have been disabled — recent campaigns are not being blocked.",
+                path: checkedPath,
+                remediation: "Run: sudo softwareupdate --background — or System Settings > General > Software Update"
+            ))
+        } else if ageDays > 30 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect signatures are outdated (\(Int(ageDays)) days old)",
+                detail: "Apple's malware definitions update every ~7-14 days. \(Int(ageDays)) days is unusual and suggests the Mac is missing recent IOCs.",
+                path: checkedPath,
+                remediation: "Run: sudo softwareupdate --background"
+            ))
+        }
+    }
+
+    // MARK: - App Management TCC
+
+    /// Since macOS Ventura, modifying another app's bundle requires the "App Management"
+    /// TCC permission. Apps with this permission can replace legitimate apps with malicious
+    /// copies (a 2023 Adload trick). We list grantees so users can review.
+    private func checkAppManagementPermission(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let tccDB = "\(home)/Library/Application Support/com.apple.TCC/TCC.db"
+        guard FileManager.default.fileExists(atPath: tccDB) else { return }
+
+        // SQLite query — non-Apple apps with kTCCServiceSystemPolicyAppBundles (App Management)
+        let result = ShellRunner.run("/usr/bin/sqlite3", arguments: [
+            tccDB,
+            "SELECT client FROM access WHERE service = 'kTCCServiceSystemPolicyAppBundles' AND auth_value > 0;"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        let clients = result.stdout.split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("com.apple.") }
+
+        for client in clients {
+            findings.append(Finding(
+                severity: .medium, category: .permission,
+                title: "App has \"App Management\" permission",
+                detail: "Client: \(client) — can modify, replace, or delete other apps in /Applications",
+                path: nil,
+                remediation: "Verify: System Settings > Privacy & Security > App Management. Revoke if the app doesn't need to manage other apps."
+            ))
+        }
+    }
+
+    // MARK: - Screen-recording disclosure (macOS Sequoia)
+
+    /// macOS Sequoia prompts users monthly to re-confirm screen-recording grants and shows
+    /// a notification when recording is active. Suppressing those alerts via internal-only
+    /// defaults is a hallmark of surveillance tooling that wants to record without a banner.
+    private func checkScreenRecordingDisclosure(findings: inout [Finding], errors: inout [String]) {
+        let suppressedKeys: [(domain: String, key: String, label: String)] = [
+            ("com.apple.replayd", "showScreenRecordingIndicator", "screen-recording indicator"),
+            ("com.apple.sharingd", "PromptRecordIndicator", "screen-recording prompt"),
+            ("com.apple.controlcenter", "ScreenRecordingIndicator", "Control Center recording dot"),
+        ]
+        for (domain, key, label) in suppressedKeys {
+            let result = ShellRunner.run("/usr/bin/defaults", arguments: ["read", domain, key], timeout: 3)
+            if result.success {
+                let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                if value == "0" || value.lowercased() == "false" {
+                    findings.append(Finding(
+                        severity: .high, category: .hardening,
+                        title: "macOS \(label) has been suppressed",
+                        detail: "The \(key) preference in \(domain) is set to disabled — surveillance tools suppress these so users can't tell recording is active",
+                        path: nil,
+                        remediation: "Restore default: sudo defaults delete \(domain) \(key)"
+                    ))
+                }
             }
         }
     }
