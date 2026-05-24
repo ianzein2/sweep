@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
@@ -63,6 +64,18 @@ public final class BrowserScanner: Scanner {
         //    malicious marketplace extensions that steal cookies, keychains, and wallets.
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
+
+        // 5. Native Messaging Hosts — extensions communicate with native binaries through
+        //    these JSON manifests. A malicious or hijacked NMH lets a single browser
+        //    extension run arbitrary code with the user's privileges. Used in real-world
+        //    exfil chains (e.g. cookies/credentials forwarded to a native sender).
+        progress?.update("scanning Native Messaging Hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
+        // 6. Search-engine hijacks — browser default-search overrides written by adware
+        //    are a long-running consumer-grade compromise indicator on macOS.
+        progress?.update("checking default search engines")
+        scanDefaultSearchEngines(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -377,6 +390,192 @@ public final class BrowserScanner: Scanner {
                 }
             }
         }
+    }
+
+    // MARK: - Native Messaging Hosts
+
+    /// NMH manifests live in well-known directories. Each manifest references a native
+    /// binary (`path`) and the set of extensions (`allowed_origins`) that can talk to it.
+    /// The binary runs with the user's privileges — it's a documented escape hatch from
+    /// the browser sandbox that some real-world spyware uses for persistent C2 / exfil.
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let nmhRoots: [(browser: String, paths: [String])] = [
+            ("Chrome", [
+                "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+                "/Library/Google/Chrome/NativeMessagingHosts",
+            ]),
+            ("Brave", [
+                "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+            ]),
+            ("Edge", [
+                "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts",
+                "/Library/Microsoft/Edge/NativeMessagingHosts",
+            ]),
+            ("Firefox", [
+                "\(home)/Library/Application Support/Mozilla/NativeMessagingHosts",
+                "/Library/Application Support/Mozilla/NativeMessagingHosts",
+            ]),
+        ]
+
+        // Hosts that ship with mainstream apps — quietly trusted.
+        let trustedHostNames: Set<String> = [
+            "com.1password.1password",
+            "com.bitwarden.browser",
+            "com.dashlane.dashlanephoneextension.launcher",
+            "com.lastpass.lastpass",
+            "com.google.chrome.app_keepalive",
+            "com.google.chrome.remote_assistance",
+            "com.adobe.acrobat.dc.detector",
+            "org.keepassxc.keepassxc_browser",
+            "com.docker.dockerdesktop",
+        ]
+
+        let fm = FileManager.default
+        for entry in nmhRoots {
+            for root in entry.paths {
+                guard let manifests = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+                for file in manifests where file.hasSuffix(".json") {
+                    let manifestPath = "\(root)/\(file)"
+                    let hostName = String(file.dropLast(5))    // strip .json
+                    if trustedHostNames.contains(hostName) { continue }
+
+                    guard let data = fm.contents(atPath: manifestPath),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                    let nativePath = json["path"] as? String ?? "(missing)"
+                    let origins = json["allowed_origins"] as? [String] ??
+                                  json["allowed_extensions"] as? [String] ?? []
+                    let originSummary = origins.prefix(3).joined(separator: ", ")
+
+                    // Check native binary signature & existence
+                    let execExists = fm.fileExists(atPath: nativePath)
+                    let isSigned = execExists && checkBinaryIsSigned(path: nativePath)
+
+                    // Heuristics for unusual paths
+                    let isUserBin = nativePath.hasPrefix(home) &&
+                                    !nativePath.hasPrefix("\(home)/Applications/") &&
+                                    !nativePath.contains("/Application Support/")
+                    let isHiddenPath = nativePath.split(separator: "/").contains { $0.hasPrefix(".") }
+                    let isTempPath = nativePath.hasPrefix("/tmp") || nativePath.hasPrefix("/private/tmp")
+
+                    if isHiddenPath || isTempPath {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(entry.browser) Native Messaging Host points to hidden / temp path",
+                            detail: "Host: \(hostName), binary: \(nativePath), origins: \(originSummary)",
+                            path: manifestPath,
+                            remediation: "Remove this manifest: rm \"\(manifestPath)\" — and investigate the binary"
+                        ))
+                        continue
+                    }
+
+                    if !execExists {
+                        findings.append(Finding(
+                            severity: .low, category: .suspiciousFile,
+                            title: "\(entry.browser) Native Messaging Host references missing binary",
+                            detail: "Host: \(hostName), missing: \(nativePath)",
+                            path: manifestPath,
+                            remediation: "Orphaned manifest — safe to remove: rm \"\(manifestPath)\""
+                        ))
+                        continue
+                    }
+
+                    if !isSigned {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "Unsigned \(entry.browser) Native Messaging Host",
+                            detail: "Host: \(hostName), binary: \(nativePath) (unsigned), origins: \(originSummary) — this binary runs with your privileges whenever the connected extension calls it",
+                            path: manifestPath,
+                            remediation: "If you don't recognize this: rm \"\(manifestPath)\" \"\(nativePath)\""
+                        ))
+                    } else if isUserBin {
+                        findings.append(Finding(
+                            severity: .medium, category: .suspiciousFile,
+                            title: "\(entry.browser) Native Messaging Host in user home",
+                            detail: "Host: \(hostName), binary: \(nativePath), origins: \(originSummary)",
+                            path: manifestPath,
+                            remediation: "Verify you installed this — most legitimate hosts live under /Applications or /Library"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    private func checkBinaryIsSigned(path: String) -> Bool {
+        // Lightweight signature check — full validation isn't needed because the only
+        // signal we care about here is "did somebody bother to sign this at all".
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let code = staticCode else { return false }
+        return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Default Search Engine
+
+    private func scanDefaultSearchEngines(findings: inout [Finding], errors: inout [String]) {
+        // Chromium browsers store the user's current default search engine in the
+        // Preferences JSON. Adware (Search Marquis, SearchBaron, Bing-redirector chains)
+        // overrides this to a custom search URL it controls — a very common consumer
+        // compromise on macOS.
+        let home = ShellRunner.realUserHome
+        let chromiumProfiles: [(browser: String, root: String)] = [
+            ("Chrome", "\(home)/Library/Application Support/Google/Chrome"),
+            ("Brave",  "\(home)/Library/Application Support/BraveSoftware/Brave-Browser"),
+            ("Edge",   "\(home)/Library/Application Support/Microsoft Edge"),
+        ]
+
+        // Reputable defaults — anything else is worth surfacing.
+        let trustedHosts: Set<String> = [
+            "google.com", "bing.com", "duckduckgo.com", "search.brave.com",
+            "ecosia.org", "kagi.com", "startpage.com", "qwant.com",
+            "yandex.com", "yandex.ru", "baidu.com", "you.com",
+            "perplexity.ai", "search.yahoo.com",
+        ]
+
+        let fm = FileManager.default
+        for entry in chromiumProfiles {
+            guard fm.fileExists(atPath: entry.root),
+                  let profiles = try? fm.contentsOfDirectory(atPath: entry.root) else { continue }
+
+            for profile in profiles {
+                let prefsPath = "\(entry.root)/\(profile)/Preferences"
+                guard let data = fm.contents(atPath: prefsPath),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let dspd = json["default_search_provider_data"] as? [String: Any],
+                      let tmpl = dspd["template_url_data"] as? [String: Any] else { continue }
+
+                let providerName = (tmpl["short_name"] as? String) ?? "(unknown)"
+                let searchURL = (tmpl["url"] as? String) ?? ""
+
+                // Pull the host out of the search URL template
+                let host = extractHost(from: searchURL).lowercased()
+                if host.isEmpty { continue }
+
+                let matchesTrusted = trustedHosts.contains { host == $0 || host.hasSuffix(".\($0)") }
+                if !matchesTrusted {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "\(entry.browser) default search engine has been overridden",
+                        detail: "Profile \"\(profile)\" uses \"\(providerName)\" → \(host) — adware/PUPs frequently hijack this setting",
+                        path: prefsPath,
+                        remediation: "Reset in \(entry.browser): Settings > Search engine > Manage search engines"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func extractHost(from url: String) -> String {
+        // Tiny URL parser: skip the scheme, then take everything up to the first /, ?, or {
+        guard let schemeEnd = url.range(of: "://") else { return "" }
+        let tail = url[schemeEnd.upperBound...]
+        let terminators: Set<Character> = ["/", "?", "{", "#", ":"]
+        let host = tail.prefix(while: { !terminators.contains($0) })
+        return String(host)
     }
 
     private struct EditorScriptScan {

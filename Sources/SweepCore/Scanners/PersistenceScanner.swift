@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in bundles (Quick Look, Spotlight, Audio Unit, ScreenSaver)")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking Input Methods")
+        scanInputMethods(findings: &findings, errors: &errors)
+
+        progress?.update("checking privileged helper tools")
+        scanPrivilegedHelpers(findings: &findings, errors: &errors)
+
+        progress?.update("checking at jobs")
+        scanAtJobs(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Items (macOS 13+)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +690,331 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plug-in Bundles (Quick Look / Spotlight / Audio Unit / Screen Saver)
+
+    /// Loadable bundle directories that auto-execute code on certain triggers
+    /// (file preview, mdimport, audio host launch, screen-saver activation).
+    /// These are well-documented but rarely-checked persistence channels.
+    private struct PluginDir {
+        let path: String
+        let suffix: String
+        let label: String
+        let trigger: String
+    }
+
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        let pluginDirs: [PluginDir] = [
+            PluginDir(path: "\(home)/Library/QuickLook", suffix: ".qlgenerator",
+                     label: "Quick Look generator",
+                     trigger: "loaded by quicklookd whenever a file is previewed in Finder"),
+            PluginDir(path: "/Library/QuickLook", suffix: ".qlgenerator",
+                     label: "Quick Look generator (system)",
+                     trigger: "loaded by quicklookd whenever a file is previewed in Finder"),
+            PluginDir(path: "\(home)/Library/Spotlight", suffix: ".mdimporter",
+                     label: "Spotlight importer",
+                     trigger: "loaded by mdimport during every file indexing pass"),
+            PluginDir(path: "/Library/Spotlight", suffix: ".mdimporter",
+                     label: "Spotlight importer (system)",
+                     trigger: "loaded by mdimport during every file indexing pass"),
+            PluginDir(path: "/Library/Audio/Plug-Ins/Components", suffix: ".component",
+                     label: "Audio Unit plug-in",
+                     trigger: "loaded by audio host apps (Logic, GarageBand, AVAudioEngine clients)"),
+            PluginDir(path: "\(home)/Library/Audio/Plug-Ins/Components", suffix: ".component",
+                     label: "Audio Unit plug-in (user)",
+                     trigger: "loaded by audio host apps when the user runs them"),
+            PluginDir(path: "/Library/Screen Savers", suffix: ".saver",
+                     label: "Screen Saver bundle (system)",
+                     trigger: "runs whenever the screen saver activates"),
+            PluginDir(path: "\(home)/Library/Screen Savers", suffix: ".saver",
+                     label: "Screen Saver bundle",
+                     trigger: "runs whenever the screen saver activates"),
+            PluginDir(path: "\(home)/Library/ColorPickers", suffix: ".colorPicker",
+                     label: "Color Picker bundle",
+                     trigger: "loaded by any app that opens an NSColorPanel"),
+            PluginDir(path: "/Library/PreferencePanes", suffix: ".prefPane",
+                     label: "Preference Pane (system)",
+                     trigger: "loaded by System Settings when opened"),
+            PluginDir(path: "\(home)/Library/PreferencePanes", suffix: ".prefPane",
+                     label: "Preference Pane",
+                     trigger: "loaded by System Settings when opened"),
+        ]
+
+        let fm = FileManager.default
+        for dir in pluginDirs {
+            guard fm.fileExists(atPath: dir.path),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+
+            for entry in entries where entry.hasSuffix(dir.suffix) {
+                let bundlePath = "\(dir.path)/\(entry)"
+
+                // Bundle execs live at Contents/MacOS/<entry-without-suffix>
+                let stem = String(entry.dropLast(dir.suffix.count))
+                let execPath = "\(bundlePath)/Contents/MacOS/\(stem)"
+                let execExists = fm.fileExists(atPath: execPath)
+
+                // Known spyware match takes priority
+                if let sig = SpywareSignature.match(processName: stem) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware in \(dir.label): \(sig.name)",
+                        detail: "Bundle: \(entry) — \(dir.trigger)",
+                        path: bundlePath,
+                        remediation: "Remove: rm -rf \"\(bundlePath)\" — then run a full scan again"
+                    ))
+                    continue
+                }
+
+                // Unsigned plug-ins in these directories are HIGH because they auto-execute
+                // with the host's privileges as soon as the trigger fires. Signed plug-ins
+                // are common (every signed app installs them) so we stay silent on those —
+                // signature alone doesn't make a bundle malicious or noteworthy.
+                if execExists && !checkIsSigned(path: execPath) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned \(dir.label): \(entry)",
+                        detail: "Executable \(execPath) is unsigned — \(dir.trigger)",
+                        path: bundlePath,
+                        remediation: "Remove if unrecognized: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Input Methods
+
+    /// Input Method bundles are loaded into every app that accepts text — a perfect
+    /// keylogger position. Apple ships ~10 default IMEs under /System/Library/Input
+    /// Methods; anything in user/system /Library/Input Methods is third-party.
+    private func scanInputMethods(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let imDirs = [
+            ("\(home)/Library/Input Methods", "User"),
+            ("/Library/Input Methods", "System"),
+        ]
+
+        // Well-known legitimate IMEs we shouldn't pester users about.
+        let trustedIMEStems: Set<String> = [
+            "Squirrel", "Rime",       // Rime (open-source CJK)
+            "Karabiner-Elements",     // Karabiner needs an IME for some functions
+            "TypeIt4Me", "TextExpander",
+            "Hammerspoon",
+            "OpenVanilla", "McBopomofo",
+            "Sogou", "Baidu", "GoogleJapaneseInput",
+            "iBus",
+        ]
+
+        let fm = FileManager.default
+        for (dir, scope) in imDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".app") || entry.hasSuffix(".bundle") {
+                let bundlePath = "\(dir)/\(entry)"
+                let stem = String(entry.dropLast(entry.hasSuffix(".app") ? 4 : 7))
+                if trustedIMEStems.contains(stem) { continue }
+
+                let execPath = "\(bundlePath)/Contents/MacOS/\(stem)"
+                let isSigned = fm.fileExists(atPath: execPath) && checkIsSigned(path: execPath)
+
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high,
+                    category: .keylogging,
+                    title: "\(scope) Input Method installed: \(entry)",
+                    detail: "Input methods receive every keystroke in every app — verify you installed this" +
+                        (isSigned ? "" : " (executable is unsigned)"),
+                    path: bundlePath,
+                    remediation: "If unrecognized: remove from System Settings > Keyboard > Input Sources, then rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Privileged Helper Tools
+
+    /// SMJobBless-installed helpers run as root and persist across reboots. macOS doesn't
+    /// remove them when their parent app is deleted, so old/unknown entries here are a
+    /// common privilege-persistence vector.
+    private func scanPrivilegedHelpers(findings: inout [Finding], errors: inout [String]) {
+        let helperDir = "/Library/PrivilegedHelperTools"
+        let daemonPlistDir = "/Library/LaunchDaemons"
+        let fm = FileManager.default
+
+        guard fm.fileExists(atPath: helperDir),
+              let entries = try? fm.contentsOfDirectory(atPath: helperDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let helperPath = "\(helperDir)/\(entry)"
+
+            // A helper without a matching LaunchDaemon plist (or whose plist references
+            // a missing executable) is almost certainly orphaned — the parent app is gone.
+            let expectedPlist = "\(daemonPlistDir)/\(entry).plist"
+            let hasPlist = fm.fileExists(atPath: expectedPlist)
+
+            let isSigned = checkIsSigned(path: helperPath)
+            if !isSigned {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Unsigned privileged helper tool",
+                    detail: "Helper: \(entry) runs as root — code signature invalid or missing",
+                    path: helperPath,
+                    remediation: "Remove if unrecognized: sudo rm \"\(helperPath)\" \(hasPlist ? "&& sudo launchctl bootout system \(expectedPlist) && sudo rm \(expectedPlist)" : "")"
+                ))
+                continue
+            }
+
+            if !hasPlist {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Orphan privileged helper tool",
+                    detail: "Helper: \(entry) has no matching LaunchDaemon plist — likely left behind by an uninstalled app",
+                    path: helperPath,
+                    remediation: "Safe to remove if app is uninstalled: sudo rm \"\(helperPath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - At Jobs
+
+    /// `at(1)` schedules one-shot commands. Spool files in /var/at/jobs run as root the
+    /// next time atrun fires. Rarely used legitimately on macOS, so any entry is suspicious.
+    private func scanAtJobs(findings: inout [Finding], errors: inout [String]) {
+        let jobsDir = "/var/at/jobs"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: jobsDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            // The spool file format starts with a letter+number ID; .SEQ tracks counters.
+            if entry == ".SEQ" || entry.hasSuffix(".lock") { continue }
+            let path = "\(jobsDir)/\(entry)"
+
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Scheduled at-job present",
+                detail: "Spool file \(entry) — `at` is rarely used legitimately on macOS",
+                path: path,
+                remediation: "List queue: atq — remove suspicious entries: atrm <jobid> (or sudo rm \"\(path)\")"
+            ))
+        }
+    }
+
+    // MARK: - macOS 13+ Background Items
+
+    /// Background Items registered via SMAppService (Login Items, daemons, agents) live
+    /// in a system-managed btm database. `sfltool dumpbtm` is the only sanctioned way to
+    /// read it. Apps can register themselves into this list without a visible LaunchAgent
+    /// plist — making this Apple's new persistence backbone since macOS 13 Ventura.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // sfltool is unavailable on macOS 12 and earlier — quietly skip if not present.
+        let toolPath = "/usr/bin/sfltool"
+        guard FileManager.default.fileExists(atPath: toolPath) else { return }
+
+        let result = ShellRunner.run(toolPath, arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Parse a record like:
+        //   Bundle ID:    com.evil.persistence
+        //   Executable Path:   /Users/me/.evil/agent
+        //   Disposition:   [enabled]
+        //   Type:    legacy
+        //   Identifier: com.evil.persistence
+        struct BTMEntry {
+            var bundleId: String?
+            var execPath: String?
+            var disposition: String?
+        }
+
+        var current = BTMEntry()
+        var entries: [BTMEntry] = []
+
+        func flush() {
+            if current.bundleId != nil || current.execPath != nil {
+                entries.append(current)
+            }
+            current = BTMEntry()
+        }
+
+        for line in result.stdout.split(separator: "\n") {
+            let raw = String(line)
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+
+            // sfltool blocks each record with a blank line / "Item:" / "Record" header.
+            if trimmed.isEmpty || trimmed.hasPrefix("Item-") ||
+               trimmed.hasPrefix("Record") || trimmed.hasPrefix("UUID:") {
+                flush()
+                continue
+            }
+
+            if let range = trimmed.range(of: "Bundle ID:") {
+                current.bundleId = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else if trimmed.hasPrefix("URL:") {
+                let val = trimmed.replacingOccurrences(of: "URL:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                current.execPath = val.replacingOccurrences(of: "file://", with: "")
+            } else if let range = trimmed.range(of: "Executable Path:") {
+                current.execPath = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else if let range = trimmed.range(of: "Disposition:") {
+                current.disposition = String(trimmed[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        flush()
+
+        for entry in entries {
+            let bundleId = entry.bundleId ?? ""
+            let execPath = entry.execPath ?? ""
+            let disposition = entry.disposition ?? ""
+
+            // Only interested in enabled entries — disabled entries can't run.
+            if !disposition.lowercased().contains("enabled") &&
+               !disposition.lowercased().contains("allowed") { continue }
+
+            // Skip Apple system entries
+            if bundleId.hasPrefix("com.apple.") || execPath.hasPrefix("/System/") ||
+               execPath.hasPrefix("/usr/libexec/") { continue }
+
+            // Fake Apple bundle ID is a strong indicator
+            if SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background item with fake Apple bundle ID",
+                    detail: "Bundle ID: \(bundleId), Exec: \(execPath)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                continue
+            }
+
+            // Known spyware match — check both bundle-id and launch-label tables
+            let match = SpywareSignature.match(bundleId: bundleId) ??
+                        SpywareSignature.match(label: bundleId)
+            if let sig = match {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware as background item: \(sig.name)",
+                    detail: "Bundle ID: \(bundleId), Exec: \(execPath)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Disable in System Settings > General > Login Items & Extensions, then remove the app"
+                ))
+                continue
+            }
+
+            // Hidden path
+            if execPath.contains("/.") &&
+               !execPath.contains("/.npm/") && !execPath.contains("/.cargo/") {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background item runs binary in hidden path",
+                    detail: "Bundle ID: \(bundleId), Exec: \(execPath)",
+                    path: execPath,
+                    remediation: "Investigate: ls -la \"\(execPath)\" — remove via System Settings > Login Items if unrecognized"
+                ))
+            }
         }
     }
 

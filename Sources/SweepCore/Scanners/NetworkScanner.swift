@@ -67,6 +67,11 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Custom DNS servers — malware sometimes pins resolver to a hostile server
+        //    to NXDOMAIN security update domains or redirect banking lookups.
+        progress?.update("checking DNS resolvers")
+        scanDNSResolvers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -363,6 +368,109 @@ public final class NetworkScanner: Scanner {
                 ))
             }
         }
+    }
+
+    // MARK: - DNS Resolver Inspection
+
+    /// Well-known public resolvers — flagging these is informational only because plenty
+    /// of users intentionally pick Cloudflare/Google for privacy reasons.
+    private let knownPublicResolvers: [String: String] = [
+        "1.1.1.1": "Cloudflare",
+        "1.0.0.1": "Cloudflare",
+        "8.8.8.8": "Google",
+        "8.8.4.4": "Google",
+        "9.9.9.9": "Quad9",
+        "149.112.112.112": "Quad9",
+        "208.67.222.222": "OpenDNS",
+        "208.67.220.220": "OpenDNS",
+        "76.76.2.0": "Control D",
+        "94.140.14.14": "AdGuard",
+        "94.140.15.15": "AdGuard",
+        "185.228.168.9": "CleanBrowsing",
+    ]
+
+    private func scanDNSResolvers(findings: inout [Finding], errors: inout [String]) {
+        // `scutil --dns` is the canonical way to read the macOS resolver state across
+        // every interface and DoH configuration. We extract the "nameserver" lines.
+        let result = ShellRunner.run("/usr/sbin/scutil", arguments: ["--dns"], timeout: 5)
+        guard result.success else { return }
+
+        var customServers: [String] = []
+        var publicServers: [(addr: String, name: String)] = []
+
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            // Lines look like:  nameserver[0] : 192.168.1.1
+            guard trimmed.hasPrefix("nameserver[") else { continue }
+            guard let colon = trimmed.range(of: ":") else { continue }
+            let addr = trimmed[colon.upperBound...].trimmingCharacters(in: .whitespaces)
+            guard !addr.isEmpty else { continue }
+
+            // Skip RFC1918 / link-local / loopback addresses — those are LAN gateways
+            // and corporate DNS, not malicious.
+            if isPrivateAddress(addr) { continue }
+
+            if let name = knownPublicResolvers[addr] {
+                publicServers.append((addr: addr, name: name))
+            } else {
+                customServers.append(addr)
+            }
+        }
+
+        // Deduplicate
+        let uniquePublic = Array(Set(publicServers.map { "\($0.name) (\($0.addr))" }))
+        let uniqueCustom = Array(Set(customServers))
+
+        if !uniqueCustom.isEmpty {
+            // An unfamiliar public DNS server with no LAN provenance is a real concern:
+            // either a configuration leak or an attempt to short-circuit safe-browsing.
+            findings.append(Finding(
+                severity: .medium, category: .networkActivity,
+                title: "Unrecognized public DNS server in use",
+                detail: "Resolvers configured: \(uniqueCustom.joined(separator: ", ")) — verify these are operated by your ISP or a trusted provider",
+                path: nil,
+                remediation: "Inspect with: scutil --dns ; reset to DHCP defaults in System Settings > Network > [interface] > Details > DNS"
+            ))
+        }
+
+        if !uniquePublic.isEmpty {
+            findings.append(Finding(
+                severity: .low, category: .networkActivity,
+                title: "Public DNS resolver configured",
+                detail: "Using \(uniquePublic.joined(separator: ", ")) — fine if you set this intentionally for privacy",
+                path: nil,
+                remediation: "If unintended, remove in System Settings > Network > [interface] > Details > DNS"
+            ))
+        }
+
+        // Also check whether any DNS server is being delivered via configuration profile
+        // (an MDM or an installed .mobileconfig) — surfaces unattributed DNS overrides.
+        let profileResult = ShellRunner.run("/usr/bin/profiles", arguments: ["show", "-output", "stdout"], timeout: 10)
+        if profileResult.success && profileResult.stdout.contains("com.apple.dnsSettings.managed") {
+            findings.append(Finding(
+                severity: .medium, category: .networkActivity,
+                title: "DNS resolver is being enforced by a configuration profile",
+                detail: "A profile is overriding the system DNS — this is normal on managed Macs, suspicious otherwise",
+                path: nil,
+                remediation: "List installed profiles: profiles list — remove unfamiliar ones in System Settings > Privacy & Security > Profiles"
+            ))
+        }
+    }
+
+    private func isPrivateAddress(_ addr: String) -> Bool {
+        if addr == "127.0.0.1" || addr == "::1" { return true }
+        if addr.hasPrefix("10.") { return true }
+        if addr.hasPrefix("192.168.") { return true }
+        if addr.hasPrefix("169.254.") { return true }    // link-local
+        if addr.hasPrefix("fe80:") || addr.hasPrefix("fc") || addr.hasPrefix("fd") { return true }
+        // 172.16.0.0 -> 172.31.255.255
+        if addr.hasPrefix("172.") {
+            let parts = addr.split(separator: ".")
+            if parts.count >= 2, let second = Int(parts[1]), (16...31).contains(second) {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Code Signature Check

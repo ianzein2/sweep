@@ -434,6 +434,160 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" campaign (2024-2025) — fake job interview lures
+        // dropping a JavaScript stealer (BeaverTail) and a Python backdoor (InvisibleFerret).
+        // Distributed inside trojanized npm packages and "video chat" installer scripts.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "MiroTalk", "ChainLink-Pro",
+                           "FCCCall", "FreeConferenceCallNode"],
+            bundleIdentifiers: ["com.miro.talk", "com.chainlink.pro"],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/.npl",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pay", "ssid",
+                           "p.zi", "bow.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cache/.pay",
+                "/private/tmp/.cache/.bow",
+                "~/.cache/.pay",
+                "~/.npm/.cache/.invisible",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "FrostyFerret", "FerretCoin",
+                           "ChromeUpdate", "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.apple.chromeupdate"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/com.apple.chromeupdate",
+            ],
+            launchAgentLabels: ["com.apple.chromeupdate.helper"]
+        ),
+        // Nim-based DPRK stealer/backdoor first analyzed in mid-2025 (Huntress, SentinelOne).
+        // Communicates over WebSocket and persists via LoginHook + LaunchAgent.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "trolagent", "GoogIeHelper",
+                           "CoreKitAgent", "ZoomVideoSDK"],
+            bundleIdentifiers: ["com.google.chromehelper", "com.zoomvideosdk.helper"],
+            filePaths: [
+                "/private/var/tmp/.nimdoor",
+                "/private/tmp/.coreagent",
+                "~/Library/Caches/com.google.chromehelper",
+            ],
+            launchAgentLabels: ["com.google.chromehelper", "com.zoom.helper.agent"]
+        ),
+        // China-linked RAT (HZ Rat) ported to macOS in 2024 — typically piggybacks on
+        // OpenVPN Connect or DingTalk installers and writes to ~/Library/Preferences with
+        // a fake .plist extension.
+        SpywareSignature(
+            name: "HZ Rat (macOS)",
+            processNames: ["HZRat", "hzrat", "OpenVPNHelper", "DingTalkHelperAgent"],
+            bundleIdentifiers: ["com.openvpn.helper.agent", "com.dingtalk.helperagent"],
+            filePaths: [
+                "/private/var/tmp/.hzrat",
+                "~/Library/Preferences/com.openvpn.helper.plist",
+            ],
+            launchAgentLabels: ["com.openvpn.helper", "com.dingtalk.client.helper"]
+        ),
+        // North Korean (HiddenRisk) Rust-based loader (Nov 2024). Abuses extended file
+        // attributes (xattrs) to hide its payload — name reflects that delivery technique.
+        SpywareSignature(
+            name: "RustyAttr (HiddenRisk)",
+            processNames: ["RustyAttr", "rustyattr", "OptionalUpdate", "InvestmentStrategy"],
+            bundleIdentifiers: ["com.apple.optionalupdate"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.optionalupdate",
+            ],
+            launchAgentLabels: ["com.apple.optionalupdate.daemon"]
+        ),
+        // Cross-platform spyware suite (originally iOS/Android, full macOS variant 2024-2025).
+        // Modular: each capability ships as a separate dylib loaded by the agent.
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["LightSpy", "lightspy", "lsd_agent", "macsupportd"],
+            bundleIdentifiers: ["com.apple.macsupport"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "/Library/Application Support/.lightspy",
+                "~/Library/Application Support/.lightspy",
+            ],
+            launchAgentLabels: ["com.apple.macsupport.daemon"]
+        ),
+        // Trustwave-reported macOS variant of LockBit (Apr 2024) — Go-based, asks for
+        // sudo on launch, then encrypts ~/Documents and ~/Desktop.
+        SpywareSignature(
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "macos_amd64", "macos_arm64"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.notlockbit",
+            ],
+            launchAgentLabels: []
+        ),
+        // Modular infostealer (Aug 2023) similar to AMOS but with its own C2.
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault", "system_update"],
+            bundleIdentifiers: ["com.shadowvault.system"],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.shadowvault",
+            ],
+            launchAgentLabels: ["com.shadowvault.system"]
+        ),
+        // Backdoor reported by Kaspersky (2024) targeting macOS developers via crypto
+        // tooling — drops a Mach-O loader as `loginhelperd` / `applehubd`.
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["applehubd", "AppleProcessHub", "loginhelperd"],
+            bundleIdentifiers: ["com.apple.process.hub"],
+            filePaths: [
+                "/private/tmp/.applehub",
+                "/Users/Shared/.applehub",
+            ],
+            launchAgentLabels: ["com.apple.process.hub"]
+        ),
+        // 3CX-style supply chain trojan reported in macOS Atom Editor / Notion clones
+        // during 2024-2025. Establishes WebSocket C2 over wss://.
+        SpywareSignature(
+            name: "SambaSpy (macOS)",
+            processNames: ["SambaSpy", "sambaspy", "AtomHelper", "NotionUpdateService"],
+            bundleIdentifiers: ["com.atom.helper.update", "com.notion.updater"],
+            filePaths: [
+                "/private/tmp/.sambaspy",
+                "~/Library/Application Support/.sambaspy",
+            ],
+            launchAgentLabels: ["com.atom.helper.update", "com.notion.updater"]
+        ),
+        // Crypto-mining payload (XMRig) frequently bundled with pirated apps and Roblox
+        // / Minecraft launchers in 2024-2025. Identification by binary name + persistence
+        // labels lets us flag both the miner and the dropper.
+        SpywareSignature(
+            name: "XMRig Crypto-miner",
+            processNames: ["xmrig", "XMRig", "kdevtmpfsi", "mshelper", "minerd",
+                           "WindowServer.helper", "com.apple.helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "/Users/Shared/.miner",
+                "~/Library/Application Support/.mshelper",
+            ],
+            launchAgentLabels: ["com.apple.miner", "com.miner.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

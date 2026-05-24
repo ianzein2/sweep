@@ -55,6 +55,27 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Gatekeeper")
+        checkGatekeeper(findings: &findings, errors: &errors)
+
+        progress?.update("checking boot-args")
+        checkBootArgs(findings: &findings, errors: &errors)
+
+        progress?.update("checking NVRAM CSR-Active-Config")
+        checkPartialSIPDisable(findings: &findings, errors: &errors)
+
+        progress?.update("checking SMB v1 protocol")
+        checkSMBv1(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wake-on-LAN")
+        checkWakeOnLAN(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen-lock hot corner")
+        checkHotCorners(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +465,225 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Gatekeeper
+
+    private func checkGatekeeper(findings: inout [Finding], errors: inout [String]) {
+        // `spctl --status` is the canonical check. macOS 13+ defaults assessments to enabled
+        // and disallows "Anywhere" through the UI, but `sudo spctl --master-disable` is still
+        // a one-shot bypass that some users leave on.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        guard result.success else { return }
+
+        let output = result.stdout.lowercased()
+        if output.contains("disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper is disabled",
+                detail: "macOS will run apps from any source without signature or notarization checks — anything downloaded can execute",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --master-enable"
+            ))
+        }
+
+        // Also check developer-mode assessments (specific to Notarization)
+        let assess = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status", "--verbose"], timeout: 5)
+        if assess.success && assess.stdout.lowercased().contains("developer id disabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Gatekeeper Developer ID checks disabled",
+                detail: "Notarization checks are off — apps from identified developers run without verification",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --enable --label \"Developer ID\""
+            ))
+        }
+    }
+
+    // MARK: - Boot arguments (rootkit / jailbreak indicators)
+
+    private func checkBootArgs(findings: inout [Finding], errors: inout [String]) {
+        // nvram boot-args holds kernel boot flags. Legitimate Macs have boot-args unset or
+        // empty. Common malicious / risky flags: `-v` (verbose), `-s` (single-user),
+        // `debug=0x100`, `keepsyms=1`. Together they often indicate someone is reverse-
+        // engineering the system or has installed a kernel-level rootkit/instrumentation.
+        let result = ShellRunner.run("/usr/sbin/nvram", arguments: ["boot-args"], timeout: 5)
+        guard result.success else { return }
+
+        // Output is like: `boot-args\t-v debug=0x100`
+        let value = result.stdout
+            .replacingOccurrences(of: "boot-args", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+
+        let riskyFlags: [(flag: String, why: String)] = [
+            ("-v", "verbose boot (often used during system tampering)"),
+            ("-s", "single-user boot (root shell without password)"),
+            ("debug=", "kernel debugger enabled"),
+            ("kcsuffix=", "non-standard kernel collection — possible rootkit"),
+            ("amfi_get_out_of_my_way=", "Apple Mobile File Integrity disabled — bypasses code signing"),
+            ("amfi=", "AMFI configuration modified — bypasses code signing"),
+            ("rootless=0", "SIP filesystem protections disabled"),
+        ]
+
+        for (flag, why) in riskyFlags where value.contains(flag) {
+            findings.append(Finding(
+                severity: flag.hasPrefix("amfi") || flag == "rootless=0" ? .high : .medium,
+                category: .hardening,
+                title: "Risky kernel boot flag set: \(flag)",
+                detail: "Current boot-args: \(value) — \(why)",
+                path: nil,
+                remediation: "Reset boot args: sudo nvram -d boot-args"
+            ))
+        }
+    }
+
+    // MARK: - Partial SIP disable via CSR-Active-Config
+
+    private func checkPartialSIPDisable(findings: inout [Finding], errors: inout [String]) {
+        // `csrutil status` reports overall enabled/disabled, but a partial-disable (e.g. only
+        // unsigned-kexts allowed) leaves SIP "enabled (custom)" — a subtle weakening that the
+        // existing SystemIntegrityScanner may not surface. We read the raw NVRAM word.
+        let result = ShellRunner.run("/usr/sbin/nvram", arguments: ["csr-active-config"], timeout: 5)
+        guard result.success else { return }
+
+        let value = result.stdout
+            .replacingOccurrences(of: "csr-active-config", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+
+        // Apple's default unset state ⇒ key absent. Any non-zero word ⇒ at least one SIP
+        // protection was deliberately disabled. We don't try to decode the bitmap — just
+        // flagging the existence of a custom config is enough for users to investigate.
+        if !value.contains("00 00 00 00") && !value.contains("00%00%00%00") {
+            findings.append(Finding(
+                severity: .medium, category: .systemIntegrity,
+                title: "System Integrity Protection has a custom configuration",
+                detail: "csr-active-config = \(value) — at least one SIP protection is selectively disabled",
+                path: nil,
+                remediation: "Run `csrutil status` for details; restore full SIP from Recovery: `csrutil enable`"
+            ))
+        }
+    }
+
+    // MARK: - SMB v1 (CVE-laden legacy protocol)
+
+    private func checkSMBv1(findings: inout [Finding], errors: inout [String]) {
+        // macOS disables SMB1 by default but the setting can be re-enabled in
+        // /Library/Preferences/SystemConfiguration/com.apple.smb.server.plist
+        // or via `defaults write`. SMB1 carries the EternalBlue family of bugs.
+        let serverResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.smb.server", "ProtocolVersionMap"
+        ], timeout: 5)
+        if serverResult.success {
+            // ProtocolVersionMap is a bitmask: 1 = SMB1, 2 = SMB2, 4 = SMB3. Any odd value
+            // means SMB1 is allowed. The default (unset) maps to SMB2/3.
+            let value = serverResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let mask = Int(value), mask & 0x1 != 0 {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "SMB v1 protocol is enabled on the file server",
+                    detail: "ProtocolVersionMap=\(mask) includes SMB1 — vulnerable to EternalBlue-class exploits",
+                    path: "/Library/Preferences/SystemConfiguration/com.apple.smb.server.plist",
+                    remediation: "Disable SMB1: sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server ProtocolVersionMap -int 6"
+                ))
+            }
+        }
+
+        // The client side has the same key under nsmb.conf — flag if SMB1 is enabled there
+        let clientResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.NetworkBrowser", "ProtocolVersionMap"
+        ], timeout: 5)
+        if clientResult.success {
+            let value = clientResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let mask = Int(value), mask & 0x1 != 0 {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SMB v1 protocol is enabled on the SMB client",
+                    detail: "Your Mac can connect to ancient SMB1 servers — fingerprintable on hostile networks",
+                    path: nil,
+                    remediation: "Disable: defaults write com.apple.NetworkBrowser ProtocolVersionMap -int 6"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wake-on-LAN
+
+    private func checkWakeOnLAN(findings: inout [Finding], errors: inout [String]) {
+        // `pmset -g` shows current power state including womp (Wake On Magic Packet).
+        // WoL allows anyone on the LAN to wake the Mac — paired with auto-login or an
+        // unlocked session, that's full physical access from across the network.
+        let result = ShellRunner.run("/usr/bin/pmset", arguments: ["-g"], timeout: 5)
+        guard result.success else { return }
+
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            // Lines look like:  womp                 1
+            if trimmed.hasPrefix("womp") {
+                let value = trimmed.replacingOccurrences(of: "womp", with: "").trimmingCharacters(in: .whitespaces)
+                if value == "1" {
+                    findings.append(Finding(
+                        severity: .low, category: .hardening,
+                        title: "Wake-on-LAN (magic packet) is enabled",
+                        detail: "Anyone on your local network can wake this Mac from sleep",
+                        path: nil,
+                        remediation: "Disable if not needed: sudo pmset -a womp 0"
+                    ))
+                }
+                break
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay anonymizes Safari traffic and DNS lookups. It can be disabled
+        // either at the Apple ID level or per-network — we only flag the per-network
+        // override, since some networks (work / corporate Wi-Fi) legitimately block it.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.networkserviceproxy", "NSPDisabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled for the current network",
+                    detail: "Safari traffic and DNS lookups are not being anonymized — expected on corporate networks that require visibility",
+                    path: nil,
+                    remediation: "If on a personal network: System Settings > [Apple ID] > iCloud > Private Relay"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Hot Corners
+
+    private func checkHotCorners(findings: inout [Finding], errors: inout [String]) {
+        // Hot corner action `6` = Disable Screen Saver. Combined with no automatic
+        // screen lock, this lets someone disable lock-out by parking the cursor.
+        // (Actions: 1=screen saver, 2=disable, 5=sleep, 6=disable SS, 10=lock screen, 13=quick note)
+        let corners = ["wvous-tl-corner", "wvous-tr-corner",
+                       "wvous-bl-corner", "wvous-br-corner"]
+        for corner in corners {
+            let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+                "read", "com.apple.dock", corner
+            ], timeout: 5)
+            guard result.success else { continue }
+
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "6" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Hot corner configured to disable screen saver: \(corner)",
+                    detail: "Parking the cursor in this screen corner will prevent the screen saver — and therefore the lock — from triggering",
+                    path: nil,
+                    remediation: "Change to a safer action (e.g. 'Lock Screen'): System Settings > Desktop & Dock > Hot Corners"
                 ))
             }
         }

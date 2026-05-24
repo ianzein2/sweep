@@ -72,17 +72,17 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | LaunchAgents/Daemons, login items, StartupItems, rc scripts, shell configs, cron, login hooks, periodic scripts, SSH keys, sudoers, PAM, emond, **Quick Look generators**, **Spotlight importers**, **Audio Unit / Screen Saver plug-ins**, **Input Methods**, **PrivilegedHelperTools**, **at jobs**, **macOS 13+ Background Items (btm)** |
+| **Evidence** | Stored screenshots, keystroke logs, screen recordings, crypto-wallet / browser-credential theft staging (AMOS family) |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Active connections, suspicious ports, /etc/hosts tampering, proxy / PAC hijack, **DNS resolver inspection** |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Chrome / Brave / Edge / Firefox / Safari extensions, **VSCode / Cursor / Windsurf** extensions, **Native Messaging Hosts**, **default-search-engine hijacks** |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, password-after-sleep, Internet Sharing, Lockdown Mode, Rapid Security Response, **Gatekeeper status**, **boot-args**, **NVRAM SIP config**, **SMB v1**, **Wake-on-LAN**, **iCloud Private Relay**, **hot-corner disable-screensaver** |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
