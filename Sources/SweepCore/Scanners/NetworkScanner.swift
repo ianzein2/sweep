@@ -49,6 +49,20 @@ public final class NetworkScanner: Scanner {
         "gsa.apple.com", "gspe1-ssl.ls.apple.com",
     ]
 
+    /// Domains that infostealers and banker malware redirect to phishing copies.
+    /// Any /etc/hosts entry pointing one of these at a non-Apple IP is high-confidence theft prep.
+    private let sensitiveDomains: [String] = [
+        // Banking / payments
+        "paypal.com", "venmo.com", "wise.com", "revolut.com", "chase.com",
+        "bankofamerica.com", "wellsfargo.com", "hsbc.com",
+        // Crypto exchanges
+        "coinbase.com", "binance.com", "kraken.com", "gemini.com",
+        "metamask.io", "phantom.app", "ledger.com", "trezor.io",
+        // Auth providers
+        "accounts.google.com", "login.microsoftonline.com", "github.com",
+        "id.apple.com", "appleid.apple.com",
+    ]
+
     public func scan(progress: ScanProgress? = nil) -> ScanResult {
         let start = Date()
         var findings: [Finding] = []
@@ -266,6 +280,22 @@ public final class NetworkScanner: Scanner {
                         detail: "Domain: \(domain) → \(ip) — blocks macOS security checks",
                         path: "/etc/hosts",
                         remediation: "Remove this line from /etc/hosts: sudo nano /etc/hosts"
+                    ))
+                }
+            }
+
+            // Banking / crypto / auth domain redirection is high-confidence credential phishing.
+            // Match on a word-boundary-ish check: the domain must appear as a host token,
+            // not just a substring inside something larger.
+            let hostTokens = parts.dropFirst().map { $0.lowercased() }
+            for domain in sensitiveDomains {
+                if hostTokens.contains(where: { $0 == domain || $0.hasSuffix(".\(domain)") }) {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Sensitive domain redirected in /etc/hosts",
+                        detail: "Domain: \(domain) → \(ip) — phishing or credential-theft setup",
+                        path: "/etc/hosts",
+                        remediation: "Remove this line: sudo nano /etc/hosts — verify the entry isn't part of legitimate dev/test work"
                     ))
                 }
             }

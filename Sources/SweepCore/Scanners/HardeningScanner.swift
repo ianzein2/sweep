@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking for hidden user accounts")
+        checkHiddenUsers(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bonjour exposure")
+        checkBonjourExposure(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +455,118 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Hidden User Accounts
+
+    private func checkHiddenUsers(findings: inout [Finding], errors: inout [String]) {
+        // Attackers create hidden local users (UID < 500 or HiddenUsersList entry) as a
+        // backdoor that survives password changes and isn't visible at the login window.
+        let hiddenList = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.loginwindow", "HiddenUsersList"
+        ], timeout: 5)
+        if hiddenList.success {
+            let raw = hiddenList.stdout
+            let names = raw.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: " \t\",()")) }
+                .filter { !$0.isEmpty && $0 != "(" && $0 != ")" }
+            // Apple's stock hidden users — these are expected.
+            let appleHidden: Set<String> = [
+                "_mbsetupuser", "_appleeventsd", "_softwareupdate", "_taskgated", "root",
+            ]
+            let suspicious = names.filter { !$0.hasPrefix("_") && !appleHidden.contains($0) }
+            if !suspicious.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Hidden user account(s) configured",
+                    detail: "HiddenUsersList contains non-system users: \(suspicious.joined(separator: ", "))",
+                    path: "/Library/Preferences/com.apple.loginwindow.plist",
+                    remediation: "Inspect with: dscl . -read /Users/<name> — and delete: sudo dscl . -delete /Users/<name>"
+                ))
+            }
+        }
+
+        // dscl-listed users with UID below the normal user range (501+) and not in the
+        // Apple-allocated system range (0, 1-499) are unusual — review every such account.
+        let dscl = ShellRunner.run("/usr/bin/dscl", arguments: [".", "-list", "/Users", "UniqueID"], timeout: 5)
+        guard dscl.success else { return }
+        for rawLine in dscl.stdout.split(separator: "\n") {
+            let parts = String(rawLine).split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard parts.count >= 2,
+                  let uid = Int(parts[parts.count - 1]) else { continue }
+            let user = parts[0]
+            // Apple uses 1-300 for system users (all prefixed with _ ). 301-499 is unused
+            // by Apple and a known persistence trick — accounts in this range are suspect.
+            if uid >= 300 && uid < 500 && !user.hasPrefix("_") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "User account with system-range UID (\(uid))",
+                    detail: "User \"\(user)\" has UID \(uid) — places it in Apple's reserved range while not following the _name convention, a backdoor pattern",
+                    path: nil,
+                    remediation: "Inspect: dscl . -read /Users/\(user) — remove if not recognized: sudo dscl . -delete /Users/\(user)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac lets you locate or remote-wipe a stolen laptop. Disabling it is a
+        // common pre-theft step (and also a common omission on developer Macs).
+        let fmm = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac.plist", "FMMEnabled"
+        ], timeout: 5)
+        // The plist is owned by root; reading it without sudo may fail silently. Only flag if we got a definitive 0.
+        if fmm.success {
+            let value = fmm.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "Cannot locate or remote-wipe this Mac if it's lost or stolen",
+                    path: nil,
+                    remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Bonjour / mDNS exposure
+
+    private func checkBonjourExposure(findings: inout [Finding], errors: inout [String]) {
+        // mDNS broadcasts let any device on the LAN see what services this Mac is advertising
+        // (file shares, screen shares, AirPlay receivers). Common attacker recon vector on
+        // shared networks (cafes, hotels, conferences).
+        let services = ShellRunner.run("/usr/bin/dns-sd", arguments: ["-Z", "_services._dns-sd._udp", "local"], timeout: 5)
+        // dns-sd is interactive; the timeout will fire and we read partial output. Acceptable.
+        let stdout = services.stdout
+        guard !stdout.isEmpty else { return }
+
+        // High-risk service types that expose this Mac to LAN reconnaissance.
+        let exposedTypes: [(name: String, label: String)] = [
+            ("_smb._tcp",       "SMB file sharing"),
+            ("_afpovertcp._tcp", "AFP file sharing"),
+            ("_rfb._tcp",       "Screen Sharing (VNC)"),
+            ("_ssh._tcp",       "SSH"),
+            ("_workstation._tcp", "Workstation advertisement"),
+            ("_airplay._tcp",   "AirPlay receiver"),
+            ("_raop._tcp",      "AirPlay audio"),
+        ]
+        var advertised: [String] = []
+        for entry in exposedTypes where stdout.contains(entry.name) {
+            advertised.append(entry.label)
+        }
+        if advertised.count >= 2 {
+            // One service is normal; advertising multiple = your Mac is broadcasting its presence broadly.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Multiple Bonjour services advertised on LAN",
+                detail: "This Mac is broadcasting: \(advertised.joined(separator: ", ")) — visible to anyone on the same network",
+                path: nil,
+                remediation: "Disable unused sharing services in System Settings > General > Sharing"
+            ))
         }
     }
 

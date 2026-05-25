@@ -434,6 +434,224 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" campaign (Lazarus / BlueNoroff, 2024-2025) —
+        // delivered via fake job interviews and trojanized npm packages.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "p.js", "n2.js"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.pyp",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pay.py", "bow.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.invisible",
+                "/private/tmp/mp.py",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["OtterCookie", "ottercookie", "otter_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ottercookie",
+                "~/Library/Application Support/.otter",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FrostyFerret"],
+            bundleIdentifiers: ["com.zoom.zoomus.helper", "com.zoom.us.installer"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.FrostyFerret",
+                "~/Library/Caches/com.apple.helpd/.chromeupdate",
+            ],
+            launchAgentLabels: ["com.zoom.installer"]
+        ),
+        // BlueNoroff macOS toolset (2024-2025)
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todo_dropper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: []
+        ),
+        // NimDoor (BlueNoroff, April 2025) — Nim-language backdoor distributed via fake Zoom updates.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIeHelper", "CoreKitAgent", "trojan_nim"],
+            bundleIdentifiers: ["com.google.googIe.helper"],  // Note: capital I instead of l
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.GoogIe",
+                "~/Library/LaunchAgents/com.google.googIe.plist",
+            ],
+            launchAgentLabels: ["com.google.googIe.helper"]
+        ),
+        // HZ Rat (China-aligned, mid-2024) — collects WeChat / DingTalk data on macOS.
+        SpywareSignature(
+            name: "HZ Rat",
+            processNames: ["HZRat", "hzrat", "OpenVPNConnect", "openvpnchk"],
+            bundleIdentifiers: ["com.openvpn.OpenVPN-Connect"],  // imposter
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/tmp/.openvpnchk",
+            ],
+            launchAgentLabels: ["com.openvpn.connect"]
+        ),
+        // JaskaGO (Go-based infostealer, late 2023 / 2024) — distributed via cracked installers.
+        SpywareSignature(
+            name: "JaskaGO",
+            processNames: ["JaskaGO", "jaskago", "jas_agent"],
+            bundleIdentifiers: ["com.jaska.agent"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.JaskaGO",
+            ],
+            launchAgentLabels: ["com.jaska.service"]
+        ),
+        // RustDoor / Trojan.MAC.RustDoor (BlackCat-affiliated, 2024) — Rust backdoor.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "zshrc_aliases"],
+            bundleIdentifiers: ["com.visualstudio.code.updater"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "~/Public/.rustdoor",
+                "~/.config/.zshrc_aliases",
+            ],
+            launchAgentLabels: ["com.visualstudio.code.updater"]
+        ),
+        // CoreNote / KandyKorn relative (Lazarus, late 2024)
+        SpywareSignature(
+            name: "CoreNote",
+            processNames: ["CoreNote", "corenote", "objc_helper", "core_note"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.corenote",
+                "~/Library/Group Containers/.core",
+            ],
+            launchAgentLabels: []
+        ),
+        // OSAMiner — long-running AppleScript-based XMRig cryptominer.
+        SpywareSignature(
+            name: "OSAMiner",
+            processNames: ["OSAMiner", "osaminer", "MaintenanceService", "xmrig"],
+            bundleIdentifiers: ["com.apple.maintenance.service"],  // imposter
+            filePaths: [
+                "/Library/Caches/com.apple.audio.driver",
+                "~/Library/Caches/com.apple.audio.driver",
+                "~/Library/Application Support/.minertools",
+            ],
+            launchAgentLabels: ["com.apple.maintenance.service", "com.apple.audio.helper"]
+        ),
+        // AppleProcessHub (early-2024 modular stealer)
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "ProcessHubAgent"],
+            bundleIdentifiers: ["com.apple.processhub"],  // imposter
+            filePaths: [
+                "/private/tmp/.applehub",
+                "~/Library/Application Support/.ProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        // CherryLoader / SnakeScript (mid-2024) — multi-stage downloader.
+        SpywareSignature(
+            name: "CherryLoader",
+            processNames: ["CherryLoader", "cherryloader", "cherry_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cherry",
+                "~/Library/Application Support/.cherry_loader",
+            ],
+            launchAgentLabels: ["com.cherry.loader"]
+        ),
+        // Trojan-Proxy.OSX.Agent (Kaspersky, Dec-2023 / 2024) — distributed in cracked apps.
+        // Note: the malware uses "WindowServers" (plural) as an imitation — real Apple process is "WindowServer".
+        SpywareSignature(
+            name: "Trojan-Proxy.OSX.Agent",
+            processNames: ["WindowServers", "proxyhelper"],
+            bundleIdentifiers: ["com.4starsoft.windowservers"],
+            filePaths: [
+                "/Library/Application Support/com.apple.WindowServer.plist",  // dropped plist using fake Apple label
+            ],
+            launchAgentLabels: ["GoogleHelperUpdater"]
+        ),
+        // AdLoad — long-running macOS adware family with many drop names (Apple XProtect-flagged).
+        SpywareSignature(
+            name: "AdLoad",
+            processNames: [
+                "PracticalCommander", "ElegantArchive", "ProductiveAnalysis",
+                "AnalyzerExtensionHost", "SkilledObjectAgent", "RotationalAxisAgent",
+                "QualityPlaceSearch", "ActivityElementSkill",
+            ],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.PracticalCommander",
+                "/Library/Application Support/com.PracticalCommander",
+            ],
+            launchAgentLabels: []
+        ),
+        // Pirrit / Bundlore — historical but still widely active adware/spyware hybrid.
+        SpywareSignature(
+            name: "Pirrit / Bundlore",
+            processNames: ["pirrit", "bundlore", "InstallMac", "MyShopcoupon", "GenieoUpdater"],
+            bundleIdentifiers: ["com.genieoinnovation.macextension", "com.genieo.completer"],
+            filePaths: [
+                "~/Library/Application Support/Genieo",
+                "~/Library/Application Support/InstallMac",
+                "~/Library/LaunchAgents/com.genieoinnovation.macextension.plist",
+            ],
+            launchAgentLabels: ["com.genieoinnovation.macextension", "com.genieo.completer.update"]
+        ),
+        // CrossBarking (Squarex, Oct-2024) — Arc browser extension exploiting boost feature.
+        SpywareSignature(
+            name: "CrossBarking",
+            processNames: ["CrossBarking", "crossbarking", "arc_boost"],
+            bundleIdentifiers: ["company.thebrowser.Browser.boost"],
+            filePaths: [
+                "~/Library/Application Support/Arc/User Data/.crossbarking",
+            ],
+            launchAgentLabels: []
+        ),
+        // OSX.PuzzleMaker / new infostealer chains (early 2025) — credential harvester.
+        SpywareSignature(
+            name: "OSX.PuzzleMaker",
+            processNames: ["PuzzleMaker", "puzzlemaker", "puzzle_helper"],
+            bundleIdentifiers: ["com.puzzlemaker.helper"],
+            filePaths: [
+                "/private/tmp/.puzzle",
+                "~/Library/Application Support/.PuzzleMaker",
+            ],
+            launchAgentLabels: ["com.puzzlemaker.service"]
+        ),
+        // FrigidStealer (mid-2024) — JavaScript-staged macOS stealer via fake browser-update lures.
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "FrigidUpdate"],
+            bundleIdentifiers: ["com.adobe.flashplayer.frigid"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.adobe.flash.update"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +668,27 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed in 2024-2025 droppers
+        "com.apple.maintenance.service",
+        "com.apple.audio.helper",
+        "com.apple.processhub",
+        "com.apple.helpd.update",
+        "com.apple.systempreferences.helper",
+        "com.apple.protectedcloudstorage.daemon",
+    ]
+
+    /// Brand bundle-ID patterns impersonating well-known vendors.
+    /// Real vendors don't sit in user-writable LaunchAgent paths with these names.
+    public static let fakeBrandBundlePatterns: [String] = [
+        "com.google.googIe.helper",         // capital I instead of l
+        "com.google.chromeupdate.helper",   // real ID is com.google.keystone
+        "com.zoom.zoomus.helper",            // real ID is us.zoom.xos
+        "com.zoom.us.installer",
+        "com.adobe.flashplayer.frigid",     // Flash Player is dead — any new entry is malicious
+        "com.adobe.flash.update",
+        "com.visualstudio.code.updater",    // VSCode auto-updates internally, not via separate plist
+        "com.openvpn.OpenVPN-Connect",
+        "com.4starsoft.windowservers",      // sounds-like-Apple imposter
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -486,6 +725,30 @@ public struct SpywareSignature {
         for suffix in suspiciousSuffixes {
             if bundleId.hasSuffix(suffix) {
                 // This is suspicious — most Apple daemons don't use generic suffixes
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Checks if a bundle ID is impersonating a well-known non-Apple vendor.
+    /// Catches mid-2024+ droppers that hide as "Google Helper", "Zoom Installer", etc.
+    public static func isFakeBrandBundleId(_ bundleId: String) -> Bool {
+        if fakeBrandBundlePatterns.contains(bundleId) { return true }
+
+        // Per-segment look-alike check (so we don't false-positive on real Apple IDs that
+        // legitimately contain capital I, like ".IconSizeService"). A segment whose
+        // visually-normalized form equals a vendor name — but whose plain-lowercased form
+        // doesn't — is a confusable.
+        let vendors: Set<String> = ["google", "apple", "microsoft", "amazon", "zoom"]
+        for seg in bundleId.split(separator: ".") {
+            let plain = String(seg).lowercased()
+            if vendors.contains(plain) { continue }  // genuine segment
+            let normalized = plain
+                .replacingOccurrences(of: "0", with: "o")
+                .replacingOccurrences(of: "1", with: "l")
+                .replacingOccurrences(of: "i", with: "l")  // catches googIe-style after lowercase
+            if vendors.contains(normalized) && plain != normalized {
                 return true
             }
         }

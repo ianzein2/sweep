@@ -42,6 +42,15 @@ public final class SystemIntegrityScanner: Scanner {
         progress?.update("checking XProtect status")
         checkXProtectHealth(findings: &findings, errors: &errors)
 
+        // 5. macOS version freshness — unpatched OSes accumulate publicly-disclosed CVEs.
+        progress?.update("checking macOS version")
+        checkOSVersionFreshness(findings: &findings, errors: &errors)
+
+        // 6. Quarantine event database — apps that bypassed Gatekeeper leave no quarantine
+        //    entry. We flag recently-added launchable bundles that are missing the xattr.
+        progress?.update("checking quarantine bypass")
+        checkQuarantineBypass(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -315,5 +324,123 @@ public final class SystemIntegrityScanner: Scanner {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         return fmt.string(from: date)
+    }
+
+    // MARK: - macOS Version Freshness
+
+    /// Minimum macOS versions per major release that contain critical security fixes.
+    /// Each entry: (major, minimum-patch-level-with-known-critical-fixes, "well-known CVE label").
+    /// We don't try to track every CVE — only the ones Apple has marked as "actively exploited".
+    private let minimumSafeVersions: [(major: Int, minor: Int, advisory: String)] = [
+        // Sonoma 14.x — CVE-2024-23225 (kernel, actively exploited) patched in 14.4
+        (14, 4, "CVE-2024-23225 (Sonoma kernel, actively exploited)"),
+        // Ventura 13.x — CVE-2024-23225 in 13.6.5
+        (13, 7, "Ventura security responses through 13.7"),
+        // Monterey 12.x — Apple stopped shipping fixes in late 2024
+        (12, 7, "Monterey (unsupported since late 2024 — upgrade strongly recommended)"),
+    ]
+
+    private func checkOSVersionFreshness(findings: inout [Finding], errors: inout [String]) {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let major = v.majorVersion
+        let minor = v.minorVersion
+
+        // macOS < 12 (Big Sur and earlier) — fully unsupported, won't receive any new fixes.
+        if major < 12 {
+            findings.append(Finding(
+                severity: .high, category: .systemIntegrity,
+                title: "macOS \(major).\(minor) is end-of-life",
+                detail: "Apple no longer ships security updates for macOS \(major) — every newly-disclosed CVE remains unpatched",
+                path: nil,
+                remediation: "Upgrade to a supported macOS release: System Settings > General > Software Update"
+            ))
+            return
+        }
+
+        // Match against the minimum-safe table.
+        if let entry = minimumSafeVersions.first(where: { $0.major == major }) {
+            if minor < entry.minor {
+                let isOlderMajor = major < 14
+                findings.append(Finding(
+                    severity: isOlderMajor ? .high : .medium,
+                    category: .systemIntegrity,
+                    title: "macOS \(major).\(minor) is missing critical security updates",
+                    detail: "Behind minimum recommended patch level (\(major).\(entry.minor)) — \(entry.advisory)",
+                    path: nil,
+                    remediation: "Update macOS: System Settings > General > Software Update"
+                ))
+            }
+        }
+
+        // Even the latest known major (15, 16, …) — flag if the patch-level looks stale by date.
+        // Apple cuts a point release roughly every 1-2 months; >180 days with no patch means
+        // either the user disabled updates or a recent release is missing.
+        let kernPath = "/System/Library/Kernels/kernel"
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: kernPath),
+           let modDate = attrs[.modificationDate] as? Date {
+            let days = Calendar.current.dateComponents([.day], from: modDate, to: Date()).day ?? 0
+            if days > 180 {
+                findings.append(Finding(
+                    severity: .medium, category: .systemIntegrity,
+                    title: "Kernel hasn't been patched in \(days) days",
+                    detail: "Last system update appears to be \(formatDate(modDate)) — recent macOS updates may be available",
+                    path: nil,
+                    remediation: "Check for updates: System Settings > General > Software Update"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Quarantine Bypass
+
+    private func checkQuarantineBypass(findings: inout [Finding], errors: inout [String]) {
+        // Every file downloaded via a browser or AirDrop is tagged com.apple.quarantine.
+        // Stealers commonly strip this xattr with `xattr -d` to bypass Gatekeeper on first run.
+        // Recently-installed .app bundles in /Applications without the xattr — and without
+        // an Apple/known signature — are worth surfacing.
+        let fm = FileManager.default
+        let appDirs = ["/Applications", "\(ShellRunner.realUserHome)/Applications"]
+
+        let cutoffDays: TimeInterval = 30
+        let cutoff = Date(timeIntervalSinceNow: -cutoffDays * 86400)
+        var flagged = 0
+
+        for dir in appDirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            // Pre-filter to recently-modified .app bundles only — avoids spctl-spamming on a
+            // freshly-installed Mac where every app's mtime is recent.
+            let recentApps = contents
+                .filter { $0.hasSuffix(".app") }
+                .compactMap { entry -> (String, Date)? in
+                    let appPath = "\(dir)/\(entry)"
+                    guard let attrs = try? fm.attributesOfItem(atPath: appPath),
+                          let modDate = attrs[.modificationDate] as? Date,
+                          modDate > cutoff else { return nil }
+                    return (appPath, modDate)
+                }
+                .sorted(by: { $0.1 > $1.1 })  // newest first
+                .prefix(20)  // hard cap on spctl calls
+
+            for (appPath, _) in recentApps {
+                let entry = URL(fileURLWithPath: appPath).lastPathComponent
+                let xattr = ShellRunner.run("/usr/bin/xattr", arguments: ["-p", "com.apple.quarantine", appPath], timeout: 3)
+                let hasQuarantine = xattr.success && !xattr.stdout.isEmpty
+                let spctl = ShellRunner.run("/usr/sbin/spctl", arguments: ["-a", "-vv", appPath], timeout: 5)
+                let isAppleSigned = spctl.stderr.contains("source=Apple")
+                let isAccepted = spctl.stderr.contains("accepted")
+
+                if !hasQuarantine && !isAppleSigned && !isAccepted {
+                    findings.append(Finding(
+                        severity: .medium, category: .systemIntegrity,
+                        title: "Recently installed app missing quarantine attribute",
+                        detail: "\(entry) installed within the last \(Int(cutoffDays)) days but has no quarantine xattr and isn't Apple-signed — possible Gatekeeper bypass",
+                        path: appPath,
+                        remediation: "Verify the app's origin: spctl -a -vv \"\(appPath)\" — remove if unfamiliar"
+                    ))
+                    flagged += 1
+                    if flagged >= 5 { return }
+                }
+            }
+        }
     }
 }

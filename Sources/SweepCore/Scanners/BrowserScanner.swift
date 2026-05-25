@@ -64,6 +64,17 @@ public final class BrowserScanner: Scanner {
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
 
+        // 5. Browser push notification subscriptions — fake "tech support" and crypto-scam
+        //    sites pushed notifications became a major 2023-2025 phishing vector.
+        progress?.update("scanning push notification subscriptions")
+        scanPushNotificationSubscriptions(findings: &findings, errors: &errors)
+
+        // 6. Native messaging hosts — Chrome/Brave/Edge extensions can invoke a local binary
+        //    through these manifests, bypassing the browser sandbox. Hijacked manifests are
+        //    a known persistence and C2 channel.
+        progress?.update("scanning native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -418,5 +429,183 @@ public final class BrowserScanner: Scanner {
         }
 
         return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+    }
+
+    // MARK: - Push Notification Subscriptions
+
+    /// Keywords that consistently appear in scam-pushed notification origins.
+    /// Tech-support scams, fake AV ads, and crypto-recovery scams use these.
+    private let scamPushKeywords: [String] = [
+        "tech-support", "techsupport", "windows-defender", "mcafee-alert",
+        "norton-alert", "antivirus-warning", "virus-detected", "system-alert",
+        "captcha-verify", "robot-check", "recover-wallet", "wallet-recovery",
+        "metamask-support", "coinbase-support", "binance-support",
+        "apple-icloud-secure", "icloud-locked", "appleid-locked",
+        "click-allow", "press-allow", "verify-account-now",
+    ]
+
+    private func scanPushNotificationSubscriptions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Chromium-family browsers store granted notifications in Preferences under
+        // profile.content_settings.exceptions.notifications. Reading the file as JSON works
+        // for Chrome / Brave / Edge / Arc.
+        let chromiumProfiles: [(browser: String, root: String)] = [
+            ("Chrome", "\(home)/Library/Application Support/Google/Chrome"),
+            ("Brave",  "\(home)/Library/Application Support/BraveSoftware/Brave-Browser"),
+            ("Edge",   "\(home)/Library/Application Support/Microsoft Edge"),
+            ("Arc",    "\(home)/Library/Application Support/Arc/User Data"),
+        ]
+        for (browser, root) in chromiumProfiles {
+            guard fm.fileExists(atPath: root),
+                  let profiles = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for profile in profiles {
+                let prefsPath = "\(root)/\(profile)/Preferences"
+                guard let data = fm.contents(atPath: prefsPath),
+                      let prefs = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let profileDict = prefs["profile"] as? [String: Any],
+                      let settings = profileDict["content_settings"] as? [String: Any],
+                      let exceptions = settings["exceptions"] as? [String: Any],
+                      let notifications = exceptions["notifications"] as? [String: Any]
+                else { continue }
+
+                for (origin, value) in notifications {
+                    guard let entry = value as? [String: Any],
+                          let setting = entry["setting"] as? Int,
+                          setting == 1 else { continue }  // 1 = allow
+                    let originLower = origin.lowercased()
+                    if let kw = scamPushKeywords.first(where: { originLower.contains($0) }) {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "\(browser) allows push notifications from scam-like domain",
+                            detail: "Origin: \(origin) (\(profile)) — matched keyword \"\(kw)\"",
+                            path: prefsPath,
+                            remediation: "Revoke in \(browser): chrome://settings/content/notifications"
+                        ))
+                    }
+                }
+            }
+        }
+
+        // Safari stores notification permissions in a binary plist.
+        let safariPlist = "\(home)/Library/Safari/UserNotificationPermissions.plist"
+        if let data = fm.contents(atPath: safariPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            for (origin, value) in plist {
+                guard let entry = value as? [String: Any] else { continue }
+                let permission = entry["Permission"] as? String ?? ""
+                guard permission == "Granted" else { continue }
+                let originLower = origin.lowercased()
+                if let kw = scamPushKeywords.first(where: { originLower.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Safari allows push notifications from scam-like domain",
+                        detail: "Origin: \(origin) — matched keyword \"\(kw)\"",
+                        path: safariPlist,
+                        remediation: "Revoke in Safari > Settings > Websites > Notifications"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Native Messaging Hosts
+
+    /// Manifests in these directories let a Chromium extension exec a local binary by name.
+    /// Hijacked manifests are how some 2024 extensions reach outside the sandbox to drop payloads.
+    private let nativeHostDirs: [String] = [
+        // System-wide
+        "/Library/Google/Chrome/NativeMessagingHosts",
+        "/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+        "/Library/Application Support/Chromium/NativeMessagingHosts",
+        "/Library/Microsoft/Edge/NativeMessagingHosts",
+        "/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+    ]
+
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Well-known legitimate native hosts that ship with mainstream apps.
+        let knownHosts: Set<String> = [
+            "com.1password.1password",
+            "com.1password.browser_support",
+            "com.bitwarden.browser",
+            "com.bitwarden.safari",
+            "com.lastpass.lpmacdesktopbinary",
+            "com.dashlane.dashlanephonefinder",
+            "com.honey.app",
+            "com.google.chrome.gnubby",
+            "com.google.chrome.smartcard_connector",
+            "com.google.chrome.web_app_provider",
+            "org.keepassxc.keepassxc_browser",
+            "com.docker.desktop",
+            "com.zoom.ZoomChromeExtension",
+            "com.microsoft.browsercoreservices",
+        ]
+
+        var perBrowserDirs = nativeHostDirs
+        // Per-user manifests
+        perBrowserDirs.append(contentsOf: [
+            "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+            "\(home)/Library/Application Support/Chromium/NativeMessagingHosts",
+            "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts",
+            "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+            "\(home)/Library/Application Support/Arc/User Data/NativeMessagingHosts",
+        ])
+
+        for dir in perBrowserDirs {
+            guard fm.fileExists(atPath: dir),
+                  let manifests = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in manifests where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let hostName = (json["name"] as? String) ?? entry.replacingOccurrences(of: ".json", with: "")
+                let executablePath = (json["path"] as? String) ?? ""
+                let allowedOrigins = (json["allowed_origins"] as? [String]) ?? []
+
+                if knownHosts.contains(hostName) { continue }
+
+                // Executable inside the user home or /tmp = high risk (real apps install to /Applications).
+                let inUserPath = executablePath.hasPrefix(home) || executablePath.hasPrefix("/tmp/") ||
+                                 executablePath.hasPrefix("/private/tmp/") || executablePath.hasPrefix("/var/tmp/")
+                let inAppDir = executablePath.hasPrefix("/Applications/") ||
+                               executablePath.hasPrefix("/Library/Application Support/") ||
+                               executablePath.hasPrefix("/usr/local/")
+
+                if inUserPath {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Native messaging host points to user/temp path",
+                        detail: "Host: \(hostName), exec: \(executablePath) — bridges browser extensions to a local binary",
+                        path: manifestPath,
+                        remediation: "Inspect the manifest, then remove: sudo rm \"\(manifestPath)\""
+                    ))
+                } else if !inAppDir && !executablePath.isEmpty {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "Native messaging host from unusual location",
+                        detail: "Host: \(hostName), exec: \(executablePath)",
+                        path: manifestPath,
+                        remediation: "Verify the host vendor matches the executable path"
+                    ))
+                }
+
+                // A host that allows ANY origin is a backdoor — any extension can call it.
+                if allowedOrigins.contains(where: { $0.contains("*") && !$0.contains("chrome-extension://") }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Native messaging host accepts wildcard origins",
+                        detail: "Host: \(hostName) accepts: \(allowedOrigins.joined(separator: ", "))",
+                        path: manifestPath,
+                        remediation: "Replace allowed_origins with the specific extension ID, or remove the manifest"
+                    ))
+                }
+            }
+        }
     }
 }

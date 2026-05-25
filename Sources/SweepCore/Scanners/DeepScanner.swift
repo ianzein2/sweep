@@ -37,6 +37,16 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Clipboard / pasteboard hijacker indicators — clipper malware swaps the active
+        //    pasteboard contents to redirect crypto transfers and harvest secrets.
+        progress?.update("checking pasteboard clipper indicators")
+        scanClipboardClippers(findings: &findings, errors: &errors)
+
+        // 7. Custom URL scheme handlers — attackers register handlers for sensitive schemes
+        //    (mailto:, sms:, ssh:) to intercept user actions and exfiltrate data.
+        progress?.update("checking URL scheme handlers")
+        scanURLSchemeHandlers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -276,6 +286,120 @@ public final class DeepScanner: Scanner {
                 detail: "This file is owned by root in your user directory — unusual for user apps",
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
+            ))
+        }
+    }
+
+    // MARK: - Clipboard / Pasteboard Clippers
+
+    private func scanClipboardClippers(findings: inout [Finding], errors: inout [String]) {
+        // Cheapest heuristic: enumerate user-owned LaunchAgents whose plists have a recent
+        // mtime AND reference an executable in a non-Apple location. We don't try to
+        // disassemble — that's expensive and noisy. Instead we focus on tell-tale invocation
+        // patterns (osascript snippets that read the clipboard on a timer, etc.).
+        let home = ShellRunner.realUserHome
+        let userAgentsDir = "\(home)/Library/LaunchAgents"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: userAgentsDir) else { return }
+
+        for entry in entries where entry.hasSuffix(".plist") {
+            let plistPath = "\(userAgentsDir)/\(entry)"
+            guard let data = fm.contents(atPath: plistPath),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { continue }
+
+            // Pull all string values out of the plist (Program, ProgramArguments, EnvironmentVariables…).
+            var concat = ""
+            for (_, value) in plist {
+                if let s = value as? String { concat += " " + s.lowercased() }
+                if let arr = value as? [String] { concat += " " + arr.joined(separator: " ").lowercased() }
+            }
+
+            // Clipboard-watching invocations: `osascript -e 'get the clipboard'`, repeated `pbpaste`,
+            // or a Python one-liner reading the pasteboard.
+            let isOsascriptClipboard = concat.contains("osascript") &&
+                (concat.contains("the clipboard") || concat.contains("pasteboard"))
+            let usesPbpaste = concat.contains("pbpaste") || concat.contains("pbcopy")
+            let usesPyClipboard = (concat.contains("python") || concat.contains("python3")) &&
+                (concat.contains("pyperclip") || concat.contains("nspasteboard"))
+
+            if isOsascriptClipboard || usesPbpaste || usesPyClipboard {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousProcess,
+                    title: "LaunchAgent monitors the clipboard",
+                    detail: "Plist: \(entry) — invokes \(usesPbpaste ? "pbpaste/pbcopy" : isOsascriptClipboard ? "osascript clipboard reads" : "Python pasteboard APIs") on a schedule",
+                    path: plistPath,
+                    remediation: "Inspect: cat \"\(plistPath)\" — clipper malware swaps wallet addresses by reading the clipboard"
+                ))
+            }
+        }
+
+        // Also flag user-owned daemons making frequent pasteboard XPC calls.
+        let lc = ShellRunner.run("/bin/launchctl", arguments: ["print", "gui/\(getuid())"], timeout: 5)
+        if lc.success {
+            for line in lc.stdout.split(separator: "\n") {
+                let lower = String(line).lowercased()
+                if lower.contains("pasteboardservice") && !lower.contains("com.apple.") {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousProcess,
+                        title: "Non-Apple service binds to PasteboardService",
+                        detail: String(line).trimmingCharacters(in: .whitespaces),
+                        path: nil,
+                        remediation: "Investigate this service — pasteboard binds outside of system services are unusual"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom URL Scheme Handlers
+
+    /// Schemes whose handler is sensitive — re-registering them lets an attacker intercept clicks.
+    private let sensitiveURLSchemes: Set<String> = [
+        "mailto", "sms", "ssh", "telnet", "ftp",
+        "bitcoin", "ethereum", "ledger", "metamask", "ledgerlive",
+    ]
+
+    /// Bundle-ID prefixes / exact IDs that legitimately register sensitive URL schemes.
+    private let legitURLHandlers: Set<String> = [
+        "com.apple.",                                  // every Apple app
+        "com.microsoft.Outlook", "com.microsoft.outlook.mac",
+        "com.google.Chrome", "com.brave.Browser",
+        "org.mozilla.firefox", "org.mozilla.thunderbird",
+        "com.readdle.smartemail-Mac",                  // Spark
+        "com.airmailapp.Airmail3",
+        "com.electron.ledger-live-desktop", "co.ledger.LedgerLive",
+        "com.exodus.exodus-desktop", "io.exodus.LiveDesktop",
+        "com.coinbase.wallet",
+        "com.googlecode.iterm2", "net.kovidgoyal.kitty", "co.zeit.hyper",
+    ]
+
+    private func scanURLSchemeHandlers(findings: inout [Finding], errors: inout [String]) {
+        // The user's LaunchServices secure plist holds explicit scheme → bundle bindings.
+        // This is the file the user/Settings UI writes when they pick a default handler.
+        let lsPlist = "\(ShellRunner.realUserHome)/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"
+        guard let data = FileManager.default.contents(atPath: lsPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let handlers = plist["LSHandlers"] as? [[String: Any]] else { return }
+
+        for handler in handlers {
+            // LSHandlerURLScheme = "mailto", LSHandlerRoleAll = "com.foo.bar"
+            guard let scheme = (handler["LSHandlerURLScheme"] as? String)?.lowercased() else { continue }
+            guard sensitiveURLSchemes.contains(scheme) else { continue }
+            let role = (handler["LSHandlerRoleAll"] as? String) ??
+                       (handler["LSHandlerRoleViewer"] as? String) ??
+                       (handler["LSHandlerRoleEditor"] as? String) ?? ""
+            guard !role.isEmpty else { continue }
+
+            let isLegit = legitURLHandlers.contains(role) ||
+                          legitURLHandlers.contains(where: { role.hasPrefix($0) })
+            if isLegit { continue }
+
+            findings.append(Finding(
+                severity: .high, category: .suspiciousProcess,
+                title: "Sensitive URL scheme handled by unknown app",
+                detail: "Scheme \"\(scheme):\" is claimed by \(role) — clicks on this scheme route to that bundle",
+                path: lsPlist,
+                remediation: "Reset the handler in System Settings > Default Apps, or delete the binding from \(lsPlist)"
             ))
         }
     }

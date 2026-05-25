@@ -131,6 +131,38 @@ public final class PersistenceScanner: Scanner {
             return
         }
 
+        // Vendor impersonation (Google Helper, Zoom Installer, etc.) — a 2024-2025 dropper pattern.
+        if SpywareSignature.isFakeBrandBundleId(label) {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Vendor impersonation in launch plist",
+                detail: "Label: \(label) — name imitates a real vendor (Google/Zoom/Adobe) but uses a non-canonical bundle ID",
+                path: path,
+                remediation: "Remove this plist: sudo rm \"\(path)\" — real vendors don't ship plists with these labels"
+            ))
+            return
+        }
+
+        // AppleScript-based persistence — /usr/bin/osascript or a .scpt file as the executable.
+        // Stealers in 2023-2025 (OSAMiner, AMOS variants, NimDoor) abuse this because .scpt is opaque
+        // to grep and runs without notarization checks once executed by osascript. Checked before
+        // the Apple-label skip because malware uses fake com.apple.* labels with osascript.
+        let programArgs = (plist["ProgramArguments"] as? [String]) ?? []
+        let argsScpt = programArgs.first(where: { $0.lowercased().hasSuffix(".scpt") })
+        let usesOsascript = executablePath.map { $0.hasSuffix("/osascript") } ?? false
+        if usesOsascript || argsScpt != nil {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "AppleScript-based persistence",
+                detail: "Label: \(label), running: \(programArgs.joined(separator: " ")) — osascript/.scpt persistence is a common 2024-2025 stealer pattern",
+                path: path,
+                remediation: "Inspect the script (osadecompile <path> for .scpt) and remove the plist if not expected: sudo rm \"\(path)\""
+            ))
+            return
+        }
+
         // Skip real Apple plists
         if label.hasPrefix("com.apple.") { return }
 

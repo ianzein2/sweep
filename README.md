@@ -70,19 +70,19 @@ sudo sweep --json
 
 | Scanner | What it does |
 |---------|-------------|
-| **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
+| **Process** | Matches running processes against known spyware signatures (including 2024-2025 DPRK Contagious Interview malware, NimDoor, HZ Rat, JaskaGO, RustDoor, AdLoad), flags unsigned binaries, enumerates loaded dylibs, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron, login hooks, periodic scripts, PAM, emond, SSH authorized_keys, sudoers — plus AppleScript/.scpt persistence and vendor-impersonation bundle IDs (Google/Zoom/Adobe look-alikes) |
+| **Evidence** | Stored screenshots, keystroke logs, screen recordings, exfiltration archives, crypto-wallet/credential-store staging, active keychain dumps |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
-| **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **System Integrity** | SIP, Gatekeeper, XProtect health, Full Disk Access grants, macOS version freshness (flags pre-14.4 with actively-exploited CVE-2024-23225), quarantine bypass detection on recent installs |
+| **Network** | Active connections, suspicious ports, /etc/hosts tampering (Apple security domains plus banking, crypto exchanges, auth providers), proxy/PAC hijacking |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Chrome/Brave/Edge/Firefox/Safari extension permissions, VSCode/Cursor/Windsurf malicious editor extensions, browser push-notification scam subscriptions (tech-support and wallet-recovery scams), native-messaging-host audit (sandbox escape bridges) |
+| **Deep Inspection** | Root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, clipboard hijacker / clipper-malware patterns, custom URL scheme handlers for sensitive schemes (mailto, ssh, bitcoin, ethereum) |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, hidden user accounts (UID 300-499), Find My Mac, Bonjour/mDNS LAN exposure |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
