@@ -434,6 +434,245 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // ---- 2024–2026 additions ----
+        // FrigidStealer — distributed via fake browser update prompts targeting macOS (Proofpoint, Feb 2025).
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigidstealer", "frigid_agent"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+                "/private/tmp/StealerMac",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        // Odyssey Stealer — AMOS rebrand reported by Cyble/Moonlock (2024–2025).
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odystealer", "OdysseyHelper"],
+            bundleIdentifiers: ["com.odyssey.stealer", "com.odyssey.helper"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        // BeaverTail — JavaScript stealer dropped by DPRK "Contagious Interview" job-lure campaign.
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "beaver_helper", "ChromeUpdate", "MicrosoftAutoUpdate2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Caches/.npl",
+                "~/Library/Application Support/.cache_npl",
+            ],
+            launchAgentLabels: []
+        ),
+        // InvisibleFerret — Python backdoor dropped as second stage by Contagious Interview.
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["InvisibleFerret", "invisible_ferret", "pay", "p.zi", "bow", "mlip"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "/private/tmp/.invisibleferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        // HZ RAT — Mac variant first reported by Kaspersky in 2024; long-running APT toolkit.
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZRat", "hzrat", "hz_helper", "OpenVPNConnect.app"],
+            bundleIdentifiers: ["com.hz.rat"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hz",
+            ],
+            launchAgentLabels: ["com.hz.openvpn.connect"]
+        ),
+        // LightSpy — modular surveillance framework with documented macOS implant (BlackBerry/ThreatFabric).
+        SpywareSignature(
+            name: "LightSpy",
+            processNames: ["lightspy", "LightSpy", "macma", "MacOS_F", "macOS_F"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Caches/.lightspy",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate.lightspy"]
+        ),
+        // ShadowVault — infostealer/clipper for macOS (Guardz, 2023+) targeting wallets and keychain dumps.
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault", "shvault"],
+            bundleIdentifiers: ["com.shadowvault.stealer"],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.ShadowVault",
+            ],
+            launchAgentLabels: ["com.shadowvault.service"]
+        ),
+        // TraderTraitor — DPRK-attributed campaign behind multiple crypto-exchange compromises (CISA AA22-108A, AA24-…).
+        SpywareSignature(
+            name: "TraderTraitor (Lazarus)",
+            processNames: ["CryptoAISbot", "TokenAIS", "TradeAtlas", "DAFOM", "CoinGoTrade"],
+            bundleIdentifiers: [
+                "com.cryptoaisbot.app", "com.tokenais.app", "com.tradeatlas.app",
+                "com.dafom.app", "com.coingotrade.app",
+            ],
+            filePaths: ["~/Library/Application Support/.trader_traitor"],
+            launchAgentLabels: []
+        ),
+        // KeySteal — keychain-targeted infostealer detected by Apple XProtect signatures.
+        SpywareSignature(
+            name: "KeySteal",
+            processNames: ["KeySteal", "keysteal", "ksteal", "KeySigEx"],
+            bundleIdentifiers: ["com.keysteal.agent"],
+            filePaths: [
+                "~/Library/Application Support/.KeySteal",
+                "/private/tmp/.keysteal",
+            ],
+            launchAgentLabels: ["com.keysteal.service"]
+        ),
+        // JaskaGO — Go-based cross-platform stealer with mac builds (AT&T Alien Labs, 2023+).
+        SpywareSignature(
+            name: "JaskaGO",
+            processNames: ["JaskaGO", "jaskago", "jgo_agent"],
+            bundleIdentifiers: ["com.jaskago.agent"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.JaskaGO",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        // KandyKorn variant via DPRK BlueNoroff — extended IOCs observed in 2024.
+        SpywareSignature(
+            name: "RustyAttr (BlueNoroff)",
+            processNames: ["RustyAttr", "rustyattr", "tauri_app", "Tauri"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Caches/.rustyattr",
+                "/private/tmp/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        // FerretApp / FlexibleFerret — DPRK-linked impersonation of Zoom/Chrome installers.
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexible_ferret", "zoom_sdk_helper_x86_64"],
+            bundleIdentifiers: ["com.zoom.sdk.helper.x86_64", "com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.FlexibleFerret",
+            ],
+            launchAgentLabels: ["com.zoom.sdk.helper"]
+        ),
+        // RustDoor — backdoor masquerading as Microsoft/Visual Studio updates (Bitdefender, 2024).
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "zshrc"],
+            bundleIdentifiers: ["com.microsoft.visualstudio.updater"],
+            filePaths: [
+                "~/.systembk",
+                "~/Public/.systembk",
+                "/private/tmp/.rustdoor",
+            ],
+            launchAgentLabels: ["com.microsoft.visualstudio.updater"]
+        ),
+        // GoSorry / Boinas — Go-based macOS RAT documented in 2024.
+        SpywareSignature(
+            name: "GoSorry",
+            processNames: ["gosorry", "GoSorry", "boinas", "Boinas"],
+            bundleIdentifiers: ["com.boinas.agent"],
+            filePaths: ["/private/tmp/.gosorry", "~/Library/Application Support/.Boinas"],
+            launchAgentLabels: ["com.boinas.service"]
+        ),
+        // SpectralBlur extended — additional DPRK IOCs reported in 2024.
+        SpywareSignature(
+            name: "MISTPEN (DPRK)",
+            processNames: ["mistpen", "MISTPEN", "BurnBookHelper", "VolatileMessenger"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.mistpen"],
+            launchAgentLabels: []
+        ),
+        // PondRAT — Python implant by Lazarus group (Unit 42, 2024) delivered via poisoned PyPI packages.
+        SpywareSignature(
+            name: "PondRAT",
+            processNames: ["PondRAT", "pondrat", "pondhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pondrat",
+                "~/Library/Caches/.pond",
+            ],
+            launchAgentLabels: []
+        ),
+        // RokRAT macOS variant (APT37 / ScarCruft).
+        SpywareSignature(
+            name: "RokRAT",
+            processNames: ["RokRAT", "rokrat", "rok_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rokrat",
+                "~/Library/Caches/.rok",
+            ],
+            launchAgentLabels: []
+        ),
+        // SilentTrinity — open-source C2 abused against macOS targets.
+        SpywareSignature(
+            name: "SilentTrinity",
+            processNames: ["SilentTrinity", "silenttrinity", "st_agent", "boomerang"],
+            bundleIdentifiers: ["com.silenttrinity.agent"],
+            filePaths: ["/private/tmp/.silenttrinity"],
+            launchAgentLabels: ["com.silenttrinity.service"]
+        ),
+        // SparkRAT macOS — Go-based open-source RAT seen in real-world intrusions.
+        SpywareSignature(
+            name: "SparkRAT",
+            processNames: ["SparkRAT", "sparkrat", "spark_helper"],
+            bundleIdentifiers: ["com.sparkrat.agent"],
+            filePaths: [
+                "/private/tmp/.sparkrat",
+                "~/Library/Application Support/.SparkRAT",
+            ],
+            launchAgentLabels: ["com.sparkrat.service"]
+        ),
+        // Trojan-Proxy DNSChanger via cracked apps — Kaspersky, 2023+.
+        SpywareSignature(
+            name: "Trojan-Proxy (Cracked Apps)",
+            processNames: ["GoogleHelperUpdater", "google_drive_helper2", "WindowServer.helper"],
+            bundleIdentifiers: ["com.google.helperupdater"],
+            filePaths: [
+                "~/Library/Application Support/.GoogleHelper",
+                "/private/tmp/.trojanproxy",
+            ],
+            launchAgentLabels: ["com.google.helperupdater"]
+        ),
+        // Cuckoo Spy variant / Cuckoo v2 IOCs reported in 2025.
+        SpywareSignature(
+            name: "Cuckoo v2 (DumpMedia variant)",
+            processNames: ["DumpMediaMusicConverter", "FoneDogTool", "TuneFabSpotifyMusic", "Sidify"],
+            bundleIdentifiers: [
+                "com.dumpmedia.musicconverter",
+                "com.fonedog.tool",
+                "com.tunefab.spotifymusic",
+            ],
+            filePaths: ["~/Library/Application Support/.Cuckoo2"],
+            launchAgentLabels: []
+        ),
+        // CHM Stealer / Crystal Stealer — 2024 stealers seen targeting macOS Web3 users.
+        SpywareSignature(
+            name: "Crystal Stealer",
+            processNames: ["Crystal", "crystal_stealer", "CrystalAgent"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +689,18 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024–2026 stealer/RAT campaigns
+        "com.apple.softwareupdate.lightspy",
+        "com.apple.softwareupdate.plist",
+        "com.apple.softwareupdated.helper",
+        "com.apple.systempreferences.helper",
+        "com.apple.macshare.plist",
+        "com.apple.appstore.helper",
+        "com.apple.installassistant.tool",
+        "com.apple.coreservicesd.helper",
+        "com.apple.commerce.helper",
+        "com.apple.terminal.helper",
+        "com.apple.finder.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

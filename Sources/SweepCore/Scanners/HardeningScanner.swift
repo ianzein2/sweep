@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS end-of-life status")
+        checkMacOSEndOfLife(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking FileVault recovery key escrow")
+        checkFileVaultRecoveryKey(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect Remediator scan recency")
+        checkXProtectRemediatorScans(findings: &findings, errors: &errors)
+
+        progress?.update("checking secure keyboard entry in Terminal")
+        checkSecureKeyboardEntry(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +486,237 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS End-of-Life
+    //
+    // Apple stops shipping security patches for macOS major versions roughly three years after
+    // release. Running an EOL macOS is one of the highest-impact security exposures a Mac can have,
+    // because public exploits (including kernel & WebKit RCEs) accumulate that Apple no longer fixes.
+
+    private func checkMacOSEndOfLife(findings: inout [Finding], errors: inout [String]) {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let major = v.majorVersion
+
+        // Stop-shipping-security-patches major versions (approximate — Apple does not publish a formal
+        // EOL date, but historically only the latest three majors receive patches). Adjust as new macOS
+        // ships. As of late 2025 the supported set is roughly Sonoma (14), Sequoia (15), Tahoe (16).
+        struct VersionInfo {
+            let name: String
+            let supported: Bool
+            let note: String
+        }
+        let map: [Int: VersionInfo] = [
+            10: VersionInfo(name: "macOS 10.x (Sierra–Catalina)", supported: false,
+                            note: "EOL — no security patches. Public kernel and Safari exploits exist."),
+            11: VersionInfo(name: "macOS 11 Big Sur", supported: false,
+                            note: "EOL — Apple stopped shipping security updates in 2023."),
+            12: VersionInfo(name: "macOS 12 Monterey", supported: false,
+                            note: "EOL — Apple stopped shipping security updates in late 2024."),
+            13: VersionInfo(name: "macOS 13 Ventura", supported: false,
+                            note: "End-of-life: no longer receiving regular security patches."),
+            14: VersionInfo(name: "macOS 14 Sonoma", supported: true, note: ""),
+            15: VersionInfo(name: "macOS 15 Sequoia", supported: true, note: ""),
+            16: VersionInfo(name: "macOS 16 Tahoe", supported: true, note: ""),
+        ]
+
+        if let info = map[major] {
+            if !info.supported {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "\(info.name) no longer receives security patches",
+                    detail: "\(info.note) Running an unsupported macOS major version is a top-tier risk — public 0days are not backported.",
+                    path: nil,
+                    remediation: "Upgrade to a currently supported macOS via System Settings > General > Software Update. If your hardware can't run a newer macOS, consider replacement — patch-free Macs are a known target for stealer campaigns."
+                ))
+            }
+        } else if major < 10 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Very old macOS version (\(major).\(v.minorVersion))",
+                detail: "macOS major version \(major) is years past EOL.",
+                path: nil,
+                remediation: "Upgrade or replace this Mac."
+            ))
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // The presence of a com.apple.icloud.findmydeviced launchd job is a heuristic for Find My being
+        // enabled; we can't query the iCloud state directly without entitlements. If the user account
+        // looks signed-in to iCloud (presence of MobileMeAccounts.plist) but findmydeviced is absent,
+        // flag it — anyone with physical access can wipe and re-pair the Mac.
+        let home = ShellRunner.realUserHome
+        let mobileMe = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard FileManager.default.fileExists(atPath: mobileMe) else {
+            // No iCloud account signed in — out of scope, do not flag.
+            return
+        }
+
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let listOutput = launchctl.success ? launchctl.stdout : ""
+        let hasFindMy = listOutput.contains("com.apple.icloud.findmydeviced") ||
+                        listOutput.contains("com.apple.findmymacd") ||
+                        listOutput.contains("com.apple.icloud.searchpartyd")
+
+        if !hasFindMy {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac appears to be disabled",
+                detail: "iCloud is signed in but no Find My daemon is running — a stolen or lost Mac cannot be located, locked, or remotely erased.",
+                path: nil,
+                remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac. This also turns on Activation Lock on Apple-silicon Macs."
+            ))
+        }
+    }
+
+    // MARK: - Time Machine encryption
+    //
+    // Time Machine snapshots contain a near-complete copy of the user's files; an unencrypted
+    // backup volume undermines FileVault entirely. tmutil doesn't report encryption directly, so
+    // we read the destination's mount point and ask diskutil whether the underlying volume is
+    // FileVault-encrypted.
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Each destination block is separated by "====" lines; within a block we want "Name" and "Mount Point".
+        let blocks = result.stdout.components(separatedBy: "====")
+        for block in blocks {
+            let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.contains("Name") else { continue }
+
+            var destName = "Time Machine destination"
+            var mountPoint: String?
+            for line in trimmed.split(separator: "\n") {
+                let l = String(line).trimmingCharacters(in: .whitespaces)
+                if l.hasPrefix("Name") {
+                    let parts = l.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2 {
+                        destName = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                    }
+                } else if l.hasPrefix("Mount Point") {
+                    let parts = l.split(separator: ":", maxSplits: 1)
+                    if parts.count == 2 {
+                        mountPoint = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                    }
+                }
+            }
+
+            // Network destinations (Time Capsule, NAS) don't have a local mount point and have
+            // their own encryption settings; we can't probe them remotely, so skip.
+            guard let mount = mountPoint, !mount.isEmpty else { continue }
+
+            let info = ShellRunner.run("/usr/sbin/diskutil", arguments: ["info", mount], timeout: 10)
+            guard info.success else { continue }
+
+            // diskutil info reports "FileVault: Yes" / "FileVault: No" for APFS volumes, and
+            // "Encrypted: Yes" for legacy CoreStorage. Treat either as encrypted.
+            let out = info.stdout
+            let encrypted = out.contains("FileVault:                 Yes") ||
+                            out.contains("FileVault:          Yes") ||
+                            out.contains("Encrypted:                 Yes") ||
+                            out.contains("Encrypted:          Yes")
+            if !encrypted {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Time Machine destination '\(destName)' is not encrypted",
+                    detail: "Backup volume at \(mount) is not FileVault-encrypted. Backups contain near-complete copies of your files; an unencrypted backup undermines FileVault on the source.",
+                    path: mount,
+                    remediation: "Remove the destination, then re-add it with 'Encrypt Backups' enabled: System Settings > General > Time Machine."
+                ))
+            }
+        }
+    }
+
+    // MARK: - FileVault recovery key escrow / institutional key
+
+    private func checkFileVaultRecoveryKey(findings: inout [Finding], errors: inout [String]) {
+        // If FileVault is on, the user should have a recovery key set up. fdesetup reports recovery
+        // status — we don't print the key, only its presence.
+        let status = ShellRunner.run("/usr/bin/fdesetup", arguments: ["status"], timeout: 5)
+        guard status.success, status.stdout.contains("FileVault is On") else { return }
+
+        // Check if an institutional / personal recovery key exists.
+        let hasInstitutional = ShellRunner.run("/usr/bin/fdesetup",
+                                               arguments: ["hasinstitutionalrecoverykey"], timeout: 5)
+        let hasPersonal = ShellRunner.run("/usr/bin/fdesetup",
+                                          arguments: ["haspersonalrecoverykey"], timeout: 5)
+
+        let hasAnyKey = (hasInstitutional.success && hasInstitutional.stdout.contains("true")) ||
+                        (hasPersonal.success && hasPersonal.stdout.contains("true"))
+
+        if !hasAnyKey {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "FileVault has no recovery key on file",
+                detail: "FileVault is enabled but no personal or institutional recovery key is registered. If you forget your password, the disk is unrecoverable.",
+                path: nil,
+                remediation: "Generate one: sudo fdesetup changerecovery -personal. Store the key in a password manager — not on the same Mac."
+            ))
+        }
+    }
+
+    // MARK: - XProtect Remediator scan recency
+
+    private func checkXProtectRemediatorScans(findings: inout [Finding], errors: inout [String]) {
+        // XProtect Remediator (macOS 13+) runs hourly-ish scans for known stealer families and logs the
+        // last-run time per scanner under com.apple.XProtectFramework.PluginService. If the last
+        // scan is unusually old, definitions may be stale or the service is being suppressed.
+        let prefsPath = "/Library/Preferences/com.apple.XProtectFramework.PluginService.plist"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: prefsPath) else { return }
+
+        guard let attrs = try? fm.attributesOfItem(atPath: prefsPath),
+              let modDate = attrs[.modificationDate] as? Date else { return }
+
+        let daysSince = Calendar.current.dateComponents([.day], from: modDate, to: Date()).day ?? 0
+        if daysSince > 7 {
+            findings.append(Finding(
+                severity: daysSince > 30 ? .high : .medium,
+                category: .hardening,
+                title: "XProtect Remediator hasn't run in \(daysSince) days",
+                detail: "Apple's background malware sweeps (XProtect Remediator scanners — Adload, Pirrit, Genieo, ColdSnap, FloppyFlipper, ToyDrop, etc.) appear to have stalled.",
+                path: prefsPath,
+                remediation: "Reboot, then check Console.app for 'XProtectRemediator' messages. If they remain absent, run: sudo defaults read \(prefsPath) | head"
+            ))
+        }
+    }
+
+    // MARK: - Secure Keyboard Entry in Terminal
+
+    private func checkSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        // Terminal.app's Secure Keyboard Entry blocks other processes (including keyloggers using
+        // CGEvent taps) from reading what you type into a terminal session — including sudo passwords
+        // and SSH passphrases. Recommended for anyone who runs admin commands locally.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+        // Default is OFF on stock macOS.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Terminal.app: Secure Keyboard Entry is disabled",
+                    detail: "Other apps with Accessibility / Input Monitoring access can read what you type in Terminal — including sudo passwords and SSH passphrases.",
+                    path: nil,
+                    remediation: "Enable: Terminal > Secure Keyboard Entry (menu) — or: defaults write com.apple.Terminal SecureKeyboardEntry -bool true"
+                ))
+            }
+        } else {
+            // Key not set — default is off
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Terminal.app: Secure Keyboard Entry not set",
+                detail: "Defaults to off — other apps with Input Monitoring access could intercept what you type into Terminal.",
+                path: nil,
+                remediation: "Enable: Terminal > Secure Keyboard Entry (menu)"
+            ))
         }
     }
 }

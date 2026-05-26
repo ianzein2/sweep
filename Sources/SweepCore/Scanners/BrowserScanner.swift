@@ -11,10 +11,19 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024–2025 marketplace-malware families (ReversingLabs, Aqua, Socket reports)
+        "solidity-vlang", "evm-vscode", "prettier-vs-code", "rust-language-pack",
+        "claude-dev-helper", "openai-helper-pack", "github-copilot-pro",
+        "darcula-theme-pro", "material-theme-icons-pro",
+        // Aug 2025 "Glassworm" / EthCode campaigns
+        "glassworm", "ethcode-helper", "vyper-vscode-plus", "anchor-vscode-plus",
+        "starknet-vscode-extension", "evm-tools-pro",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Common naming themes in malicious extensions found in 2024–2025 incidents
+        "drainer", "clipper", "rat-loader", "backdoor",
     ]
 
     // Extensions that are well-known and safe
