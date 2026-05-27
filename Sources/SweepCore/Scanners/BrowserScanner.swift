@@ -11,10 +11,33 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 reported malicious extensions (ReversingLabs / Snyk / Aikido advisories)
+        "material-theme-free",                    // imposter of Material Theme
+        "material-theme-icons-free",
+        "ahbanc.code-runner-plus",                // typosquat of Code Runner
+        "evilminecraft.vscode-paint",
+        "darknetshade",                           // generic malicious family
+        "github-copilot-helper-plus",             // copilot typosquat seen in 2025
+        "claudecode-runner",                      // typosquats targeting AI tools
+        "cursor-ai-helper-plus",
+        "openai-chatgpt-helper",
+        "tabnine-pro-helper",                     // typosquat
+        "npmcli-toolkit",                         // commonly typosquatted name
+        "axios-helper", "axios-utils",            // typosquats abusing axios popularity
+        "rust-analyzer-plus",                     // imposter of rust-analyzer
+        "python-extension-pack-plus",
+        "lodash-helper",                          // typosquat name pattern
+        // Aikido/SocketDev 2025 IOCs (npm + extension supply-chain)
+        "ethereum-config", "ethereum-getstate",
+        "discord-selfbot-utils", "discord-rpc-utils",
+        "windsurf-ai-helper-plus",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Add more behavioural keywords seen in 2024-2025 malicious extensions
+        "tokenstealer", "wallet-drain", "cookie-export", "keychain-dump",
+        "ssh-grab", "shell-runner", "backdoor", "c2-client",
     ]
 
     // Extensions that are well-known and safe
@@ -396,6 +419,10 @@ public final class BrowserScanner: Scanner {
             "\(extPath)/out/extension.js",
             "\(extPath)/dist/extension.js",
             "\(extPath)/src/extension.js",
+            "\(extPath)/extension.cjs",
+            "\(extPath)/extension.mjs",
+            "\(extPath)/out/main.js",
+            "\(extPath)/dist/main.js",
         ]
 
         for path in candidatePaths {
@@ -414,6 +441,20 @@ public final class BrowserScanner: Scanner {
             if (lower.contains("https.get") || lower.contains("http.get") || lower.contains("fetch(")) &&
                (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
                 hasRemoteExec = true
+            }
+            // Buffer.from(..., 'base64') + eval — heavily used by 2025 npm/extension stealers
+            if lower.contains("buffer.from(") && lower.contains("'base64'") &&
+               (lower.contains("eval(") || lower.contains("new function(")) {
+                hasRemoteExec = true
+            }
+            // Direct read of OS keychain / SSH key / browser cookie databases by an editor extension
+            // is essentially never benign — flag as shell-exec for severity.
+            let exfilTargets = [
+                "/library/keychains/", "/.ssh/id_", "/cookies/",
+                "/library/cookies", "login data", "keychain-access-groups",
+            ]
+            if exfilTargets.contains(where: { lower.contains($0) }) {
+                hasShellExec = true
             }
         }
 

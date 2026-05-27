@@ -434,6 +434,200 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS malware families (Objective-See / SentinelLabs / Kaspersky / Huntress reports)
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            // Real OpenVPN Connect's process name is "OpenVPN Connect" (with a space) and the
+            // bundle ID is "net.openvpn.connect.app". The dropper uses "OpenVPNConnect" (no space)
+            // and a fake bundle ID — only those imposter names are listed here.
+            processNames: ["hzrat", "HZ_RAT", "OpenVPNConnect"],
+            bundleIdentifiers: ["com.openvpnconnect", "com.openvpn.OpenVPNConnect"],
+            filePaths: [
+                "/private/tmp/.OpenVPNConnect",
+                "/private/var/tmp/.hzrat",
+                "~/Library/Application Support/.openvpnconnect",
+            ],
+            launchAgentLabels: ["com.openvpnconnect.helper"]
+        ),
+        SpywareSignature(
+            name: "NotLockBit (macOS ransomware)",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macos"],
+            bundleIdentifiers: ["com.notlockbit.agent"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.notlockbit",
+            ],
+            launchAgentLabels: ["com.notlockbit.service"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK)",
+            processNames: [
+                "FlexibleFerret", "FrostyFerret_UI", "FrostyFerret",
+                "FriendlyFerret_Secure", "ChromeUpdate", "ChromeUpdateAlert",
+            ],
+            bundleIdentifiers: ["com.zoom.us.updater", "com.flexibleferret"],
+            filePaths: [
+                "/private/var/tmp/.cf",
+                "/private/tmp/.ChromeUpdate",
+                "~/Library/Application Support/.FrostyFerret",
+            ],
+            launchAgentLabels: ["com.zoom.us.zoomupdate"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK Lazarus)",
+            processNames: ["TodoSwift", "todoswift", "ToDoTasks", "BDCalendar"],
+            bundleIdentifiers: ["com.toplist.bdcalendar", "com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.toplist.bdcalendar.helper"]
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK Lazarus)",
+            processNames: ["nimdoor", "NimDoor", "nimoper", "coreupdater", "CoreKitAgent"],
+            bundleIdentifiers: ["com.nimdoor.agent"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.coreupdater",
+                "~/Library/Application Support/.CoreKitAgent",
+            ],
+            launchAgentLabels: ["com.apple.coreupdater"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_agent"],
+            bundleIdentifiers: ["com.appleprocesshub.agent"],
+            filePaths: [
+                "/private/tmp/applescripts",
+                "/private/tmp/.appleprocesshub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.appleprocesshub.service"]
+        ),
+        SpywareSignature(
+            name: "Hidden Risk (DPRK Lazarus)",
+            processNames: ["HiddenRisk", "hiddenrisk", "BitcoinPDFAgent", "bitcoin_pdf_agent"],
+            bundleIdentifiers: ["com.hiddenrisk.agent", "com.bitcoinpdf.agent"],
+            filePaths: [
+                "/Users/Shared/.zsh_env",
+                "/private/tmp/.NCC",
+                "~/Library/Application Support/.HiddenRisk",
+            ],
+            launchAgentLabels: ["com.apple.zsh.env", "com.bitcoinpdf.helper"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (Rust stealer)",
+            processNames: ["RustyAttr", "rustyattr", "rustystealer"],
+            bundleIdentifiers: ["com.rustyattr.app"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.rustyattr.service"]
+        ),
+        SpywareSignature(
+            name: "JaskaGO (Go stealer)",
+            processNames: ["JaskaGO", "jaskago", "jaska_agent", "jaska"],
+            bundleIdentifiers: ["com.jaskago.agent"],
+            filePaths: [
+                "/private/tmp/.jaska",
+                "/private/tmp/jaska",
+                "~/Library/Application Support/.JaskaGO",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "FERRETTERMINATOR (DPRK Lazarus)",
+            processNames: ["FerretTerminator", "ferretterminator", "ferret_term"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.ferret",
+                "/Users/Shared/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OneClik (BlueNoroff)",
+            processNames: ["OneClik", "oneclik", "OneClikUtility", "oneclikhelper"],
+            bundleIdentifiers: ["com.oneclik.agent", "com.oneclik.utility"],
+            filePaths: [
+                "/private/tmp/.oneclik",
+                "~/Library/Application Support/.OneClik",
+            ],
+            launchAgentLabels: ["com.oneclik.service"]
+        ),
+        SpywareSignature(
+            name: "HollowRabbit",
+            processNames: ["HollowRabbit", "hollowrabbit", "rabbit_agent"],
+            bundleIdentifiers: ["com.hollowrabbit.agent"],
+            filePaths: [
+                "/private/tmp/.hollowrabbit",
+                "~/Library/Application Support/.HollowRabbit",
+            ],
+            launchAgentLabels: ["com.hollowrabbit.service"]
+        ),
+        SpywareSignature(
+            name: "OSX.SwiftBelt / SwiftFox",
+            processNames: ["SwiftBelt", "swiftbelt", "SwiftFox", "swiftfox"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.swiftbelt", "/private/tmp/.swiftfox"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Crackonosh (macOS port)",
+            processNames: ["Crackonosh", "crackonosh", "macspeed", "MacOptimize"],
+            bundleIdentifiers: ["com.crackonosh.miner"],
+            filePaths: [
+                "/private/tmp/.crackonosh",
+                "~/Library/Application Support/.macspeed",
+            ],
+            launchAgentLabels: ["com.macspeed.optimizer"]
+        ),
+        SpywareSignature(
+            name: "RustyMiner / RustyKey (cryptominer)",
+            processNames: ["RustyMiner", "rustyminer", "RustyKey", "rustykey", "xmrig-rs"],
+            bundleIdentifiers: ["com.rustyminer.agent"],
+            filePaths: [
+                "/private/tmp/.rustyminer",
+                "~/Library/Application Support/.rustyminer",
+            ],
+            launchAgentLabels: ["com.rustyminer.service"]
+        ),
+        SpywareSignature(
+            name: "macOS XMRig (unauthorized cryptominer)",
+            processNames: ["xmrig", "XMRig", "minerd", "cpuminer", "ccminer"],
+            bundleIdentifiers: ["com.xmrig.miner"],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "~/Library/Application Support/.xmrig",
+            ],
+            launchAgentLabels: ["com.xmrig.service"]
+        ),
+        SpywareSignature(
+            name: "DPRK FullHouse / RustBucket family",
+            processNames: ["FullHouse", "fullhouse", "fullhouse.doored", "FullHouse_Helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.fullhouse",
+                "/Users/Shared/.fullhouse",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PassiveTotal / OSX.ClickFix",
+            processNames: ["ClickFix", "clickfix", "ClickFixHelper", "InstallCleanerPro"],
+            bundleIdentifiers: ["com.clickfix.installer"],
+            filePaths: ["/private/tmp/.clickfix"],
+            launchAgentLabels: ["com.clickfix.helper"]
+        ),
+        SpywareSignature(
+            name: "RealStealer / FixedAgent (2025)",
+            processNames: ["RealStealer", "realstealer", "FixedAgent", "fixedagent"],
+            bundleIdentifiers: ["com.realstealer.agent"],
+            filePaths: ["/private/tmp/.realstealer"],
+            launchAgentLabels: ["com.realstealer.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +644,29 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 observed imposter bundle IDs
+        "com.apple.coreupdater",
+        "com.apple.zsh.env",
+        "com.apple.systempreferences.helper",
+        "com.apple.macshare.plist",
+        "com.apple.appstore.updater",
+        "com.apple.appcache.helper",
+        "com.apple.crash.agent",
+        "com.apple.spotlight.helper",
+        "com.apple.update.daemon",
+        "com.apple.system.helper",
+        "com.apple.icloud.helper",
+        "com.apple.iclouddrive.helper",
+        "com.apple.notification.helper",
+        "com.apple.network.helper",
+        "com.apple.audio.helper",
+        "com.apple.bluetooth.helper",
+        "com.apple.print.helper",
+        "com.apple.airdrop.helper",
+        "com.apple.finder.helper",
+        "com.apple.dock.helper",
+        "com.apple.tcc.helper",
+        "com.apple.softwareupdate.daemon",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +691,32 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Additional imposter names observed in 2024-2025 malware reports
+        "coreupdater",           // Used by NimDoor
+        "CoreKitAgent",          // Used by NimDoor variants
+        "appcache",              // Not Apple
+        "appcacheagent",         // Not Apple
+        "macupdater",            // Not Apple
+        "macupdate_helper",      // Not Apple
+        "MacUpdater",            // Not Apple (mimics MacUpdate the app)
+        "AppStoreUpdate",        // Real: storedownloadd/storeassetd
+        "AirportHelper",         // Real: airportd
+        "BluetoothHelper",       // Real: bluetoothd
+        "tcc_helper",            // Real: tccd
+        "tccd_helper",           // Real: tccd
+        "Finder.app",            // Real: Finder (no .app suffix in `ps`)
+        "Dock.app",              // Real: Dock (no .app suffix)
+        "SystemUIServer.app",    // Real: SystemUIServer (no .app suffix)
+        "mds_helper",            // Real: mds
+        "diskutility",           // Real: diskutilityd
+        "logind",                // Linux-style, macOS uses loginwindow
+        "syslogd_helper",        // Real: syslogd
+        "configd_helper",        // Real: configd
+        "WebKitNetworkingHelper",// Real: com.apple.WebKit.Networking
+        "WindowServer_helper",   // Real: WindowServer (no helper variant)
+        "iTunesHelperAgent",     // Real: iTunesHelper (without "Agent")
+        "PhotoLibraryHelper",    // Real: photolibraryd
+        "AppleSpellAgent",       // Real: AppleSpell (without "Agent")
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

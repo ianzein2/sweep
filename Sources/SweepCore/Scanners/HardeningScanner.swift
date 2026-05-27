@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server config")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Terminal secure keyboard entry")
+        checkTerminalSecureKeyboardEntry(findings: &findings, errors: &errors)
+
+        progress?.update("checking Personal Hotspot")
+        checkPersonalHotspot(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine backups")
+        checkTimeMachine(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS background items")
+        checkBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -469,5 +487,299 @@ public final class HardeningScanner: Scanner {
                 ))
             }
         }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is a critical anti-theft control: without it, a lost or stolen Mac cannot be
+        // remotely locked or erased. We can't reliably read the iCloud account state without
+        // entitlements, but we can detect whether the locationd daemon has the iCloud Find My
+        // client enrolled via the MobileMeAccounts plist.
+        let home = ShellRunner.realUserHome
+        let mmePlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard let data = FileManager.default.contents(atPath: mmePlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]] else {
+            // Not signed into iCloud — informational only
+            return
+        }
+
+        var findMyEnabled = false
+        for acct in accounts {
+            if let services = acct["Services"] as? [[String: Any]] {
+                for svc in services {
+                    if let name = svc["Name"] as? String,
+                       name == "FIND_MY_MAC",
+                       (svc["Enabled"] as? Bool == true || svc["Enabled"] as? Int == 1) {
+                        findMyEnabled = true
+                    }
+                }
+            }
+        }
+
+        if !findMyEnabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "iCloud is configured but Find My Mac is not enabled — a stolen Mac cannot be remotely locked or erased",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - SSH Server Config (sshd_config)
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // If SSH (Remote Login) is on, sshd_config controls who can connect and how. Risky settings
+        // like `PermitRootLogin yes` or `PasswordAuthentication yes` materially weaken the box.
+        let configPaths = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+        var configContent: String?
+        var foundPath: String?
+        for path in configPaths {
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                configContent = content
+                foundPath = path
+                break
+            }
+        }
+        guard let content = configContent, let configPath = foundPath else { return }
+
+        // Parse simple "key value" directives, skipping commented lines.
+        var settings: [String: String] = [:]
+        for rawLine in content.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let parts = line.components(separatedBy: CharacterSet.whitespaces)
+                .filter { !$0.isEmpty }
+            guard parts.count >= 2 else { continue }
+            settings[parts[0].lowercased()] = parts[1].lowercased()
+        }
+
+        // PermitRootLogin yes lets attackers brute-force root directly. Default on modern macOS is
+        // "no" or "prohibit-password" — "yes" is a deliberate weakening.
+        if let permitRoot = settings["permitrootlogin"], permitRoot == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login",
+                detail: "sshd_config has PermitRootLogin=yes — attackers can attempt to log in as root over SSH",
+                path: configPath,
+                remediation: "Change to 'no' or 'prohibit-password' in \(configPath), then: sudo launchctl stop com.openssh.sshd"
+            ))
+        }
+
+        // PasswordAuthentication yes leaves the door open to credential brute-force from the network.
+        // Apple's default for the bundled sshd is `yes`, so we only escalate if Remote Login is ON.
+        let sshRunning = ShellRunner.run("/usr/sbin/systemsetup",
+                                         arguments: ["-getremotelogin"], timeout: 5)
+        let sshIsOn = sshRunning.success && sshRunning.stdout.lowercased().contains(": on")
+
+        if sshIsOn {
+            // PasswordAuthentication defaults to yes when unset
+            let passAuth = settings["passwordauthentication"] ?? "yes"
+            if passAuth == "yes" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SSH allows password authentication",
+                    detail: "Remote Login is enabled and sshd_config permits password auth — keys-only is recommended",
+                    path: configPath,
+                    remediation: "Set 'PasswordAuthentication no' in \(configPath) after adding a key to ~/.ssh/authorized_keys"
+                ))
+            }
+
+            // ChallengeResponseAuthentication / KbdInteractiveAuthentication can also accept passwords
+            let kbdAuth = settings["kbdinteractiveauthentication"] ?? settings["challengeresponseauthentication"] ?? "no"
+            if kbdAuth == "yes" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "SSH allows keyboard-interactive authentication",
+                    detail: "KbdInteractiveAuthentication is enabled — typically used for PAM-driven password prompts",
+                    path: configPath,
+                    remediation: "If using keys, set 'KbdInteractiveAuthentication no' in \(configPath)"
+                ))
+            }
+
+            // PermitEmptyPasswords yes would allow accounts with blank passwords to log in — never expected
+            if let emptyPass = settings["permitemptypasswords"], emptyPass == "yes" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "SSH allows empty passwords",
+                    detail: "sshd_config has PermitEmptyPasswords=yes — accounts without a password can log in remotely",
+                    path: configPath,
+                    remediation: "Set 'PermitEmptyPasswords no' in \(configPath) immediately"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Terminal Secure Keyboard Entry
+
+    private func checkTerminalSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        // Secure Keyboard Entry tells macOS to deny event-tap access to the Terminal window, blocking
+        // keyloggers from capturing things typed into shells (including SSH sessions and sudo prompts).
+        // It's off by default. We check Apple Terminal here — iTerm2 has its own setting.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Terminal Secure Keyboard Entry is off",
+                    detail: "Apple Terminal isn't blocking event-tap keyloggers from reading keystrokes typed in the shell",
+                    path: nil,
+                    remediation: "Enable in Terminal > Secure Keyboard Entry (menu), or: defaults write com.apple.Terminal SecureKeyboardEntry -bool true"
+                ))
+            }
+        } else {
+            // Key not present at all means default (off) — surface only on machines that use Terminal
+            // We don't want to nag if Terminal has never been opened, so only flag if the prefs file exists.
+            let plist = "\(ShellRunner.realUserHome)/Library/Preferences/com.apple.Terminal.plist"
+            if FileManager.default.fileExists(atPath: plist) {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Terminal Secure Keyboard Entry is off (default)",
+                    detail: "Recommended for keylogger defense when typing passwords in the shell",
+                    path: nil,
+                    remediation: "Enable in Terminal > Secure Keyboard Entry (menu), or: defaults write com.apple.Terminal SecureKeyboardEntry -bool true"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Personal Hotspot
+
+    private func checkPersonalHotspot(findings: inout [Finding], errors: inout [String]) {
+        // Personal Hotspot turns the Mac into a Wi-Fi access point sharing the cellular/iCloud
+        // connection. An open hotspot is a meaningful exposure on untrusted networks.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.MobileBluetooth.services.personalhotspot", "PersonalHotspotEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Personal Hotspot is enabled",
+                    detail: "Mac is sharing its internet via Wi-Fi — make sure it has a strong WPA2/3 password",
+                    path: nil,
+                    remediation: "Disable when not needed: System Settings > General > Sharing > Internet Sharing"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine
+
+    private func checkTimeMachine(findings: inout [Finding], errors: inout [String]) {
+        // Time Machine backups are the single best defense against macOS ransomware (NotLockBit etc.).
+        // We flag absence as a hardening gap, not an active threat.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 5)
+        guard result.success else { return }
+
+        let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.isEmpty || output.contains("No destinations configured") {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "No Time Machine backup destination is configured",
+                detail: "Without a backup, ransomware (NotLockBit and others) leaves no recovery path",
+                path: nil,
+                remediation: "Configure: System Settings > General > Time Machine > Add Backup Disk"
+            ))
+            return
+        }
+
+        // Check last backup recency (any destination)
+        let latestResult = ShellRunner.run("/usr/bin/tmutil", arguments: ["latestbackup"], timeout: 5)
+        if latestResult.success {
+            let path = latestResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !path.isEmpty {
+                // Parse a date from the snapshot path (Apple uses YYYY-MM-DD-HHMMSS in snapshot names)
+                if let match = path.range(of: #"\d{4}-\d{2}-\d{2}"#, options: .regularExpression) {
+                    let dateStr = String(path[match])
+                    let fmt = DateFormatter()
+                    fmt.dateFormat = "yyyy-MM-dd"
+                    if let backupDate = fmt.date(from: dateStr) {
+                        let daysSince = Calendar.current.dateComponents([.day], from: backupDate, to: Date()).day ?? 0
+                        if daysSince > 14 {
+                            findings.append(Finding(
+                                severity: .low, category: .hardening,
+                                title: "Last Time Machine backup was \(daysSince) days ago",
+                                detail: "Backups exist but the most recent one is stale — connect your backup disk",
+                                path: nil,
+                                remediation: "Plug in your Time Machine disk and run: tmutil startbackup --auto"
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - macOS Background Items (SMAppService, macOS 13+)
+
+    private func checkBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura introduced "Login & Background Items" managed via SMAppService.
+        // These are a modern persistence mechanism — sfltool dumps the registry. We don't
+        // know the user's "expected" list, so we surface counts and any items that resolve to
+        // hidden or temp paths (a strong spyware indicator).
+        let result = ShellRunner.run("/usr/bin/sfltool",
+                                     arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // sfltool prints item records in the form:
+        //   Name:    <name>
+        //   URL:     file:///path/to/thing
+        //   Type:    ...
+        var currentItem: (name: String, url: String)?
+        var hiddenOrTempItems: [(name: String, url: String)] = []
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("Name:") {
+                if let item = currentItem, isSuspiciousBackgroundItemURL(item.url) {
+                    hiddenOrTempItems.append(item)
+                }
+                currentItem = (name: line.replacingOccurrences(of: "Name:", with: "").trimmingCharacters(in: .whitespaces),
+                               url: "")
+            } else if line.hasPrefix("URL:") {
+                currentItem?.url = line.replacingOccurrences(of: "URL:", with: "").trimmingCharacters(in: .whitespaces)
+            }
+        }
+        // Flush last
+        if let item = currentItem, isSuspiciousBackgroundItemURL(item.url) {
+            hiddenOrTempItems.append(item)
+        }
+
+        for item in hiddenOrTempItems.prefix(10) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Background item points to hidden or temp path",
+                detail: "Item: \(item.name) — URL: \(item.url)",
+                path: nil,
+                remediation: "Review in System Settings > General > Login Items & Extensions > Allow in the Background, then remove if unexpected"
+            ))
+        }
+    }
+
+    private func isSuspiciousBackgroundItemURL(_ url: String) -> Bool {
+        guard !url.isEmpty else { return false }
+        let lower = url.lowercased()
+        // Background items registered from temp dirs or hidden paths are almost never legitimate
+        if lower.contains("/private/tmp/") || lower.contains("/private/var/tmp/") ||
+           lower.contains("/tmp/") || lower.contains("/var/tmp/") {
+            return true
+        }
+        // Hidden path components after the scheme (file:///Users/x/.foo/bar)
+        let stripped = lower.replacingOccurrences(of: "file://", with: "")
+        for component in stripped.split(separator: "/") {
+            let c = String(component)
+            if c.hasPrefix(".") && c != "." && c != ".." {
+                return true
+            }
+        }
+        return false
     }
 }

@@ -37,6 +37,14 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for known-compromised global npm packages (supply-chain attacks)
+        progress?.update("checking global npm packages")
+        scanCompromisedNPMPackages(findings: &findings, errors: &errors)
+
+        // 7. Check for known-compromised global Python packages
+        progress?.update("checking global Python packages")
+        scanCompromisedPythonPackages(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +285,141 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - NPM Supply Chain (compromised global packages)
+
+    /// Known-malicious / known-typosquatted npm package names reported in 2024-2025 supply-chain
+    /// advisories (Socket, Aikido, Snyk, JFrog, ReversingLabs). Globally installed copies of these
+    /// would have run their `postinstall` scripts at install time — possible code execution under
+    /// the user's account.
+    private static let knownCompromisedNPMPackages: Set<String> = [
+        // Typosquats of popular packages observed in 2024-2025 stealer campaigns
+        "noblox.js-proxied", "noblox.js-proxy",
+        "node-discord.js", "discord-selfbot-v13-stable",
+        "ethers-providers-utils", "ethers-helper", "ethereum-cryptography-utils",
+        "solana-web3-utils", "solana-tools-helper",
+        "lodash-utils-pro", "lodash-helper",
+        "axios-helper-utils", "axios-headers-utils",
+        "react-hooks-form", "react-async-hook-helper",
+        "next-auth-helper-plus",
+        "@babel/preset-react-jsx",
+        // Late-2024 / 2025 documented compromised packages (Socket / Snyk / Aikido advisories)
+        "rspack-helper", "rspack-utils-helper",
+        "@solana/web3.js-utils",
+        "lottie-helper",
+        "is-numeric-utils", "is-windows-utils",
+        "test-helper-utils-pro",
+        "es-utils-helper",
+        // Crypto wallet credential stealers observed in 2025
+        "@solana/wallet-adapter-helper",
+        "ethers-react-helper",
+        "wagmi-helper",
+        "trustwallet-helper",
+        "wallet-connect-helper",
+    ]
+
+    private func scanCompromisedNPMPackages(findings: inout [Finding], errors: inout [String]) {
+        // Search the most common global npm locations. `npm ls -g --json --depth=0` would be more
+        // accurate but is slow and not always present — file listing is faster and good enough.
+        let home = ShellRunner.realUserHome
+        let candidateDirs = [
+            "/usr/local/lib/node_modules",
+            "/opt/homebrew/lib/node_modules",
+            "\(home)/.npm-global/lib/node_modules",
+            "\(home)/.nvm/versions/node",  // nvm: scan all versions below
+            "\(home)/.volta/tools/image/node",
+            "\(home)/.fnm/node-versions",
+        ]
+
+        let fm = FileManager.default
+
+        var moduleDirs: [String] = []
+        for dir in candidateDirs {
+            guard fm.fileExists(atPath: dir) else { continue }
+            // For nvm/fnm/volta layouts, recurse one level to find each Node version's lib/node_modules.
+            if dir.contains(".nvm/versions/node") || dir.contains(".volta") || dir.contains(".fnm") {
+                if let versions = try? fm.contentsOfDirectory(atPath: dir) {
+                    for v in versions {
+                        let nested = "\(dir)/\(v)/lib/node_modules"
+                        if fm.fileExists(atPath: nested) { moduleDirs.append(nested) }
+                    }
+                }
+            } else {
+                moduleDirs.append(dir)
+            }
+        }
+
+        for modDir in moduleDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: modDir) else { continue }
+            for entry in entries {
+                // npm scoped packages live in @scope/name — descend one level
+                if entry.hasPrefix("@") {
+                    let scopeDir = "\(modDir)/\(entry)"
+                    if let nested = try? fm.contentsOfDirectory(atPath: scopeDir) {
+                        for sub in nested {
+                            let full = "\(entry)/\(sub)"
+                            if Self.knownCompromisedNPMPackages.contains(full) ||
+                               Self.knownCompromisedNPMPackages.contains(sub) {
+                                findings.append(Finding(
+                                    severity: .high, category: .suspiciousFile,
+                                    title: "Compromised global npm package: \(full)",
+                                    detail: "Reported as malicious / typosquat in 2024-2025 supply-chain advisories",
+                                    path: "\(scopeDir)/\(sub)",
+                                    remediation: "Uninstall: npm uninstall -g \(full) — and rotate any secrets that ran during install"
+                                ))
+                            }
+                        }
+                    }
+                } else if Self.knownCompromisedNPMPackages.contains(entry) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Compromised global npm package: \(entry)",
+                        detail: "Reported as malicious / typosquat in 2024-2025 supply-chain advisories",
+                        path: "\(modDir)/\(entry)",
+                        remediation: "Uninstall: npm uninstall -g \(entry) — and rotate any secrets that ran during install"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Python Supply Chain (compromised global packages)
+
+    /// Known-malicious PyPI packages from 2024-2025 advisories (Sonatype / Phylum / ReversingLabs).
+    private static let knownCompromisedPythonPackages: Set<String> = [
+        "discordsafety", "discord-safety", "request-safety",
+        "pyobftoolkit", "py-discord-token",
+        "ethers-py", "solana-py-helper",
+        "colorama-utils", "colorama-tools",
+        "requests-darwin-lite", "requests-helper-utils",
+        "tensorflow-gpu-cuda", "torchtriton-cpu",
+        "pip-tools-helper", "pipreqs-helper",
+        "openai-helper-utils", "anthropic-helper",
+    ]
+
+    private func scanCompromisedPythonPackages(findings: inout [Finding], errors: inout [String]) {
+        // Best-effort: list installed packages via `pip list --format=freeze`. If pip isn't present
+        // or returns nothing useful, fall back to looking inside site-packages directories.
+        let result = ShellRunner.run("/bin/sh", arguments: [
+            "-c", "pip3 list --format=freeze 2>/dev/null || pip list --format=freeze 2>/dev/null"
+        ], timeout: 10)
+
+        if result.success && !result.stdout.isEmpty {
+            for line in result.stdout.split(separator: "\n") {
+                let pkg = String(line).split(separator: "=").first.map(String.init) ?? ""
+                let normalized = pkg.lowercased().trimmingCharacters(in: .whitespaces)
+                if Self.knownCompromisedPythonPackages.contains(normalized) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Compromised Python package installed: \(normalized)",
+                        detail: "Reported as malicious / typosquat in 2024-2025 PyPI supply-chain advisories",
+                        path: nil,
+                        remediation: "Uninstall: pip uninstall \(normalized) — and rotate any secrets that ran during install"
+                    ))
+                }
+            }
         }
     }
 
