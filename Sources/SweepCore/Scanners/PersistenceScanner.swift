@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Items / Login Items (macOS 13+)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking for AppleScript dropper files")
+        scanAppleScriptDroppers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,168 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Background Items / Login Items (macOS 13+ SMAppService)
+
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // macOS 13+ replaced the old login-item UI with the unified Background Items panel
+        // (System Settings > General > Login Items & Extensions). Items are persisted to
+        // ~/Library/Application Support/com.apple.backgroundtaskmanagementagent/backgrounditems.btm
+        // as a binary plist. Many users never review this list, and malware (AMOS, Banshee,
+        // FrigidStealer) increasingly installs there to look like an ordinary helper.
+        let home = ShellRunner.realUserHome
+        let btmPath = "\(home)/Library/Application Support/com.apple.backgroundtaskmanagementagent/backgrounditems.btm"
+
+        guard let data = FileManager.default.contents(atPath: btmPath) else { return }
+
+        // The .btm file is an NSKeyedArchiver-encoded ItemRecord tree. Without parsing the full
+        // archive, scan its serialized bytes for embedded strings: bundle IDs, labels, and paths.
+        // Any malicious entry leaves recognizable text in the blob.
+
+        // Pull out printable substrings of at least 8 chars (typical for paths / bundle IDs)
+        var extractedStrings = Set<String>()
+        var current = ""
+        for byte in data {
+            let ch = Character(UnicodeScalar(byte))
+            if byte >= 32 && byte < 127 && (ch.isLetter || ch.isNumber || "._-/+ @".contains(ch)) {
+                current.append(ch)
+            } else {
+                if current.count >= 8 { extractedStrings.insert(current) }
+                current = ""
+            }
+        }
+        if current.count >= 8 { extractedStrings.insert(current) }
+
+        // Cross-reference each extracted string against the spyware database.
+        var matchedSignatures = Set<String>()
+        for token in extractedStrings {
+            let lower = token.lowercased()
+
+            // Match by process name
+            for sig in SpywareSignature.known {
+                for procName in sig.processNames where procName.count >= 4 {
+                    if lower.contains(procName.lowercased()) && !matchedSignatures.contains(sig.name) {
+                        matchedSignatures.insert(sig.name)
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware as Login Item: \(sig.name)",
+                            detail: "Matched \"\(procName)\" inside backgrounditems.btm — registered via SMAppService",
+                            path: btmPath,
+                            remediation: "Remove in System Settings > General > Login Items & Extensions"
+                        ))
+                    }
+                }
+            }
+
+            // Match by bundle identifier
+            if let sig = SpywareSignature.match(bundleId: token),
+               !matchedSignatures.contains(sig.name) {
+                matchedSignatures.insert(sig.name)
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware bundle as Login Item: \(sig.name)",
+                    detail: "Bundle: \(token) — registered via SMAppService background items",
+                    path: btmPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+            }
+
+            // Flag fake Apple bundle IDs masquerading as system services
+            if token.hasPrefix("com.apple.") && SpywareSignature.isFakeAppleBundleId(token) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple Login Item: \(token)",
+                    detail: "Bundle ID registered as a background item but does not match Apple naming — likely malware",
+                    path: btmPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+
+        // Surface third-party background items from suspicious launch locations
+        let suspiciousLocations = ["/tmp/", "/private/tmp/", "/var/tmp/", "/.hidden/"]
+        for token in extractedStrings {
+            for loc in suspiciousLocations where token.contains(loc) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login Item references temp/hidden path",
+                    detail: "Background item path: \(String(token.prefix(120)))",
+                    path: btmPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                break
+            }
+        }
+    }
+
+    // MARK: - AppleScript Dropper Files
+
+    private func scanAppleScriptDroppers(findings: inout [Finding], errors: inout [String]) {
+        // AMOS, Banshee, Cuckoo, and most 2024-2025 macOS infostealers drop an AppleScript file
+        // into /tmp or /private/tmp and run it with osascript to coax the user into entering
+        // their password via a fake System Settings prompt. The dropped file is almost always
+        // named AppleScript-*.scpt, helper.scpt, or similar.
+        let scanDirs = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
+        let fm = FileManager.default
+
+        for dir in scanDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in contents {
+                let lower = entry.lowercased()
+                let isScpt = lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript")
+                let looksLikeDropper = lower.hasPrefix("applescript-") ||
+                                       lower.contains("stealer") ||
+                                       lower == "helper.scpt" ||
+                                       lower == "main.scpt"
+
+                guard isScpt || looksLikeDropper else { continue }
+
+                let filePath = "\(dir)/\(entry)"
+
+                // Read a small head of the file looking for password-prompt strings
+                let attrs = try? fm.attributesOfItem(atPath: filePath)
+                let size = (attrs?[.size] as? Int) ?? 0
+                guard size > 0 && size < 1_000_000 else {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "AppleScript file in temp directory",
+                        detail: "File: \(entry) in \(dir) — AMOS-family stealers drop AppleScript launchers here",
+                        path: filePath,
+                        remediation: "Inspect contents, then remove: rm \"\(filePath)\""
+                    ))
+                    continue
+                }
+
+                let snippet = (try? String(contentsOfFile: filePath, encoding: .utf8))?.lowercased() ?? ""
+                let phishesPassword = snippet.contains("with administrator privileges") ||
+                                      snippet.contains("display dialog") &&
+                                      (snippet.contains("password") || snippet.contains("system preferences"))
+                let exfiltrates = snippet.contains("curl ") || snippet.contains("do shell script")
+
+                if phishesPassword || exfiltrates {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Malicious AppleScript dropper in temp directory",
+                        detail: "File: \(entry)" +
+                            (phishesPassword ? " — prompts user for password" : "") +
+                            (exfiltrates ? " — shells out to curl / `do shell script`" : ""),
+                        path: filePath,
+                        remediation: "Quarantine immediately and run a full scan: rm \"\(filePath)\""
+                    ))
+                } else {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "AppleScript file in temp directory",
+                        detail: "File: \(entry) — AppleScript files in temp dirs are a common stealer staging pattern",
+                        path: filePath,
+                        remediation: "Inspect: cat \"\(filePath)\" — remove if not yours"
+                    ))
+                }
+            }
         }
     }
 

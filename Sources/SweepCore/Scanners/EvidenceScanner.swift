@@ -60,6 +60,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Detect active osascript-based password phishing — the canonical AMOS, Banshee,
+        //    Poseidon, FrigidStealer launcher pattern.
+        progress?.update("checking for osascript password phishing")
+        scanForOsascriptPhishing(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -549,6 +554,56 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+            }
+        }
+    }
+
+    // MARK: - Osascript Password Phishing
+
+    private func scanForOsascriptPhishing(findings: inout [Finding], errors: inout [String]) {
+        // The most reliable single tell of an Atomic Stealer / Banshee / Poseidon / FrigidStealer
+        // infection is a live `osascript` process whose command line contains the strings
+        // `display dialog` together with `with administrator privileges` or `password`. The
+        // stealer uses this to phish the user's login password under the guise of a System
+        // Settings prompt, then pipes the typed password to `security` to dump the keychain.
+        let result = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        guard result.success else { return }
+
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            let lower = lineStr.lowercased()
+
+            // Must be an osascript invocation. Skip our own scan and Apple's own helpers.
+            guard lower.contains("osascript") else { continue }
+            if lower.contains("/system/") { continue }
+
+            let isPhishing = lower.contains("display dialog") &&
+                (lower.contains("password") ||
+                 lower.contains("system preferences") ||
+                 lower.contains("system settings") ||
+                 lower.contains("with administrator privileges") ||
+                 lower.contains("with hidden answer"))
+
+            // Also flag osascript spawning curl/wget — used for second-stage payload retrieval.
+            let isDownloader = (lower.contains("curl ") || lower.contains("wget ")) &&
+                               lower.contains("do shell script")
+
+            if isPhishing {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousProcess,
+                    title: "osascript prompting user for password (AMOS/Banshee pattern)",
+                    detail: "Active: \(String(lineStr.prefix(200)))",
+                    path: nil,
+                    remediation: "Do NOT enter your password. Kill the process, then run a full sweep — this is the canonical macOS stealer phishing pattern"
+                ))
+            } else if isDownloader {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousProcess,
+                    title: "osascript spawning curl/wget (remote payload download)",
+                    detail: "Active: \(String(lineStr.prefix(200)))",
+                    path: nil,
+                    remediation: "Kill the process and investigate its parent — `osascript … do shell script \"curl …\"` is a common malware staging pattern"
+                ))
             }
         }
     }
