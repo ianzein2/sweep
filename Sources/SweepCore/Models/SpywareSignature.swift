@@ -434,6 +434,231 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS infostealers and droppers
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "WindowsUpdate", "Chrome-update", "Safari-update"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "/private/var/tmp/.frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent", "com.update.helper"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "process_hub", "applehub", "AppleAccountHelper"],
+            bundleIdentifiers: ["com.appleprocesshub.app"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+                "/tmp/.aph_stage",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]  // fake Apple label
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_mac", "OdysseyStealer", "odst"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK ContagiousInterview)",
+            processNames: ["BeaverTail", "beavertail", "node_helper", "npm_helper",
+                           "ContagiousInterview", "fccall"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/.npm/_cacache/.beaver",
+                "~/Library/Application Support/.BeaverTail",
+                // BeaverTail commonly drops to a hidden home directory file
+                "~/.n2/p.exe",
+                "~/.n2/p",
+                "~/.n2/pay",
+            ],
+            launchAgentLabels: ["com.node.helper", "com.npm.update"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["InvisibleFerret", "invisibleferret", "npc_helper", "appletwm"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.n2/.config",
+                "/private/tmp/.invisible",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie (DPRK)",
+            processNames: ["OtterCookie", "ottercookie", "node_otter", "fccall2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.otter",
+                "~/Library/Application Support/.OtterCookie",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK)",
+            processNames: ["FlexibleFerret", "flexible_ferret", "FerretHelper",
+                           "ChromeUpdate", "FrostyFerret"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.FlexibleFerret",
+                "~/Library/LaunchAgents/com.apple.softwareupdate-agent.plist",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate-agent"]  // fake
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (DPRK)",
+            processNames: ["HiddenRisk", "hiddenrisk", "RustDoor", "rust_door",
+                           "GoSorry", "Hloader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hiddenrisk",
+                "/Library/Application Support/.HiddenRisk",
+                "~/Library/Application Support/.HiddenRisk",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustDoor (Crypto Industry)",
+            processNames: ["RustDoor", "rustdoor", "rd_helper", "VisualStudioUpdater",
+                           "VisualStudioHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustdoor",
+                "~/Library/Application Support/.RustDoor",
+            ],
+            launchAgentLabels: ["com.visualstudio.updater"]  // fake
+        ),
+        SpywareSignature(
+            name: "Pearl Stealer",
+            processNames: ["Pearl", "pearl_stealer", "PearlAgent", "pearlsh"],
+            bundleIdentifiers: ["com.pearl.stealer"],
+            filePaths: [
+                "/private/tmp/.pearl",
+                "~/Library/Application Support/.Pearl",
+            ],
+            launchAgentLabels: ["com.pearl.agent"]
+        ),
+        SpywareSignature(
+            name: "Tiny FUD",
+            processNames: ["TinyFUD", "tinyfud", "tfud", "fudagent"],
+            bundleIdentifiers: ["com.tinyfud.app"],
+            filePaths: [
+                "/private/tmp/.tfud",
+                "~/Library/Application Support/.TinyFUD",
+            ],
+            launchAgentLabels: ["com.tinyfud.service"]
+        ),
+        SpywareSignature(
+            name: "MAS Stealer",
+            processNames: ["MASStealer", "masstealer", "mas_stealer", "MacUpdater"],
+            bundleIdentifiers: ["com.mas.stealer"],
+            filePaths: [
+                "/private/tmp/.mas",
+                "~/Library/Application Support/.MAS",
+            ],
+            launchAgentLabels: ["com.mas.agent"]
+        ),
+        // 2024-2025 ClickFix / fake-CAPTCHA droppers
+        SpywareSignature(
+            name: "ClickFix Mac Dropper",
+            processNames: ["ClickFix", "clickfix", "captcha_helper", "TerminalUpdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.clickfix",
+                "/private/tmp/captcha.sh",
+                "~/Library/Application Support/.ClickFix",
+            ],
+            launchAgentLabels: ["com.captcha.helper"]
+        ),
+        SpywareSignature(
+            name: "FakeUpdates / SocGholish (Mac variant)",
+            processNames: ["fakeupdate", "SocGholish", "browserUpdate",
+                           "ChromeUpdater", "FirefoxUpdater", "SafariUpdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.update",
+                "~/Library/Application Support/.BrowserUpdate",
+            ],
+            launchAgentLabels: ["com.browser.updater", "com.chrome.updater"]
+        ),
+        // Crystals — NSO-linked Mac targeted spyware (late 2024-2025)
+        SpywareSignature(
+            name: "Crystals (NSO)",
+            processNames: ["crystalsd", "Crystals", "crystals_agent", "crpd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.crystals",
+                "/Library/.crystals",
+            ],
+            launchAgentLabels: []
+        ),
+        // Triangulation-style implants (iOS-derived techniques on macOS)
+        SpywareSignature(
+            name: "Operation Triangulation (Mac variant)",
+            processNames: ["BackupAgent", "triangulationd", "imagentd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/db/.triangulation",
+                "~/Library/Caches/.triangulation",
+            ],
+            launchAgentLabels: []
+        ),
+        // Lumma Stealer Mac variant (emerged 2024-2025)
+        SpywareSignature(
+            name: "LummaC2 (Mac variant)",
+            processNames: ["lumma", "LummaC2", "lummac", "lummahelper"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.Lumma",
+            ],
+            launchAgentLabels: ["com.lumma.agent"]
+        ),
+        // Crypto-targeting variants
+        SpywareSignature(
+            name: "BlueNoroff Crypto Stealer (RustBucket v3)",
+            processNames: ["CryptoSwift", "CryptoAssetCalc", "BlueNoroff", "ProcessReporter"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.bn",
+                "~/Library/Application Support/.BlueNoroff",
+            ],
+            launchAgentLabels: []
+        ),
+        // Variants targeting cracked / pirated app installers (2024-2025)
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "ts_helper"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.agent"]
+        ),
+        // Recent crypto-drainer browser companions (early 2025)
+        SpywareSignature(
+            name: "AppleScript Wallet Drainer",
+            processNames: ["wallet_drain", "WalletDrainer", "drainagent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/wallet.scpt",
+                "/private/tmp/.drain.scpt",
+                "~/Library/Application Support/.WalletDrainer",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -441,6 +666,7 @@ public struct SpywareSignature {
     /// Fake Apple bundle ID patterns — real Apple IDs follow strict conventions
     public static let fakeAppleBundlePatterns: [String] = [
         "com.apple.softwareupdate.agent",
+        "com.apple.softwareupdate-agent",
         "com.apple.system.update",
         "com.apple.systemd",
         "com.apple.updater",
@@ -450,6 +676,19 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 fake Apple labels observed in BeaverTail/FlexibleFerret/RustDoor
+        "com.apple.processhub",
+        "com.apple.appleaccount.helper",
+        "com.apple.spotlight.indexer",
+        "com.apple.cloudd.helper",
+        "com.apple.systemconfig.daemon",
+        "com.apple.mediasharing.helper",
+        "com.apple.update.installer",
+        "com.apple.installer.daemon",
+        "com.apple.mac.helper",
+        "com.apple.icloud.helper",
+        "com.apple.softwareupdate.installer",
+        "com.apple.coreservices.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +713,27 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Fake "browser updater" process names — Atomic / FrigidStealer / FakeUpdates use these
+        "ChromeUpdate",          // Real Chrome updater is GoogleSoftwareUpdate
+        "Chrome-update",
+        "ChromeUpdater",
+        "FirefoxUpdater",
+        "SafariUpdater",         // Safari is updated via macOS itself
+        "Safari-update",
+        "BrowserUpdate",
+        "WindowsUpdate",         // Windows process name on macOS = always malicious
+        "VisualStudioUpdater",   // Used by RustDoor disguise; real one differs
+        "VisualStudioHelper",
+        "TerminalUpdater",       // Terminal.app does not have its own updater
+        "MacUpdater",            // Mimics legitimate MacUpdater app
+        // 2024-2025 stealer process names that pose as system services
+        "AppleAccountHelper",    // No such Apple binary
+        "AppleProcessHub",
+        "ProcessReporter",       // Used by BlueNoroff/RustBucket v3
+        "SystemConfigurationHelper",
+        "iCloudHelperAgent",
+        "MacOSSync",
+        "MacOSAgent",
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

@@ -1,6 +1,6 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 14 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## Download
 
@@ -64,7 +64,7 @@ sudo sweep --json
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`, `supplychain`
 
 ## What it checks
 
@@ -82,7 +82,8 @@ sudo sweep --json
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Find My Mac, Time Machine encryption, private Wi-Fi MAC, auto-run media |
+| **Supply Chain** | Detects developer-targeted threats — known-bad npm/pnpm packages (BeaverTail / ContagiousInterview IOCs), malicious `postinstall` scripts in `package.json`, risky `curl \| sh` patterns in shell history, third-party Homebrew taps |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

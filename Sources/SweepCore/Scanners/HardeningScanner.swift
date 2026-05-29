@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine backup encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC privacy")
+        checkPrivateMACAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking media autorun behavior")
+        checkAutomountSafety(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +481,197 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is a critical anti-theft feature. If the Mac is lost or stolen,
+        // it lets the owner remotely lock, locate, or wipe the device. The status lives
+        // in /Library/Preferences/com.apple.FindMyMac and isn't always world-readable —
+        // we treat "can't determine" as no finding (informational only).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "If this Mac is lost or stolen, you cannot remotely lock, locate, or erase it",
+                    path: nil,
+                    remediation: "Enable: System Settings > [Your Name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+
+        // Activation Lock is the second half of Find My — it prevents a wiped Mac from being reactivated
+        // without the original Apple ID. On Apple Silicon it's controlled by the SEP.
+        let activationLock = ShellRunner.run("/usr/sbin/system_profiler",
+                                             arguments: ["SPHardwareDataType"], timeout: 5)
+        if activationLock.success {
+            let lower = activationLock.stdout.lowercased()
+            if lower.contains("activation lock status") && lower.contains("disabled") {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Activation Lock is disabled",
+                    detail: "A wiped Mac can be reactivated by anyone — recommended on Apple Silicon Macs",
+                    path: nil,
+                    remediation: "Sign in to iCloud and enable Find My Mac to activate Activation Lock"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // An unencrypted Time Machine backup contains every file on the Mac — including keychain
+        // copies and browser cookies — and is trivially readable by anyone with physical access.
+        let result = ShellRunner.run("/usr/bin/tmutil",
+                                     arguments: ["destinationinfo"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Output is a series of "Key : Value" blocks separated by ====...====.
+        // We need to find any destination whose "Encryption" line says "Off".
+        let blocks = result.stdout.components(separatedBy: "====")
+        for block in blocks {
+            // Skip empty blocks
+            let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            var name = "(unnamed)"
+            var encryption: String?
+            for line in trimmed.split(separator: "\n") {
+                let parts = line.split(separator: ":", maxSplits: 1).map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                }
+                guard parts.count == 2 else { continue }
+                if parts[0] == "Name" { name = parts[1] }
+                if parts[0] == "Kind" && parts[1].lowercased() == "snapshot" {
+                    // Local snapshots are tied to filesystem encryption (FileVault), skip
+                    encryption = nil
+                    name = "(local snapshot)"
+                }
+                if parts[0] == "Encryption" { encryption = parts[1] }
+            }
+
+            // "Off" / "No" / "false" indicate the destination is not encrypted.
+            if let enc = encryption {
+                let lower = enc.lowercased()
+                if lower == "off" || lower == "no" || lower == "false" {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "Time Machine backup is not encrypted",
+                        detail: "Backup destination \"\(name)\" is unencrypted — anyone with the disk can read every file on this Mac",
+                        path: nil,
+                        remediation: "Encrypt the backup: System Settings > General > Time Machine > select destination > Encrypt Backups"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay isn't a hardening *requirement* — it's a privacy feature.
+        // We surface its disabled state as informational only when the user has iCloud+
+        // (we can't detect the subscription reliably, so this is LOW severity).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "NSPDisabledState"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "1" or higher = disabled by the user; absence/0 = enabled or unset
+        if let intVal = Int(value), intVal > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is disabled",
+                detail: "Safari traffic is not relayed through Apple — DNS queries and browsing IPs are visible to your ISP",
+                path: nil,
+                remediation: "If you have iCloud+, enable it: System Settings > [Your Name] > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Private Wi-Fi MAC address
+
+    private func checkPrivateMACAddress(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma+ supports per-network private MAC addresses to prevent device fingerprinting
+        // across Wi-Fi networks. The setting lives in com.apple.wifi.known-networks plist —
+        // each network has a "PrivateMACAddressModeUserSetting" key (0 = Off, 1 = Fixed, 2 = Rotating).
+        let plistPath = "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return }
+
+        var offNetworks: [String] = []
+        for (network, valueAny) in plist {
+            guard let entry = valueAny as? [String: Any] else { continue }
+            // Different macOS versions use slightly different key names — accept the common ones.
+            let setting = (entry["PrivateMACAddressModeUserSetting"] as? Int)
+                ?? (entry["PrivateMACAddressMode"] as? Int)
+            if let mode = setting, mode == 0 {
+                offNetworks.append(network)
+            }
+        }
+
+        if !offNetworks.isEmpty {
+            // Cap displayed network names so the finding stays compact
+            let shown = offNetworks.sorted().prefix(3).joined(separator: ", ")
+            let suffix = offNetworks.count > 3 ? ", +\(offNetworks.count - 3) more" : ""
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Private Wi-Fi MAC is disabled on \(offNetworks.count) network(s)",
+                detail: "Networks: \(shown)\(suffix) — your real MAC address is broadcast on these networks and can be used to track this device",
+                path: nil,
+                remediation: "For each Wi-Fi network: System Settings > Wi-Fi > (i) next to network > Private Wi-Fi address > Rotating"
+            ))
+        }
+    }
+
+    // MARK: - Media autorun safety
+
+    private func checkAutomountSafety(findings: inout [Finding], errors: inout [String]) {
+        // Disk images and external volumes can carry "auto-run" payloads that execute when mounted.
+        // macOS doesn't auto-execute files, but the CD/DVD auto-action default can be "run a script"
+        // (numeric action = 100). The keys live under com.apple.digihub. We read the full domain
+        // once and parse the nested dictionaries — `defaults` won't drill into dotted sub-keys.
+        let result = ShellRunner.run("/usr/bin/defaults",
+                                     arguments: ["read", "com.apple.digihub"], timeout: 5)
+        guard result.success, !result.stdout.isEmpty else { return }
+        let output = result.stdout
+
+        let mediaSections: [(key: String, label: String)] = [
+            ("blank.cd.appeared",  "blank CD"),
+            ("blank.dvd.appeared", "blank DVD"),
+            ("music.cd.appeared",  "music CD"),
+            ("picture.cd.appeared", "picture CD"),
+            ("video.dvd.appeared", "video DVD"),
+        ]
+
+        for (key, label) in mediaSections {
+            // Look for the section that starts with `"key" =` (quoted because of the dots),
+            // then check whether the following block contains `action = 100`.
+            let quoted = "\"\(key)\""
+            guard let range = output.range(of: quoted) else { continue }
+            // The block extends until the next closing brace `}` after the match.
+            let tail = output[range.upperBound...]
+            guard let closeBrace = tail.range(of: "}") else { continue }
+            let block = tail[..<closeBrace.upperBound]
+            // The dangerous value is action = 100 (run a script).
+            if block.contains("action = 100") {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Auto-run script configured for \(label) media",
+                    detail: "When a \(label) is inserted, macOS will run a script — an autorun attack surface for malicious media",
+                    path: nil,
+                    remediation: "Change to \"Ignore\" or \"Ask what to do\" in System Settings > CDs & DVDs"
                 ))
             }
         }

@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking AppleScript droppers")
+        scanAppleScriptDroppers(findings: &findings, errors: &errors)
+
+        progress?.update("checking hidden background apps (LSUIElement)")
+        scanHiddenBackgroundApps(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -99,10 +105,39 @@ public final class PersistenceScanner: Scanner {
 
         // Get executable path
         var executablePath: String?
+        var fullArguments: [String] = []
         if let program = plist["Program"] as? String {
             executablePath = program
-        } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
-            executablePath = first
+        }
+        if let args = plist["ProgramArguments"] as? [String] {
+            fullArguments = args
+            if executablePath == nil, let first = args.first {
+                executablePath = first
+            }
+        }
+
+        // Atomic-family stealers commonly install a LaunchAgent whose ProgramArguments
+        // invokes osascript on a .scpt dropped to /tmp or a hidden directory. Catch the
+        // pattern even when the binary itself (osascript) is signed and trusted.
+        if let exec = executablePath,
+           (exec == "/usr/bin/osascript" || exec.hasSuffix("/osascript")) {
+            let argString = fullArguments.joined(separator: " ")
+            let lower = argString.lowercased()
+            let referencesScpt = lower.contains(".scpt") || lower.contains(".applescript")
+            let touchesSuspiciousPath = lower.contains("/tmp/") || lower.contains("/private/tmp/") ||
+                                        lower.contains("/var/tmp/") || lower.contains("/.")
+            // Inline AppleScript via -e is highly suspicious in a persistence plist
+            let inlineScript = fullArguments.contains("-e")
+            if referencesScpt || touchesSuspiciousPath || inlineScript {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent runs AppleScript at login",
+                    detail: "Label: \(label), Command: osascript \(String(argString.prefix(120)))",
+                    path: path,
+                    remediation: "AppleScript droppers (Atomic, Banshee, Cthulhu) chain from a LaunchAgent like this — review then remove: sudo rm \"\(path)\""
+                ))
+                return
+            }
         }
 
         // Check against known spyware labels
@@ -676,6 +711,169 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - AppleScript Droppers
+
+    private func scanAppleScriptDroppers(findings: inout [Finding], errors: inout [String]) {
+        // The Atomic Stealer family (AMOS, Banshee, Poseidon, Cthulhu) repeatedly drops
+        // .scpt or .applescript files to /tmp and /var/tmp, then invokes osascript on them.
+        // Any compiled AppleScript sitting in a world-writable temp directory is suspicious.
+        let tempDirs = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
+        let fm = FileManager.default
+
+        // Patterns inside .scpt files that strongly suggest a stealer payload.
+        // We only match these to escalate severity — every loose .scpt is already worth flagging.
+        let payloadKeywords: [String] = [
+            "do shell script",
+            "system attribute",
+            "keychain",
+            "login.keychain",
+            "with administrator privileges",
+            "curl ",
+            "wget ",
+            "/dev/tcp",
+            "base64",
+            "metaMask",
+            "metamask",
+            "phantom",
+            "ledger",
+            "exodus",
+            "wallets",
+            "wallet.dat",
+            "trezor",
+            "passwords",
+        ]
+
+        for dir in tempDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for file in contents {
+                let lower = file.lowercased()
+                guard lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript") else { continue }
+                let filePath = "\(dir)/\(file)"
+
+                // Compiled .scpt is binary, plain .applescript is text. We try a best-effort
+                // text read in either case so we can grade severity.
+                var matchedKeywords: [String] = []
+                if let content = try? String(contentsOfFile: filePath, encoding: .utf8) {
+                    let cLower = content.lowercased()
+                    for kw in payloadKeywords where cLower.contains(kw.lowercased()) {
+                        matchedKeywords.append(kw)
+                        if matchedKeywords.count >= 3 { break }
+                    }
+                } else if let data = fm.contents(atPath: filePath) {
+                    // Try ASCII strings from a compiled .scpt — the literals are stored unobfuscated
+                    let asciiBytes = data.filter { $0 >= 0x20 && $0 < 0x7F }
+                    if let s = String(data: asciiBytes, encoding: .ascii) {
+                        let cLower = s.lowercased()
+                        for kw in payloadKeywords where cLower.contains(kw.lowercased()) {
+                            matchedKeywords.append(kw)
+                            if matchedKeywords.count >= 3 { break }
+                        }
+                    }
+                }
+
+                let attrs = try? fm.attributesOfItem(atPath: filePath)
+                let modDate = attrs?[.modificationDate] as? Date
+
+                let severity: Severity = matchedKeywords.isEmpty ? .medium : .high
+                let kwSuffix = matchedKeywords.isEmpty ? "" :
+                    ", suspicious strings: \(matchedKeywords.joined(separator: ", "))"
+                let ageSuffix: String = {
+                    guard let d = modDate else { return "" }
+                    let seconds = -d.timeIntervalSinceNow
+                    if seconds < 86400 { return ", \(Int(seconds / 3600))h old" }
+                    return ", \(Int(seconds / 86400))d old"
+                }()
+
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: severity == .high
+                        ? "AppleScript dropper in temp directory"
+                        : "AppleScript file in temp directory",
+                    detail: "File: \(filePath)\(ageSuffix)\(kwSuffix)",
+                    path: filePath,
+                    remediation: "Inspect: osadecompile \"\(filePath)\" — and remove if unexpected"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Hidden Background Apps (LSUIElement / NSUIElement)
+
+    private func scanHiddenBackgroundApps(findings: inout [Finding], errors: inout [String]) {
+        // Apps that set LSUIElement=true (or LSBackgroundOnly) run without a Dock icon or menu bar
+        // presence. That's legitimate for many menu-bar utilities, but it's also the default for
+        // stealers and surveillance tools that want to hide from the user. We surface non-Apple,
+        // non-system installs that combine LSUIElement with persistence (autostart at login).
+        let appRoots = [
+            "\(ShellRunner.realUserHome)/Applications",
+            "/Applications",
+        ]
+        // Pull the set of LaunchAgent labels so we can correlate with installed apps
+        let agentLabels = collectLaunchAgentLabels()
+        let fm = FileManager.default
+
+        for root in appRoots {
+            guard fm.fileExists(atPath: root),
+                  let contents = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            for entry in contents where entry.hasSuffix(".app") {
+                let infoPlist = "\(root)/\(entry)/Contents/Info.plist"
+                guard let data = fm.contents(atPath: infoPlist),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                else { continue }
+
+                let isUIElement = (plist["LSUIElement"] as? Bool ?? false) ||
+                                  (plist["LSUIElement"] as? String == "1") ||
+                                  (plist["LSBackgroundOnly"] as? Bool ?? false)
+                guard isUIElement else { continue }
+
+                let bundleId = plist["CFBundleIdentifier"] as? String ?? ""
+                // Apple and well-known menu bar utilities are fine to skip
+                if bundleId.hasPrefix("com.apple.") { continue }
+
+                // Has the user explicitly registered it as a login item or LaunchAgent? Then this is
+                // installed for persistence — combined with hide-from-dock it deserves attention.
+                let hasPersistence = agentLabels.contains(where: { label in
+                    !bundleId.isEmpty && label.contains(bundleId)
+                })
+
+                let signedAndTrusted = checkIsSigned(path: "\(root)/\(entry)")
+                // A signed menu-bar utility is unremarkable. Flag the dangerous combination:
+                // unsigned or ad-hoc, hidden, persistent.
+                if !signedAndTrusted || hasPersistence {
+                    let severity: Severity = (!signedAndTrusted && hasPersistence) ? .high : .medium
+                    findings.append(Finding(
+                        severity: severity, category: .persistence,
+                        title: "Hidden background app\(hasPersistence ? " with persistence" : "")",
+                        detail: "App: \(entry), Bundle: \(bundleId.isEmpty ? "(none)" : bundleId), runs invisibly (LSUIElement)\(signedAndTrusted ? "" : ", unsigned")",
+                        path: "\(root)/\(entry)",
+                        remediation: "Verify this app is intentional — apps that hide from the Dock and run at login are a common stealer pattern"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func collectLaunchAgentLabels() -> Set<String> {
+        let fm = FileManager.default
+        var labels = Set<String>()
+        for (dirPath, _) in launchDirs {
+            let expandedPath = dirPath.hasPrefix("~/")
+                ? ShellRunner.realUserHome + dirPath.dropFirst(1)
+                : dirPath
+            guard let entries = try? fm.contentsOfDirectory(atPath: expandedPath) else { continue }
+            for entry in entries where entry.hasSuffix(".plist") {
+                let full = "\(expandedPath)/\(entry)"
+                guard let data = fm.contents(atPath: full),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                      let label = plist["Label"] as? String else { continue }
+                labels.insert(label)
+            }
+        }
+        return labels
     }
 
     private func checkIsSigned(path: String) -> Bool {
