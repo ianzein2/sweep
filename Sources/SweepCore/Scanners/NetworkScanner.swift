@@ -67,6 +67,12 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Local LLM / dev server exposed to the network — Ollama, LM Studio, vLLM and friends
+        //    default to localhost but many users bind them to 0.0.0.0 for LAN access and forget.
+        //    Recent CVEs (e.g. CVE-2024-37032 Ollama path traversal) make this a real RCE vector.
+        progress?.update("checking exposed local AI / dev servers")
+        scanExposedLocalServers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -362,6 +368,85 @@ public final class NetworkScanner: Scanner {
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
             }
+        }
+    }
+
+    // MARK: - Exposed Local LLM / Dev Servers
+
+    /// Local AI servers (Ollama, LM Studio, llama.cpp's llama-server, vLLM, text-generation-webui)
+    /// often expose unauthenticated HTTP APIs. The defaults are loopback, but users routinely
+    /// rebind to 0.0.0.0 to reach them from another machine and never tighten it again. Anyone on
+    /// the LAN can then submit prompts (cost), exfiltrate context (privacy), or — for Ollama
+    /// specifically — chain CVE-2024-37032 for remote file read/write.
+    private let aiServerPorts: [(port: Int, name: String, detail: String)] = [
+        (11434, "Ollama", "the Ollama HTTP API is unauthenticated — anyone reaching this port can run/inspect models and CVE-2024-37032 enables file read"),
+        (1234,  "LM Studio", "LM Studio's local server is unauthenticated by default"),
+        (8080,  "llama.cpp server / text-generation-webui", "common local LLM server port — confirm it's bound to localhost"),
+        (5000,  "text-generation-webui", "common local LLM UI port"),
+        (7860,  "Gradio (text-generation-webui / ComfyUI)", "Gradio UIs are unauthenticated by default"),
+        (7861,  "Gradio", "Gradio UIs are unauthenticated by default"),
+        (8000,  "vLLM / OpenAI-compatible API", "OpenAI-compatible local API — confirm it's bound to localhost"),
+        (8188,  "ComfyUI", "ComfyUI is unauthenticated by default"),
+        (11435, "Ollama (alternate)", "alternate Ollama port — same unauthenticated API"),
+    ]
+
+    private func scanExposedLocalServers(findings: inout [Finding], errors: inout [String]) {
+        // Single lsof pass covering all the LISTEN sockets we care about; we filter in Swift.
+        let result = ShellRunner.run("/usr/sbin/lsof", arguments: [
+            "-iTCP", "-sTCP:LISTEN", "-n", "-P", "+c", "0", "-w"
+        ], timeout: 15)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Each line: "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME (LISTEN)"
+        // The address field is typically parts[8] for IPv4/IPv6 — find it by looking for the
+        // field that contains "addr:port" rather than trusting position, since some fields can
+        // be missing.
+        for raw in result.stdout.split(separator: "\n") {
+            let line = String(raw)
+            if line.hasPrefix("COMMAND") { continue }
+
+            let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard parts.count >= 9 else { continue }
+            let command = parts[0]
+            let pid = parts[1]
+
+            // Find the address field: the one that has a colon and a numeric tail.
+            var addrField: String?
+            for part in parts.reversed() {
+                if part == "(LISTEN)" { continue }
+                if let colon = part.range(of: ":", options: .backwards) {
+                    let tail = part[colon.upperBound...]
+                    if Int(tail) != nil { addrField = part; break }
+                }
+            }
+            guard let name = addrField,
+                  let colon = name.range(of: ":", options: .backwards) else { continue }
+
+            let bindAddr = String(name[..<colon.lowerBound])
+                .replacingOccurrences(of: "[", with: "")
+                .replacingOccurrences(of: "]", with: "")
+            let portStr = String(name[colon.upperBound...])
+            guard let port = Int(portStr) else { continue }
+
+            guard let server = aiServerPorts.first(where: { $0.port == port }) else { continue }
+
+            // Localhost-only binds are fine — no remote exposure.
+            let isLoopback = bindAddr == "127.0.0.1" || bindAddr == "::1" || bindAddr == "localhost"
+            if isLoopback { continue }
+
+            // "*" or empty addr = all interfaces; an explicit non-loopback IP also means LAN-reachable.
+            let isAllInterfaces = bindAddr == "*" || bindAddr.isEmpty || bindAddr == "0.0.0.0" || bindAddr == "::"
+
+            findings.append(Finding(
+                severity: isAllInterfaces ? .high : .medium,
+                category: .networkActivity,
+                title: "\(server.name) listening on \(isAllInterfaces ? "all interfaces" : bindAddr):\(port)",
+                detail: "Process: \(command) (PID \(pid)) — \(server.detail)",
+                path: nil,
+                remediation: isAllInterfaces
+                    ? "Bind to localhost only. For Ollama: launchctl setenv OLLAMA_HOST 127.0.0.1:11434 and restart it."
+                    : "Confirm \(bindAddr) is an interface only trusted devices can reach."
+            ))
         }
     }
 

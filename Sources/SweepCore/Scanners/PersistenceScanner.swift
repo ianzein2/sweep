@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking shell history for paste-and-run attacks")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +678,120 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - ClickFix / Paste-and-Run Detection (shell history)
+
+    /// "ClickFix" / "FakeCAPTCHA" / "paste-fix" campaigns (TA571, ClearFake, late 2024-2025) trick
+    /// users into pasting a one-liner from a fake error page into Terminal. The resulting command
+    /// usually fetches a remote script and pipes it to bash/zsh, or base64-decodes an embedded
+    /// payload. The smoking gun lives in the user's shell history file.
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Each entry: pattern (lowercased substring), description for the finding, severity
+        let pasteRunPatterns: [(pattern: String, description: String, severity: Severity)] = [
+            ("curl -s ", "curl -s piped — typical fetch-and-run", .medium),
+            ("curl -fs", "curl silent fetch — typical fetch-and-run", .medium),
+            ("| sh", "shell pipe — code from network executed directly", .high),
+            ("| bash", "bash pipe — code from network executed directly", .high),
+            ("| zsh", "zsh pipe — code from network executed directly", .high),
+            ("bash <(curl", "bash process substitution from curl — ClickFix hallmark", .high),
+            ("zsh <(curl", "zsh process substitution from curl — ClickFix hallmark", .high),
+            ("eval \"$(curl", "eval of curl output — paste-and-run vector", .high),
+            ("eval \"$(wget", "eval of wget output — paste-and-run vector", .high),
+            ("base64 -d", "inline base64 decode — common obfuscation in pasted commands", .medium),
+            ("base64 --decode", "inline base64 decode — common obfuscation", .medium),
+            ("python3 -c \"import base64", "inline base64 python — obfuscated paste payload", .high),
+            ("osascript -e 'do shell script", "osascript do-shell-script — pasted AppleScript loader", .high),
+            ("sudo killall terminal", "ClickFix victim-cleanup pattern (killing Terminal post-paste)", .high),
+        ]
+
+        // Recently-popular ClickFix lure domains. The list is illustrative — finding ANY URL piped
+        // through sh in history is already a finding above; this catches the specific lures.
+        let knownLureKeywords = [
+            "captcha-verify", "captchaverify", "fake-captcha", "i-am-not-a-robot",
+            "cf-cdn-error", "cdn-fix", "browser-update", "chrome-update.sh",
+            "google-meet-fix", "zoom-fix.sh",
+        ]
+
+        for histPath in historyFiles {
+            guard let content = try? String(contentsOfFile: histPath, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: histPath).lastPathComponent
+
+            // zsh history lines look like ": 1700000000:0;curl ... | sh" — strip the metadata prefix
+            // so the pattern check sees the actual command.
+            let lines = content.components(separatedBy: "\n")
+            var emittedForFile = 0
+
+            for (idx, rawLine) in lines.enumerated() {
+                if emittedForFile >= 5 { break } // cap per-file noise
+
+                var line = rawLine
+                if line.hasPrefix(":"),
+                   let semi = line.range(of: ";") {
+                    line = String(line[semi.upperBound...])
+                }
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                let lower = trimmed.lowercased()
+
+                // Skip obvious-legit installer one-liners that users routinely paste.
+                let benignInstallers = [
+                    "raw.githubusercontent.com/homebrew",
+                    "brew.sh",
+                    "rustup.rs",
+                    "get.docker.com",
+                    "nodejs.org",
+                    "deno.land/install",
+                    "bun.sh/install",
+                    "ollama.com/install",
+                    "sh.rustup.rs",
+                    "pyenv-installer",
+                ]
+                if benignInstallers.contains(where: { lower.contains($0) }) { continue }
+
+                // Lure keyword match — high severity even without a pipe
+                if let lure = knownLureKeywords.first(where: { lower.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "ClickFix lure URL found in \(fileName)",
+                        detail: "Line \(idx + 1): contains \"\(lure)\" — \(String(trimmed.prefix(120)))",
+                        path: histPath,
+                        remediation: "Investigate what this command did — rotate browser passwords and run a full sweep. Edit history: nano \(histPath)"
+                    ))
+                    emittedForFile += 1
+                    continue
+                }
+
+                // Pipe-to-shell pattern match
+                for (pattern, description, severity) in pasteRunPatterns {
+                    if lower.contains(pattern) {
+                        // Reduce noise: only flag a "curl -s" line if it also pipes or evals into a shell.
+                        if pattern.hasPrefix("curl") || pattern.hasPrefix("base64") {
+                            let pipesIntoShell = lower.contains("| sh") || lower.contains("| bash") ||
+                                lower.contains("| zsh") || lower.contains("eval ") ||
+                                lower.contains("bash <(") || lower.contains("zsh <(")
+                            if !pipesIntoShell { continue }
+                        }
+                        findings.append(Finding(
+                            severity: severity, category: .persistence,
+                            title: "Paste-and-run command in \(fileName)",
+                            detail: "Line \(idx + 1): \(description) — \(String(trimmed.prefix(120)))",
+                            path: histPath,
+                            remediation: "Verify you intentionally ran this. If pasted from a webpage/CAPTCHA, treat as a compromise: rotate browser passwords, kill suspicious processes, and clean up \(histPath)"
+                        ))
+                        emittedForFile += 1
+                        break
+                    }
+                }
+            }
         }
     }
 

@@ -434,6 +434,147 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 emerging threats
+        // FrigidStealer — Feb 2025 campaign delivered via fake browser update pages (TA569 / TA2727).
+        // Drops an AppleScript-driven info stealer that exfiltrates Keychain + browser data.
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "Frigid", "frigidstealer"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "/private/tmp/FrigidStealer.app",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        // RustDoor (BlueNoroff / Lazarus) — Rust-based backdoor first reported by Bitdefender in
+        // 2024, targets crypto developers via fake job offers. Variants also known as "ThiefBucket".
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "VisualStudioHelper",
+                           "zoom_sdk_helper", "ThiefBucket", "thiefbucket"],
+            bundleIdentifiers: ["com.visualstudioupdater.app"],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/private/tmp/.rustdoor",
+                "~/Library/VisualStudioUpdater",
+            ],
+            launchAgentLabels: ["com.visualstudioupdater.agent", "com.zoom.sdkhelper"]
+        ),
+        // BeaverTail / InvisibleFerret — the "Contagious Interview" campaign (DPRK).
+        // Trojanized Node.js packages dropped during fake interview coding tests; InvisibleFerret
+        // is the Python second stage that steals browser + wallet data.
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "n2.exe", "p2.exe", "RealtimeBoardHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/.npl",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pay", "bow", "mig",
+                           "tsx-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.config/.invisible",
+                "/private/tmp/.invisibleferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        // HiddenRisk — BlueNoroff (DPRK) macOS backdoor disclosed by SentinelOne in late 2024.
+        // Distributed via PDFs disguised as crypto research and uses a custom launchd persistence path.
+        SpywareSignature(
+            name: "HiddenRisk",
+            processNames: ["HiddenRisk", "hiddenrisk", "growth", "Growth"],
+            bundleIdentifiers: ["com.hidden.risk", "growth.update"],
+            filePaths: [
+                "~/Library/Caches/com.apple.helphelperd",
+                "/private/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.apple.helphelperd"]
+        ),
+        // TodoSwift — DPRK-linked macOS dropper (Kandykorn family successor) disclosed 2024.
+        // Drops malicious Swift apps disguised as productivity tools.
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "TodoTasks", "swiftupdate"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.agent"]
+        ),
+        // NimDoor — Nim-based backdoor for macOS (Sentinel-One reporting, 2024). Uses unusual
+        // language to evade signature scanners; persists via LaunchAgent named after Zoom.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "ZoomUpdater", "zoom_im"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["us.zoom.ZoomDaemon"]
+        ),
+        // Crystal Stealer (a.k.a. CrystalRAT) — info stealer targeting browser data and crypto
+        // wallets, sold on underground forums since mid-2024.
+        SpywareSignature(
+            name: "Crystal Stealer",
+            processNames: ["Crystal", "crystal_stealer", "crystalrat", "CrystalRAT"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        // SilverFox — Chinese-language crimeware family pivoting to macOS in 2024-2025.
+        // Drops a payload disguised as Visual C++ runtime / driver update.
+        SpywareSignature(
+            name: "SilverFox",
+            processNames: ["SilverFox", "silverfox", "yinhu", "winos"],
+            bundleIdentifiers: ["com.silverfox.app"],
+            filePaths: [
+                "/private/tmp/.silverfox",
+                "~/Library/Application Support/.SilverFox",
+            ],
+            launchAgentLabels: ["com.silverfox.service"]
+        ),
+        // PylotStealer — Python-based stealer reported in 2025 distributed via cracked-software sites.
+        SpywareSignature(
+            name: "PylotStealer",
+            processNames: ["PylotStealer", "pylot", "pylotagent", "pilot_stealer"],
+            bundleIdentifiers: ["com.pylot.stealer"],
+            filePaths: [
+                "/private/tmp/.pylot",
+                "~/Library/Application Support/.PylotStealer",
+            ],
+            launchAgentLabels: ["com.pylot.agent"]
+        ),
+        // ClickFix loader — not a single malware family but a delivery technique that pastes
+        // an AppleScript or curl|sh into Terminal from a fake CAPTCHA page. The launched payload
+        // is often named after a recent CVE or system tool.
+        SpywareSignature(
+            name: "ClickFix Loader",
+            processNames: ["clickfix", "ClickFix", "FixIt", "fixit_helper",
+                           "CleanMyMac_Update", "GoogleMeet_Helper", "Captcha_Verify"],
+            bundleIdentifiers: ["com.clickfix.installer"],
+            filePaths: [
+                "/private/tmp/.clickfix",
+                "~/Library/Application Support/.clickfix",
+                "/private/tmp/captcha.sh",
+                "/private/tmp/fix.sh",
+            ],
+            launchAgentLabels: ["com.clickfix.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
