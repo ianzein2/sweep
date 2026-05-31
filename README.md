@@ -72,19 +72,31 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, sudoers, PAM, emond, and shell-hijack aliases/functions wrapping `sudo` / `git` / `npm` |
+| **Evidence** | Looks for stored screenshots, keystroke logs, recording artifacts, browser credential-store copies, crypto wallet staging, and DPRK Contagious Interview droppers (`/.npl`, `/.n2`, `/tmp/p.js`) |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, PAC/proxy hijack |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions; flags malicious VSCode/Cursor/Windsurf marketplace extensions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS-style checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, Private Wi-Fi MAC, Time Machine encryption, iCloud Private Relay, captive-portal detection |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
+
+## Coverage
+
+Sweep ships with signatures for **60+** macOS threat families, including:
+
+- **Consumer stalkerware** — Spyrix, FlexiSpy, mSpy, Hoverwatch, KidLogger, Refog, Spyera, Realtime-Spy, Aobo, Elite Keylogger, Revealer, Spyic, Cocospy, pcTattletale, SpyBubble, Xnspy, iKeyMonitor, EyeZy, WebWatcher, TheTruthSpy, ClevGuard / KidsGuard Pro, Mobistealth, Spyzie
+- **APT / nation-state** — OSX.Pegasus, OSX.DazzleSpy, OSX.CloudMensis, XCSSET, OSX.Predator, Chrysaor, RustBucket, KandyKorn, ObjCShellz, SpectralBlur, SmoothOperator (3CX), NokNok (BlueNoroff)
+- **2024-2026 macOS malware** — HZ Rat, BeaverTail / InvisibleFerret (Contagious Interview), NimDoor, JaskaGO, TodoSwift, CDDS / Macma (Daggerfly), JokerSpy, AppleJeus (Lazarus), RustyAttr, FrigidStealer, CherryPie, LightSpy macOS, FullHouse.Doored
+- **Infostealers** — Atomic macOS Stealer (AMOS), Banshee, Cthulhu, Poseidon, MetaStealer, Cuckoo, Realst, MacStealer, PureLand, Activator
+- **Adware & red-team tooling** — Adload, Pirrit, Geacon / SeaChef (Cobalt Strike macOS), SwiftBelt, ChainBreaker / KeychainCracker
+
+Crypto-wallet exfiltration coverage tracks MetaMask, Phantom, Coinbase Wallet, Ronin, TronLink, Exodus, Electrum, Atomic Wallet, Ledger Live, Trezor Suite, Keplr, Trust Wallet, OKX, Rabby, Backpack, Solflare, MathWallet, Argent X, XDEFI, Sui, Brave Wallet, Petra (Aptos), Coin98, Bitcoin Core, Daedalus, and Coinomi.
 
 ## Security score
 

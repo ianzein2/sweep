@@ -353,6 +353,15 @@ public final class PersistenceScanner: Scanner {
             ("/.hidden", "references hidden directory"),
         ]
 
+        // Commands that stealers commonly hijack via shell aliases or functions to
+        // intercept developer credentials, mnemonics, and SSH keys (observed in
+        // 2024-2026 stealer drops). Wrapping these is highly unusual for end users.
+        let hijackTargets: Set<String> = [
+            "sudo", "ssh", "scp", "gh", "git", "npm", "pnpm", "yarn",
+            "pip", "pip3", "python", "python3", "node", "curl", "wget",
+            "aws", "gcloud", "kubectl", "docker",
+        ]
+
         for configPath in shellConfigs {
             guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
             let fileName = URL(fileURLWithPath: configPath).lastPathComponent
@@ -375,6 +384,19 @@ public final class PersistenceScanner: Scanner {
                         break // one finding per line is enough
                     }
                 }
+
+                // Shell aliases/functions wrapping sensitive commands AND referencing a
+                // suspicious target (temp dir, hidden path, curl/wget/eval/base64). The
+                // body check is what separates a stealer drop from `alias git='git --no-pager'`.
+                if let hijack = detectShellHijack(line: trimmed, targets: hijackTargets) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Shell hijack: \(hijack) wrapped in \(fileName)",
+                        detail: "Line \(lineNum + 1): \(String(trimmed.prefix(120))) — wrapping `\(hijack)` with a suspicious body lets the attacker run code every time you invoke it",
+                        path: configPath,
+                        remediation: "Open \(configPath), remove the alias/function for `\(hijack)`, and rotate any secrets typed since this entry was added"
+                    ))
+                }
             }
 
             // Also check for spyware signatures in content
@@ -393,6 +415,48 @@ public final class PersistenceScanner: Scanner {
                 }
             }
         }
+    }
+
+    /// Detect alias/function wrapping of sensitive commands. Returns the wrapped
+    /// command name if the line both wraps a sensitive command AND references a
+    /// suspicious target (temp dir, hidden path, curl|sh, base64, eval). Pure
+    /// flag-tweaking aliases like `alias git='git --no-pager'` are intentionally ignored.
+    private func detectShellHijack(line: String, targets: Set<String>) -> String? {
+        // Common shapes:
+        //   alias sudo='...'           — Bash/Zsh alias
+        //   sudo() { ...; }            — function definition
+        //   function sudo { ...; }     — Zsh function
+        //   function sudo() { ...; }   — Bash/Zsh function
+        let alias = #"^alias\s+([A-Za-z0-9_]+)\s*="#
+        let funcParen = #"^([A-Za-z0-9_]+)\s*\(\s*\)\s*\{"#
+        let funcKeyword = #"^function\s+([A-Za-z0-9_]+)"#
+
+        var hijackedName: String?
+        for pattern in [alias, funcParen, funcKeyword] {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            let ns = line as NSString
+            let matches = regex.matches(in: line, range: NSRange(location: 0, length: ns.length))
+            guard let match = matches.first, match.numberOfRanges >= 2 else { continue }
+            let name = ns.substring(with: match.range(at: 1))
+            if targets.contains(name) {
+                hijackedName = name
+                break
+            }
+        }
+        guard let name = hijackedName else { return nil }
+
+        // The body must look suspicious. Most legitimate user aliases just add flags
+        // or chain into the original command — none of these markers appear there.
+        // `~/.config` and similar legitimate dotfile references are intentionally NOT
+        // flagged; we look for execution patterns, not any hidden path.
+        let lower = line.lowercased()
+        let suspiciousBody = [
+            "/tmp/", "/var/tmp/", "/private/tmp/",
+            "curl ", "wget ", "base64", "eval ", "$(curl", "$(wget",
+            "nc ", "ncat ", "python -c", "python3 -c", "perl -e",
+            "openssl enc", "xxd -r",
+        ]
+        return suspiciousBody.contains(where: { lower.contains($0) }) ? name : nil
     }
 
     // MARK: - Cron Jobs

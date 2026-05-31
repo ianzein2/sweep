@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Private Wi-Fi MAC address")
+        checkPrivateWiFiAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking captive portal bypass risks")
+        checkCaptivePortalRisks(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +456,120 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Private Wi-Fi MAC address (macOS 14+)
+
+    private func checkPrivateWiFiAddress(findings: inout [Finding], errors: inout [String]) {
+        // Modern macOS rotates the Wi-Fi MAC per-SSID to defeat tracking. Disabling
+        // it makes the user trackable across networks. networksetup exposes per-service
+        // state; we surface it as low-severity awareness.
+        let services = ShellRunner.run("/usr/sbin/networksetup",
+                                       arguments: ["-listallhardwareports"], timeout: 5)
+        guard services.success else { return }
+
+        // Look for Wi-Fi service line, then check the MAC randomization setting
+        let result = ShellRunner.run("/usr/sbin/networksetup",
+                                     arguments: ["-getMACAddress", "Wi-Fi"], timeout: 5)
+        // macOS doesn't expose the per-SSID randomization toggle via CLI consistently across
+        // releases. Use a defaults-domain check as a best-effort signal.
+        let prefs = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.private-mac-address.plist"
+        ], timeout: 5)
+
+        if result.success && prefs.success {
+            // If we see "disabled" anywhere in the prefs, the user has manually turned
+            // randomization off for at least one network — worth flagging.
+            if prefs.stdout.lowercased().contains("disabled = 1") ||
+               prefs.stdout.lowercased().contains("disabled=1") {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Private Wi-Fi MAC address disabled on at least one network",
+                    detail: "Your Wi-Fi MAC is stable across joins to that network — makes you trackable by venue Wi-Fi systems",
+                    path: nil,
+                    remediation: "Re-enable: System Settings > Wi-Fi > (i) on the network > Private Wi-Fi address: On"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // Unencrypted Time Machine backups are a forgotten data-loss vector: a Mac with
+        // FileVault on can still be cloned via an unencrypted external Time Machine drive.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 5)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Look for "Encrypted" lines under each destination
+        let blocks = result.stdout.components(separatedBy: "====")
+        for block in blocks {
+            guard block.contains("Name") else { continue }
+            let encryptedLine = block.split(separator: "\n").first { $0.contains("Encrypted") }
+            if let line = encryptedLine,
+               line.lowercased().contains("no") {
+                let nameLine = block.split(separator: "\n").first { $0.contains("Name") }
+                let dest = nameLine.map { String($0).trimmingCharacters(in: .whitespaces) } ?? "destination"
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Time Machine destination is not encrypted",
+                    detail: "\(dest) — your backups can be mounted on any Mac if the drive is lost or stolen",
+                    path: nil,
+                    remediation: "System Settings > General > Time Machine > Edit destination > Encrypt Backups"
+                ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay (iCloud+) hides your IP from websites and Safari trackers.
+        // We surface only as informational — many users don't pay for iCloud+.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "PrivateRelayEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                // Only flag if iCloud+ is detected — otherwise the user isn't a subscriber.
+                let icloudCheck = ShellRunner.run("/usr/bin/defaults", arguments: [
+                    "read", "MobileMeAccounts"
+                ], timeout: 5)
+                if icloudCheck.success && icloudCheck.stdout.contains("AccountID") {
+                    findings.append(Finding(
+                        severity: .low, category: .hardening,
+                        title: "iCloud Private Relay is available but disabled",
+                        detail: "Your IP address is visible to every website you visit in Safari and to network trackers",
+                        path: nil,
+                        remediation: "Enable: System Settings > [Your Name] > iCloud > Private Relay"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Captive portal bypass risks
+
+    private func checkCaptivePortalRisks(findings: inout [Finding], errors: inout [String]) {
+        // Disabling the captive portal helper (CaptiveNetworkSupport) is sometimes recommended
+        // for privacy, but the helper is also what surfaces the "Login Required" sheet on hotel
+        // Wi-Fi — disabling it can mean the user joins compromised networks without warning.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.captive.control", "Active"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" || value.lowercased() == "false" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Captive portal detection is disabled",
+                    detail: "macOS won't pop up the network login sheet on captive Wi-Fi — apps may connect through an intercepted network before you log in",
+                    path: nil,
+                    remediation: "Re-enable: sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.captive.control Active -bool true"
                 ))
             }
         }

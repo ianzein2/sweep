@@ -60,6 +60,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Contagious Interview (DPRK) supply-chain artifacts — fake job campaigns
+        //    drop BeaverTail/InvisibleFerret via npm into developer machines (2024-2026).
+        progress?.update("checking DPRK Contagious Interview artifacts")
+        scanForContagiousInterview(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -445,6 +450,24 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2026 additions — wallets explicitly listed in AMOS, Banshee,
+        // Cthulhu, and Realst configuration files seized in recent campaigns.
+        ("Trust Wallet",   "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet",     "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Rabby",          "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Backpack",       "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Solflare",       "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("MathWallet",     "afbcbjpbpfadlkmhmclhkeeodmamcflc"),
+        ("Argent X",       "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        ("XDEFI",          "hmeobnfnfcmdkdcmlblgagmfpfboieaf"),
+        ("Sui Wallet",     "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("Brave Wallet",   "odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("Petra (Aptos)",  "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("Coin98",         "aeachknmefphepccionboohckonoeemg"),
+        // Local wallet/key files that AMOS-family stealers explicitly grep for
+        ("Bitcoin Core",   "Bitcoin/wallets"),
+        ("Daedalus (Cardano)", "Daedalus Mainnet"),
+        ("Coinomi",        "Coinomi/wallets"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -547,6 +570,94 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Contagious Interview (DPRK supply-chain) artifacts
+
+    /// File / directory paths the BeaverTail and InvisibleFerret droppers create on macOS.
+    /// These are stable across the 2024-2026 campaigns documented by Palo Alto Unit 42,
+    /// SentinelOne, and Group-IB, even as the npm package names that deliver them rotate.
+    private let contagiousInterviewArtifacts: [(path: String, label: String)] = [
+        ("/.npl",        "BeaverTail / InvisibleFerret staging dir"),
+        ("/.n2",         "BeaverTail / InvisibleFerret staging dir"),
+        ("/.n2/p2",      "InvisibleFerret payload"),
+        ("/.npl/pay",    "InvisibleFerret pay.py launcher"),
+        ("/.pyp",        "InvisibleFerret python staging"),
+        ("/.bow",        "InvisibleFerret bow.py module"),
+        ("/.mig",        "InvisibleFerret mig.py module"),
+    ]
+
+    private func scanForContagiousInterview(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        // 1. Static IOC paths (BeaverTail/InvisibleFerret droppers consistently use these).
+        let rootsToCheck = [home, "/tmp", "/private/tmp", "/var/tmp"]
+        for root in rootsToCheck {
+            for (suffix, label) in contagiousInterviewArtifacts {
+                let candidate = root + suffix
+                guard fm.fileExists(atPath: candidate) else { continue }
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "DPRK Contagious Interview dropper artifact",
+                    detail: "\(label) at \(candidate) — created by malicious npm packages delivered through fake job interviews",
+                    path: candidate,
+                    remediation: "Remove the directory, audit your shell history for `npm install`/`pip install` from unknown sources, and rotate any developer secrets"
+                ))
+            }
+        }
+
+        // 2. /tmp/p.js, /tmp/main.js, /tmp/error.log are common BeaverTail stage-1 names.
+        let tmpDroppers: [(name: String, hint: String)] = [
+            ("p.js",      "BeaverTail JS stage-1"),
+            ("clientId.json", "BeaverTail config file"),
+            ("client.js", "BeaverTail variant"),
+            ("idtoken.json", "BeaverTail config file"),
+        ]
+        for tmpDir in ["/tmp", "/private/tmp", "/var/tmp"] {
+            for (name, hint) in tmpDroppers {
+                let candidate = "\(tmpDir)/\(name)"
+                guard fm.fileExists(atPath: candidate) else { continue }
+                // Quick content sniff — these files contain "process.env.HOME" and "fetch" patterns
+                if let data = fm.contents(atPath: candidate),
+                   let content = String(data: data.prefix(4096), encoding: .utf8) {
+                    let suspiciousMarkers = ["process.env.HOME", "child_process", "exec(", "ssh-keygen", "wallet"]
+                    let hits = suspiciousMarkers.filter { content.contains($0) }.count
+                    if hits >= 2 {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "BeaverTail-like script in /tmp",
+                            detail: "\(hint) at \(candidate) — script contains \(hits) DPRK-stealer markers",
+                            path: candidate,
+                            remediation: "Quarantine this file, kill any node/python process spawned from /tmp, and inspect npm install history"
+                        ))
+                    }
+                }
+            }
+        }
+
+        // 3. node / python invocations whose *script argument* lives in /tmp are extremely
+        //    rare in legitimate development and are the canonical BeaverTail / InvisibleFerret
+        //    execution pattern. We deliberately match only ` node /tmp/...` style invocations
+        //    to avoid flagging pytest/jest caches, npm tarballs, virtualenvs, etc.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        if psResult.success {
+            let scriptPattern = #"(?:^|\s)(?:/[^ ]*/)?(node|python|python3)\s+(/tmp/|/private/tmp/|/var/tmp/)[^ ]+"#
+            guard let regex = try? NSRegularExpression(pattern: scriptPattern) else { return }
+            for line in psResult.stdout.split(separator: "\n") {
+                let lineStr = String(line)
+                let ns = lineStr as NSString
+                let matches = regex.matches(in: lineStr, range: NSRange(location: 0, length: ns.length))
+                if !matches.isEmpty {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Interpreter executing script from /tmp",
+                        detail: String(lineStr.prefix(160)),
+                        path: nil,
+                        remediation: "Identify the parent process — DPRK Contagious Interview campaigns run node/python from /tmp after a malicious `npm install`"
                     ))
                 }
             }

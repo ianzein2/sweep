@@ -434,6 +434,220 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS threats — sourced from public threat-intel reports
+        // (Kaspersky, SentinelOne, Group-IB, Proofpoint, Unit 42, Kandji, ESET).
+        SpywareSignature(
+            name: "HZ Rat (macOS)",
+            processNames: ["hzrat", "OpenVPNConnect.helper", "OpenVPNUpdater"],
+            bundleIdentifiers: ["com.hz.rat", "com.openvpn.client.helper"],
+            filePaths: [
+                "~/Library/Group Containers/.hzrat",
+                "/tmp/.hzrat",
+                "~/Library/Application Support/OpenVPNConnect/Library/Application Support/com.hz",
+            ],
+            launchAgentLabels: ["com.openvpn.client.plist", "com.hz.rat"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["beavertail", "p.js", "miner.js"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.npl",
+                "/tmp/p.js",
+                "~/.n2/p2",
+                "~/.npl",
+                "/var/tmp/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["pay.py", "bow.py", "mig.py", "pyp.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl/pay",
+                "~/.n2/pay",
+                "/tmp/.npl/pay",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            processNames: ["NimDoor", "nimdoor", "GoogIe LLC", "Zoom_SDKUpdater", "trojai"],
+            bundleIdentifiers: ["us.zoom.SDKUpdater", "com.Google.update"],
+            filePaths: [
+                "/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "~/Library/LaunchAgents/us.zoom.SDKUpdater.plist",
+                "~/.Trash/.tmp",
+            ],
+            launchAgentLabels: ["com.google.update", "us.zoom.SDKUpdater"]
+        ),
+        SpywareSignature(
+            name: "JaskaGO",
+            // Only "jaskago" is unique; the legitimate CapCut/AnyDesk binaries share
+            // the cover names, so we rely on path + bundle ID for those variants.
+            processNames: ["jaskago"],
+            bundleIdentifiers: ["com.jaskago.agent"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.jaska",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK)",
+            // "PDF Viewer" is a common app name (Adobe, PSPDFKit, etc.) — keep only unique markers.
+            processNames: ["TodoSwift", "todoswift", "Crypto-assessment"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: [
+                "~/Library/Application Support/.TodoSwift",
+                "/private/tmp/.todoswift",
+            ],
+            launchAgentLabels: ["com.todoswift.agent"]
+        ),
+        SpywareSignature(
+            name: "CDDS / Macma (Daggerfly)",
+            // "UserAgent" and "GoogleSoftwareUpdate" are real Apple/Google strings.
+            // Macma is identified by its distinctive bundle ID + plist label.
+            processNames: ["macma", "cdds"],
+            bundleIdentifiers: ["com.UserAgent.va"],
+            filePaths: [
+                "~/Library/LaunchAgents/com.UserAgent.va.plist",
+                "/Library/LaunchAgents/com.UserAgent.va.plist",
+                "~/.local/share/.cdds",
+            ],
+            launchAgentLabels: ["com.UserAgent.va", "com.Mac.cdds"]
+        ),
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["xcc", "shared.dat", "sh.py"],
+            bundleIdentifiers: ["com.apple.xcc"],
+            filePaths: [
+                "/Users/Shared/.xcc",
+                "/Users/Shared/.xcc.lib",
+                "~/Public/Drop Box/sh.py",
+                "/tmp/.jokerspy",
+            ],
+            launchAgentLabels: ["com.apple.xcc"]
+        ),
+        SpywareSignature(
+            name: "AppleJeus (Lazarus)",
+            processNames: ["UnionCryptoUpdater", "JMTTrader", "CoinGoTrade",
+                          "Kupay Wallet", "CryptoNeuro Trader", "Dorusio", "Ants2Whale"],
+            bundleIdentifiers: ["com.celasllc.CelasTradePro", "com.jmttrading.JMTTrader",
+                                "com.unioncrypto.UnionCryptoTrader"],
+            filePaths: [
+                "/Library/Application Support/UnionCryptoTrader",
+                "/Library/Application Support/JMTTrader",
+                "~/Library/LaunchAgents/com.unioncrypto.plist",
+            ],
+            launchAgentLabels: ["com.unioncrypto", "com.celasllc.celastradepro.plist"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (Lazarus)",
+            processNames: ["rustyattr", "RustyAttr"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.rustyattr",
+                "~/Library/.rusty",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "MacDLPAgent"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "CherryPie",
+            // "QuickLookSandbox" / "MD_Helper" risk false positives — keep the unique names.
+            processNames: ["cherrypie", "CherryPie"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.cherrypie",
+                "~/Library/Group Containers/.cherry",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "macshare", "Plugin_PluginManager"],
+            bundleIdentifiers: ["com.apple.macshare"],
+            filePaths: [
+                "/tmp/.lightspy",
+                "~/Library/Application Support/.LightSpy",
+            ],
+            launchAgentLabels: ["com.apple.macshare"]
+        ),
+        SpywareSignature(
+            name: "FullHouse.Doored (DPRK)",
+            processNames: ["FullHouse", "fullhouse", "doored", "appleupdate2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.fullhouse",
+                "/Library/Application Support/.doored",
+            ],
+            launchAgentLabels: ["com.apple.appleupdate2"]
+        ),
+        SpywareSignature(
+            name: "Adload",
+            processNames: ["MainSearchDaemon", "BaseSearchAgent", "ResultSearchAgent",
+                          "SearchPilot", "ManagementApplication", "ExpandedSelection",
+                          "FastSpeedSearch", "BaseRoute", "ResultBaron"],
+            bundleIdentifiers: ["com.MainSearchDaemon", "com.BaseSearchAgent",
+                                "com.SearchPilot", "com.adload.helper"],
+            filePaths: [
+                "~/Library/Application Support/.system_search",
+                "/Library/Application Support/.search-agent",
+                "~/Library/MainSearchDaemon",
+            ],
+            launchAgentLabels: ["com.MainSearchDaemon", "com.BaseSearchAgent",
+                                "com.SearchPilot", "com.search.daemon"]
+        ),
+        SpywareSignature(
+            name: "Pirrit (Adware)",
+            // "InstallerHelper" is too generic — many apps use it. Pirrit is identified
+            // here by its unique paths + plist labels.
+            processNames: ["pirrit", "Pirrit"],
+            bundleIdentifiers: ["com.pirrit.installer"],
+            filePaths: [
+                "~/Library/Application Support/Pirrit",
+                "/Library/Application Support/Pirrit",
+            ],
+            launchAgentLabels: ["com.pirrit.updater", "com.pirrit.daemon"]
+        ),
+        SpywareSignature(
+            name: "Geacon / SeaChef (Cobalt Strike macOS)",
+            processNames: ["geacon", "seachef", "geacon_pro", "geacon_plus"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.geacon",
+                "/private/tmp/.seachef",
+                "~/Library/.geacon",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "SwiftBelt (offensive tool — flag if found in user dirs)",
+            processNames: ["SwiftBelt", "swiftbelt"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/.swiftbelt", "~/Library/.swiftbelt"],
+            launchAgentLabels: []
+        ),
+        // Crypto/keychain dumping tools (red-team utilities frequently abused)
+        SpywareSignature(
+            name: "ChainBreaker / KeychainCracker",
+            processNames: ["chainbreaker", "chainbreaker.py", "keychaincracker", "keychain_cracker"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/.chainbreaker", "~/Library/.chainbreaker"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +664,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2026 additions — observed in HZ Rat, NimDoor, Macma, FullHouse families
+        "com.apple.macshare",
+        "com.apple.appleupdate2",
+        "com.apple.xcc",
+        "com.google.update",       // Google update plists are normally KeystoneAgent
+        "us.zoom.SDKUpdater",      // legitimate Zoom uses us.zoom.xos, not SDKUpdater plist labels
+        "com.apple.systempreferences.helper",
+        "com.apple.WebKitGPU.helper",
+        "com.apple.SecurityServer.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
