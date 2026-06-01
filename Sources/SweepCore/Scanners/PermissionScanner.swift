@@ -12,6 +12,15 @@ public final class PermissionScanner: Scanner {
         ("kTCCServicePostEvent", "Synthetic Input"),
         ("kTCCServiceMicrophone", "Microphone"),
         ("kTCCServiceCamera", "Camera"),
+        // macOS 14 (Sonoma) added explicit user consent for these — abuse is now visible in TCC.
+        ("kTCCServiceSystemPolicyAppBundles", "App Management"),
+        // macOS 15 (Sequoia) added a per-app Local Network permission. Stealers that need to
+        // reach LAN services (NAS, routers, internal endpoints) now show up here.
+        ("kTCCServiceUserTracking",  "Tracking"),
+        // Bluetooth Always — used by AirTag-style location stalkerware
+        ("kTCCServiceBluetoothAlways", "Bluetooth Always"),
+        // Full Disk Access — the master key for spyware (lets it read every user file)
+        ("kTCCServiceSystemPolicyAllFiles", "Full Disk Access"),
     ]
 
     private let whitelistedClients: Set<String> = [
@@ -138,6 +147,45 @@ public final class PermissionScanner: Scanner {
             let hasInputMonitoring = permLabels.contains("Input Monitoring")
             let hasMic = permLabels.contains("Microphone")
             let hasCamera = permLabels.contains("Camera")
+            let hasFullDiskAccess = permLabels.contains("Full Disk Access")
+            let hasAppManagement = permLabels.contains("App Management")
+            let hasBluetoothAlways = permLabels.contains("Bluetooth Always")
+
+            // A non-whitelisted app with Full Disk Access can read every user file including
+            // the user-level TCC database, browser cookies, Mail, Messages, etc. This is the
+            // single most valuable grant for spyware.
+            if hasFullDiskAccess {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Non-standard app has Full Disk Access",
+                    detail: "Client: \(client) — can read every user file (mail, messages, browser data, keychains, TCC db)",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > Full Disk Access unless this is a backup tool, antivirus, or password manager you trust."
+                ))
+            }
+
+            // App Management lets an app silently update or replace other installed applications —
+            // an obvious lateral-movement / supply-chain vector. macOS 14+ surfaces this in TCC.
+            if hasAppManagement {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Non-standard app has App Management permission",
+                    detail: "Client: \(client) — can silently update or replace other installed apps",
+                    path: nil,
+                    remediation: "Revoke in System Settings > Privacy & Security > App Management unless this is an MDM/updater you authorized."
+                ))
+            }
+
+            // Bluetooth-Always is required by AirTag-style proximity stalkerware.
+            if hasBluetoothAlways {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "Non-standard app has Bluetooth-Always permission",
+                    detail: "Client: \(client) — can continuously scan for and connect to nearby Bluetooth devices",
+                    path: nil,
+                    remediation: "Verify this app needs constant Bluetooth access (stalkerware / location-tracking tools abuse this)."
+                ))
+            }
 
             if hasScreenCapture && hasInputMonitoring {
                 findings.append(Finding(

@@ -40,7 +40,17 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 additions — observed C2 ports in macOS infostealer / DPRK families
+        2083, 2087, 2096,                      // Cloudflare-fronted C2 ports (CloudFlare alt-HTTPS)
+        50050,                                 // Cobalt Strike default team-server
+        1604,                                  // DarkComet / older RAT default
+        13373, 13374,                          // Recent stealer panels
     ]
+
+    /// Tor SOCKS proxy ports — Tor Browser uses 9150; the system tor daemon uses 9050.
+    /// Outbound traffic to 127.0.0.1 on these ports from a non-Tor process indicates the
+    /// process is anonymizing C2 traffic, a recurring trait of modern stealer payloads.
+    private let torProxyPorts: Set<Int> = [9050, 9051, 9150, 9151]
 
     private let blockedAppleDomains: Set<String> = [
         "ocsp.apple.com", "mesu.apple.com", "updates.apple.com",
@@ -66,6 +76,10 @@ public final class NetworkScanner: Scanner {
         //    infostealers and enterprise monitoring tools that redirect browser traffic.
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
+
+        // 4. Tor / SOCKS anonymizer detection — stealers increasingly route C2 through Tor.
+        progress?.update("checking Tor / anonymizer traffic")
+        scanTorAndAnonymizers(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -382,5 +396,84 @@ public final class NetworkScanner: Scanner {
 
         let checkResult = SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil)
         return CodeSignInfo(isSigned: checkResult == errSecSuccess)
+    }
+
+    // MARK: - Tor / Anonymizer Detection
+
+    /// Surfaces two adjacent threats:
+    /// 1) A Tor SOCKS proxy is listening locally — common when Tor Browser is open (informational),
+    ///    but a `tor` binary listening from a non-standard path is a strong infostealer indicator.
+    /// 2) Any non-Tor process establishing connections to 127.0.0.1:9050/9150 — that process
+    ///    is routing its traffic through Tor to hide its C2 destination.
+    private func scanTorAndAnonymizers(findings: inout [Finding], errors: inout [String]) {
+        // Look for listeners on Tor SOCKS ports and connections through them.
+        let portList = torProxyPorts.map(String.init).joined(separator: ",")
+        let result = ShellRunner.run("/bin/sh", arguments: [
+            "-c",
+            "lsof -nP -iTCP:\(portList) -w 2>/dev/null | head -50"
+        ], timeout: 10)
+
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        let lines = result.stdout.split(separator: "\n")
+        var listenersByCommand: [String: (pid: String, path: String?)] = [:]
+        var clientCommands: Set<String> = []
+
+        for line in lines {
+            let lineStr = String(line)
+            if lineStr.hasPrefix("COMMAND") { continue }
+
+            let parts = lineStr.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 9 else { continue }
+            let command = String(parts[0])
+            let pid = String(parts[1])
+            let isListen = lineStr.contains("LISTEN")
+            let isEstablished = lineStr.contains("ESTABLISHED")
+
+            if isListen {
+                let path = Int32(pid).flatMap { ShellRunner.processPath(for: $0) }
+                listenersByCommand[command] = (pid: pid, path: path)
+            } else if isEstablished {
+                // Anything connecting TO a Tor SOCKS port — and not the Tor process itself —
+                // is anonymizing its outbound traffic.
+                if command.lowercased() != "tor" && command.lowercased() != "tor-browser" &&
+                   !command.contains("Tor Browser") {
+                    clientCommands.insert(command)
+                }
+            }
+        }
+
+        for (command, info) in listenersByCommand {
+            let isTorBrowser = (info.path ?? "").contains("Tor Browser") || command.lowercased().contains("tor")
+            if isTorBrowser {
+                // Informational — user is running Tor Browser
+                findings.append(Finding(
+                    severity: .low, category: .networkActivity,
+                    title: "Tor SOCKS proxy is listening locally",
+                    detail: "Process: \(command) (PID \(info.pid))",
+                    path: info.path,
+                    remediation: "Expected if Tor Browser is open. Otherwise investigate \(command)."
+                ))
+            } else {
+                // A non-Tor-Browser process listening on a Tor port is highly unusual.
+                findings.append(Finding(
+                    severity: .high, category: .networkActivity,
+                    title: "Non-Tor process listening on Tor SOCKS port",
+                    detail: "Process: \(command) (PID \(info.pid)) — masquerading as Tor or hijacking the port",
+                    path: info.path,
+                    remediation: "Investigate this process — malware often runs its own SOCKS proxy on 9050/9150 to anonymize C2 traffic"
+                ))
+            }
+        }
+
+        for command in clientCommands {
+            findings.append(Finding(
+                severity: .high, category: .networkActivity,
+                title: "Process routing traffic through Tor",
+                detail: "Process: \(command) — established connection to local Tor SOCKS proxy",
+                path: nil,
+                remediation: "If you didn't configure this process to use Tor, treat it as anonymizing C2 traffic — investigate immediately"
+            ))
+        }
     }
 }

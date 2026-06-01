@@ -129,6 +129,62 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: AppleScript dropper + recent persistence = active staging
+        // 2024-2025 macOS stealers (AMOS, Banshee, Poseidon, BeaverTail) commonly stage as
+        // .scpt/.applescript files in /tmp that then install a persistent LaunchAgent. Seeing
+        // both in the same scan is high-confidence evidence of an in-flight infection.
+        let persistenceResult = results.first(where: { $0.scannerName == "Persistence Scan" })
+        let appleScriptDropper = persistenceResult?.findings
+            .first(where: { $0.title.contains("AppleScript file staged in temp") })
+        let recentLaunchAgent = persistenceResult?.findings
+            .first(where: { $0.title.contains("Unsigned executable set to run at login") ||
+                            $0.title.contains("hidden path") ||
+                            $0.title.contains("Fake Apple bundle ID") })
+
+        if appleScriptDropper != nil && recentLaunchAgent != nil {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousFile,
+                title: "AppleScript dropper + suspicious LaunchAgent",
+                detail: "An AppleScript was staged in /tmp and a suspicious LaunchAgent was installed — classic AMOS/Banshee/Poseidon installation pattern",
+                path: appleScriptDropper?.path,
+                remediation: "Treat as an active stealer infection: kill suspicious processes, remove the LaunchAgent, rotate browser passwords and any wallet seed phrases."
+            ))
+        }
+
+        // Pattern 7: Credential staging + active network = exfiltration in progress
+        // Distinct from pattern 4 — this looks specifically for browser-credential-store theft
+        // (the AMOS-family signature payload) combined with outbound connections.
+        let credentialStaging = (results.first(where: { $0.scannerName == "Evidence Scan" })?.findings ?? [])
+            .filter { $0.title.contains("credential store copied") || $0.title.contains("Crypto wallet files staged") }
+        if !credentialStaging.isEmpty && hasActiveNetwork {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousFile,
+                title: "Credential / wallet files staged with active network",
+                detail: "\(credentialStaging.count) credential or wallet artifact(s) staged outside their legitimate location while suspicious network activity is present — likely exfiltration in progress",
+                path: credentialStaging.first?.path,
+                remediation: "Disconnect from network immediately. Rotate all browser passwords and move crypto funds to fresh wallets."
+            ))
+        }
+
+        // Pattern 8: Tor anonymizer + persistence = covert C2
+        // A process routing through Tor that also has a persistence mechanism is a hallmark
+        // of modern macOS RATs that want stealthy survival.
+        let networkResult = results.first(where: { $0.scannerName == "Network Scan" })
+        let usesTorProxy = networkResult?.findings.contains(where: { $0.title.contains("Tor") }) ?? false
+        let hasPersistence = !(persistenceResult?.findings.isEmpty ?? true)
+        if usesTorProxy && hasPersistence {
+            findings.append(Finding(
+                severity: .high,
+                category: .networkActivity,
+                title: "Anonymized network traffic + persistence",
+                detail: "A process is routing through Tor and persistence is installed — classic covert C2 setup",
+                path: nil,
+                remediation: "Investigate Network and Persistence findings together — treat the persistence entry as malicious"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,

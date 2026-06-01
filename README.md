@@ -71,18 +71,18 @@ sudo sweep --json
 | Scanner | What it does |
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
-| **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring, Full Disk Access, App Management, Bluetooth-Always), detects stale/suspicious permissions |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, SSH authorized_keys, sudoers, PAM, emond, QuickLook generators, Spotlight importers, PreferencePanes, Screensavers, system-wide `/etc/zshenv`, AppleScript droppers |
+| **Evidence** | Looks for stored screenshots, keystroke logs, screen recordings, exfiltration archives, browser credential stores, and 30+ crypto-wallet markers staged in temp/hidden locations |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, PAC URL hijacking, Tor / SOCKS anonymizer abuse |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions, code-editor (VSCode/Cursor) extensions for known malicious families, and Chrome/Firefox Native Messaging hosts |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Gatekeeper assessment status, Terminal Secure Keyboard Entry |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

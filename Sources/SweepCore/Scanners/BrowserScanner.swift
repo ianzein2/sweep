@@ -11,10 +11,21 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2025 marketplace squatters / wallet drainers
+        "solidity-language", "solidity-language-helper", "blockchain-developer-pro",
+        "ethereum-rpc-helper", "evm-utils", "hardhat-debug-helper",
+        "ai-coding-helper-pro", "github-copilot-pro-plus", "cursor-ai-helper",
+        "vscode-darkmode-pro", "rust-fast-formatter", "tailwind-icons-pro",
+        "code-runner-plus-pro", "auto-import-helper-pro",
+        // Bun/Deno/Node typo-squat names observed in 2025 supply-chain attacks
+        "node-typescript-helper", "deno-runtime-helper",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2025 — observed in malicious wrapper extensions
+        "wallet-drainer", "seed-phrase", "private-key-helper", "token-grabber",
+        "cookiebridge", "session-token",
     ]
 
     // Extensions that are well-known and safe
@@ -63,6 +74,13 @@ public final class BrowserScanner: Scanner {
         //    malicious marketplace extensions that steal cookies, keychains, and wallets.
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
+
+        // 5. Chrome / Chromium Native Messaging hosts — a 2024-2025 abuse vector where a
+        //    malicious installer drops a NativeMessagingHost manifest pointing at an attacker
+        //    binary, letting any cooperating browser extension execute that binary with the
+        //    user's privileges (bypassing the browser sandbox).
+        progress?.update("scanning native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -418,5 +436,90 @@ public final class BrowserScanner: Scanner {
         }
 
         return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+    }
+
+    // MARK: - Native Messaging Hosts (Chrome/Chromium/Firefox)
+
+    /// Native messaging lets a browser extension execute a native binary on the user's machine.
+    /// A malicious dropper installs a manifest pointing at its own binary, and any cooperating
+    /// extension can then issue commands to it — bypassing the browser sandbox. The manifests
+    /// are JSON files with a `path` field and an `allowed_origins` (Chromium) or `allowed_extensions`
+    /// (Firefox) list. We flag any host whose `path` points outside trusted locations.
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Chromium-family manifest directories
+        let chromiumDirs = [
+            "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+            "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts",
+            "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts",
+            "\(home)/Library/Application Support/Chromium/NativeMessagingHosts",
+            "/Library/Google/Chrome/NativeMessagingHosts",
+            "/Library/Application Support/Google/Chrome/NativeMessagingHosts",
+            "/Library/Application Support/Microsoft/Edge/NativeMessagingHosts",
+        ]
+        // Firefox uses a different key but the same idea
+        let firefoxDirs = [
+            "\(home)/Library/Application Support/Mozilla/NativeMessagingHosts",
+            "/Library/Application Support/Mozilla/NativeMessagingHosts",
+        ]
+
+        // Known legitimate native messaging hosts that ship with major apps. Anything outside
+        // these well-known prefixes is at least worth surfacing for review.
+        let trustedHostPrefixes = [
+            "com.1password.", "com.bitwarden.", "com.dashlane.", "com.lastpass.",
+            "com.keepassxc.", "com.google.", "com.docker.", "org.mozilla.",
+            "com.microsoft.", "com.apple.", "com.adobe.acrobat.",
+            "com.grammarly.", "com.zotero.", "com.boop.", "com.tridactyl.",
+        ]
+        let trustedBinaryPrefixes = [
+            "/Applications/", "/usr/", "/System/", "/Library/Apple/",
+            "/opt/homebrew/", "/usr/local/",
+            "\(home)/Applications/",
+        ]
+
+        for dir in (chromiumDirs + firefoxDirs) {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let hostName = (manifest["name"] as? String) ?? entry.replacingOccurrences(of: ".json", with: "")
+                let binaryPath = (manifest["path"] as? String) ?? ""
+
+                let isTrustedHost = trustedHostPrefixes.contains { hostName.hasPrefix($0) }
+                let isTrustedBinary = trustedBinaryPrefixes.contains { binaryPath.hasPrefix($0) }
+                let isHiddenBinary = binaryPath.contains("/.") ||
+                    binaryPath.hasPrefix("/tmp") || binaryPath.hasPrefix("/private/tmp") ||
+                    binaryPath.hasPrefix("/var/tmp")
+
+                // A manifest pointing at a hidden or /tmp binary is essentially always malicious.
+                if isHiddenBinary {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Native messaging host points at hidden / temp binary",
+                        detail: "Host: \(hostName), points at: \(binaryPath) — gives any cooperating browser extension code execution",
+                        path: manifestPath,
+                        remediation: "Remove the manifest: rm \"\(manifestPath)\" — and investigate the binary it pointed at"
+                    ))
+                    continue
+                }
+
+                // Untrusted-host AND untrusted-binary path is worth a medium finding.
+                if !isTrustedHost && !isTrustedBinary && !binaryPath.isEmpty {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unfamiliar native messaging host installed",
+                        detail: "Host: \(hostName), points at: \(binaryPath)",
+                        path: manifestPath,
+                        remediation: "Native messaging hosts let browser extensions execute this binary. Remove if not recognized: rm \"\(manifestPath)\""
+                    ))
+                }
+            }
+        }
     }
 }

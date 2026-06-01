@@ -445,6 +445,36 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2025 additions — wallets actively targeted by AMOS-family / Banshee 3 / Crimson stealer
+        ("Solflare",  "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Backpack",   "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Brave Wallet", "odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("Rabby",      "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Talisman",   "fijngjgcjhjmmpcmkeiomlglpeiijkld"),
+        ("Argent X",   "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        ("Sui Wallet", "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("BitKeep / Bitget Wallet", "jiidiaalihmmhddjgbnbgdfflelocpak"),
+        ("Math Wallet", "afbcbjpbpfadlkmhmclhkeeodmamcflc"),
+        ("Coin98",     "aeachknmefphepccionboohckonoeemg"),
+        ("Petra (Aptos)", "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("XDEFI",      "hmeobnfnfcmdkdcmlblgagmfpfboieaf"),
+        ("Frame",      "ldcoohedfbjoobcadoglnnmmfbdlmmhf"),
+        ("Hashpack (Hedera)", "gjagmgiddbbciopjhllkdnddhcglnemk"),
+        ("Hiro Wallet (Stacks)", "ldinpeekobnhjjdofggfgjlcehhmanlj"),
+        // Desktop wallet directories / file markers
+        ("Trust Wallet (desktop)", "Trust Wallet"),
+        ("Coinomi",    ".coinomi"),
+        ("Daedalus (Cardano)", "Daedalus"),
+        ("Yoroi",      ".yoroi"),
+        ("Wasabi",     "WalletWasabi"),
+        ("Sparrow (Bitcoin)", ".sparrow"),
+        ("Bitcoin Core", ".bitcoin"),
+        ("Monero",     "monero-wallet-gui"),
+        ("Solana CLI", ".config/solana"),
+        ("Sui CLI",    ".sui"),
+        ("Aptos CLI",  ".aptos"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -452,6 +482,12 @@ public final class EvidenceScanner: Scanner {
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        // 2024-2025: Chromium added App-Bound Encryption (ABE) for cookies; stealers now
+        // also grab these adjacent files to bootstrap the decryption.
+        "Network Persistent State", "Cookies-journal",
+        "Trust Tokens", "SharedStorage",
+        // Notes / sticky notes that may contain seed phrases users have pasted
+        "NotesV7.storedata", "NotesV6.storedata", "StickiesDatabase",
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {

@@ -78,6 +78,24 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking QuickLook generators")
+        scanQuickLookGenerators(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking preference panes")
+        scanPreferencePanes(findings: &findings, errors: &errors)
+
+        progress?.update("checking screensavers")
+        scanScreensavers(findings: &findings, errors: &errors)
+
+        progress?.update("checking system zshenv")
+        scanSystemZshenv(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript droppers")
+        scanAppleScriptDroppers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +704,327 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - QuickLook Generators
+
+    /// QuickLook generators (.qlgenerator bundles) load whenever a file is previewed in Finder,
+    /// the share sheet, or Spotlight. A malicious generator can run code without a click.
+    /// Apple ships its own generators in /System/Library/QuickLook — anything outside those paths
+    /// is third-party and worth surfacing.
+    private func scanQuickLookGenerators(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/QuickLook",
+            "/Library/QuickLook",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let path = "\(dir)/\(entry)"
+                let bundlePlistPath = "\(path)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: bundlePlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let id = plist["CFBundleIdentifier"] as? String {
+                    bundleId = id
+                }
+
+                if let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware QuickLook generator: \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(path)",
+                        path: path,
+                        remediation: "Remove: sudo rm -rf \"\(path)\""
+                    ))
+                    continue
+                }
+
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .medium,
+                    category: .persistence,
+                    title: "Third-party QuickLook generator installed",
+                    detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId), \(isSigned ? "signed" : "unsigned") — runs whenever a file is previewed",
+                    path: path,
+                    remediation: "Remove if not recognized: sudo rm -rf \"\(path)\". QuickLook generators run code automatically on file preview."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Spotlight Importers
+
+    /// Spotlight importers (.mdimporter bundles) load whenever Spotlight indexes matching files.
+    /// Like QuickLook generators they execute without user interaction and are a stealthy
+    /// persistence/RCE vector that few users think to inspect.
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/Spotlight",
+            "/Library/Spotlight",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let path = "\(dir)/\(entry)"
+                let bundlePlistPath = "\(path)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: bundlePlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let id = plist["CFBundleIdentifier"] as? String {
+                    bundleId = id
+                }
+
+                if let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware Spotlight importer: \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(path)",
+                        path: path,
+                        remediation: "Remove: sudo rm -rf \"\(path)\""
+                    ))
+                    continue
+                }
+
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .medium,
+                    category: .persistence,
+                    title: "Third-party Spotlight importer installed",
+                    detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId), \(isSigned ? "signed" : "unsigned") — runs whenever Spotlight indexes matching files",
+                    path: path,
+                    remediation: "Remove if not recognized: sudo rm -rf \"\(path)\". Spotlight importers run code automatically during indexing."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Preference Panes
+
+    /// Third-party PreferencePanes (.prefPane bundles) appear in System Settings and load their
+    /// principal class — code execution — every time the user opens that pane.
+    private func scanPreferencePanes(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/PreferencePanes",
+            "/Library/PreferencePanes",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".prefPane") {
+                let path = "\(dir)/\(entry)"
+                let bundlePlistPath = "\(path)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: bundlePlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let id = plist["CFBundleIdentifier"] as? String {
+                    bundleId = id
+                }
+
+                if let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware preference pane: \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(path)",
+                        path: path,
+                        remediation: "Remove: sudo rm -rf \"\(path)\""
+                    ))
+                    continue
+                }
+
+                let isSigned = checkIsSigned(path: path)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned third-party preference pane",
+                        detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId) — runs code whenever the user opens this pane in System Settings",
+                        path: path,
+                        remediation: "Remove if not recognized: open \"\(dir)\" — right-click the pane and Remove"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Screensavers
+
+    /// Screensavers (.saver bundles) load and execute when the screensaver activates. Apple's
+    /// own savers ship in /System/Library/Screen Savers — anything outside that path is
+    /// third-party. Unsigned non-Apple savers are unusual and worth flagging.
+    private func scanScreensavers(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/Screen Savers",
+            "/Library/Screen Savers",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".saver") {
+                let path = "\(dir)/\(entry)"
+                let bundlePlistPath = "\(path)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: bundlePlistPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let id = plist["CFBundleIdentifier"] as? String {
+                    bundleId = id
+                }
+
+                if let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware screensaver: \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(path)",
+                        path: path,
+                        remediation: "Remove: sudo rm -rf \"\(path)\""
+                    ))
+                    continue
+                }
+
+                let isSigned = checkIsSigned(path: path)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned screensaver bundle",
+                        detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId) — runs code whenever the screensaver activates",
+                        path: path,
+                        remediation: "Remove if not recognized: sudo rm -rf \"\(path)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - System-wide zshenv
+
+    /// `/etc/zshenv` is sourced by EVERY zsh invocation — login, non-login, interactive,
+    /// non-interactive, even scripts. On a fresh macOS install this file does NOT exist;
+    /// its presence (or any payload in it) is an extremely strong persistence indicator that
+    /// most users will never look at.
+    private func scanSystemZshenv(findings: inout [Finding], errors: inout [String]) {
+        let paths = ["/etc/zshenv", "/private/etc/zshenv"]
+        let fm = FileManager.default
+
+        for path in paths {
+            guard fm.fileExists(atPath: path),
+                  let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            // Skip empty or comment-only files
+            let meaningful = content.split(separator: "\n").contains { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.isEmpty && !t.hasPrefix("#")
+            }
+            guard meaningful else { continue }
+
+            // Owner check: a non-root-owned /etc/zshenv is a privilege-escalation vector — every
+            // root zsh invocation (including via sudo) sources it.
+            var ownerLabel = ""
+            if let attrs = try? fm.attributesOfItem(atPath: path),
+               let ownerId = attrs[.ownerAccountID] as? Int, ownerId != 0 {
+                ownerLabel = " (owned by UID \(ownerId), NOT root)"
+            }
+
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "System-wide zshenv exists",
+                detail: "\(path)\(ownerLabel) — runs on EVERY zsh invocation system-wide, including sudo and scripts. This file does not exist on a clean macOS install.",
+                path: path,
+                remediation: "Inspect: sudo cat \(path). If unexpected, remove: sudo rm \(path)"
+            ))
+        }
+    }
+
+    // MARK: - AppleScript droppers
+
+    /// 2024-2025 macOS stealers (AMOS, Banshee, Poseidon, etc.) commonly stage as `.scpt` or
+    /// `.applescript` files in /tmp. The script displays a fake password prompt or runs `osascript`
+    /// to copy keychains/wallets, then unpacks a Mach-O. Finding such a file outside an obvious
+    /// developer/build context is highly suspicious.
+    private func scanAppleScriptDroppers(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let scanDirs = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
+        let dropperKeywords = [
+            "display dialog",          // fake password prompt
+            "with hidden answer",      // password capture pattern
+            "do shell script.*password", // `do shell script "..." with administrator privileges password`
+            "administrator privileges",
+            "/private/tmp/",
+            "curl ", "wget ",
+            "base64",
+            "security find-generic-password",
+            "security dump-keychain",
+        ]
+
+        for dir in scanDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries {
+                let lower = entry.lowercased()
+                guard lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript") ||
+                      lower.contains("applescript-") else { continue }
+
+                let path = "\(dir)/\(entry)"
+                let attrs = try? fm.attributesOfItem(atPath: path)
+                let size = (attrs?[.size] as? Int) ?? 0
+                let modDate = attrs?[.modificationDate] as? Date
+
+                // .scpt files are compiled binaries — read text via osadecompile, or look for IOCs
+                // in the .applescript text file. We avoid invoking osadecompile (slow + potential
+                // permission issues) and just flag any .scpt in tmp as suspicious, with content
+                // peek for .applescript / .txt-style scripts.
+                var detail = "Path: \(path), size: \(size) bytes"
+                if let date = modDate {
+                    detail += ", modified: \(formatAge(date))"
+                }
+
+                var severity: Severity = .medium
+                if lower.hasSuffix(".applescript") || lower.hasSuffix(".txt") {
+                    if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                        let lc = content.lowercased()
+                        let hits = dropperKeywords.filter { lc.range(of: $0, options: .regularExpression) != nil }
+                        if !hits.isEmpty {
+                            severity = .high
+                            detail += ", IOCs: " + hits.prefix(3).joined(separator: ", ")
+                        }
+                    }
+                } else {
+                    // Compiled .scpt in /tmp is itself an IOC; default to high.
+                    severity = .high
+                }
+
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: "AppleScript file staged in temp directory",
+                    detail: detail,
+                    path: path,
+                    remediation: "Modern macOS stealers (AMOS, Banshee, Poseidon) stage AppleScript droppers here. Inspect: osadecompile \"\(path)\" — remove if not yours."
+                ))
+            }
+        }
+    }
+
+    private func formatAge(_ date: Date) -> String {
+        let seconds = -date.timeIntervalSinceNow
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 }

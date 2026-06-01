@@ -434,6 +434,246 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 DPRK / APT-linked macOS malware
+        SpywareSignature(
+            // "Contagious Interview" — fake job interview lures targeting developers.
+            // BeaverTail is the Node.js/Python stealer stage; InvisibleFerret is the Python RAT.
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["beavertail", "node_modules_helper", "ffmpeg-utils",
+                           "VCam", "MiroTalk", "FreeConference", "ChromeUpdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.npl",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["invisibleferret", "pyp", "p2", "ssh_client", "pay"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2",
+                "~/.config/google-chrome/Default/Login Data.bak",
+                "/private/tmp/.iferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // North Korean RAT discovered in 2024 (Trend Micro / Aqua Nautilus).
+            // Distributed via fake VPN / cracked apps. Persists as a Swift binary in /tmp.
+            name: "RustDoor / Bandit",
+            processNames: ["RustDoor", "rustdoor", "Bandit", "VMware-tools", "Visual_Studio_Updater"],
+            bundleIdentifiers: ["com.visualstudio.updater", "com.vmware.toolsd"],
+            filePaths: [
+                "/private/tmp/test",
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.bandit",
+                "~/Library/.system_updater",
+            ],
+            launchAgentLabels: ["com.apple.systemupdater", "com.visualstudio.updater"]
+        ),
+        SpywareSignature(
+            name: "TODDLERSHARK / DURIANBEACON",
+            processNames: ["toddlershark", "durianbeacon", "DustyEmu", "macOSPanel"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.toddler", "~/Library/Caches/.duri"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // BlueNoroff (DPRK) crypto-targeting cluster, 2024 update of NokNok.
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["hiddenrisk", "growth.scpt", "growth", "ExchangeBitkozMonopoly",
+                           "MacGorow", "ksearch"],
+            bundleIdentifiers: ["com.apple.growth"],
+            filePaths: [
+                "/private/tmp/.growth",
+                "~/Library/LaunchAgents/com.apple.growth.plist",
+                "~/Library/Logs/.growth.log",
+            ],
+            launchAgentLabels: ["com.apple.growth"]
+        ),
+        SpywareSignature(
+            // Lazarus / DPRK 2025 — distributed via npm and PyPI typo-squat packages.
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "FlexibleFerret", "lib_ffmpeg", "ffmpeg_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.flex",
+                "/private/tmp/.flex",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Originally iOS-only, full macOS variant documented late 2024.
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "macma", "Macma", "uploadtask", "soundrecord"],
+            bundleIdentifiers: ["com.lightspy.agent"],
+            filePaths: [
+                "/private/var/db/.lightspy",
+                "~/Library/Caches/.lightspy",
+                "~/Library/Application Support/.macma",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdater", "com.lightspy.daemon"]
+        ),
+        // 2024-2026 macOS infostealers
+        SpywareSignature(
+            // "ReaderUpdate" / "Crimson Stealer" — Mach-O Crimson Stealer family observed late 2024,
+            // spread via fake Adobe Reader updaters and cracked Mac apps.
+            name: "ReaderUpdate / Crimson Stealer",
+            processNames: ["ReaderUpdate", "AdobeReaderUpdater", "crimson_stealer", "crimson",
+                           "AdobeUpdaterHelper", "BlueExperienceUpdater"],
+            bundleIdentifiers: ["com.adobe.ReaderUpdater", "com.crimson.stealer"],
+            filePaths: [
+                "/private/tmp/.readerupdate",
+                "~/Library/Application Support/.crimson",
+                "~/Library/LaunchAgents/com.adobe.ReaderUpdater.plist",
+            ],
+            launchAgentLabels: ["com.adobe.ReaderUpdater", "com.crimson.agent"]
+        ),
+        SpywareSignature(
+            // 2025 macOS stealer — distributed via fake Chrome/Safari updates and cracked software.
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigid_stealer", "WindowServer.helper"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigid",
+            ],
+            launchAgentLabels: ["com.frigid.helper"]
+        ),
+        SpywareSignature(
+            // Banshee Stealer 3.0 / Banshee XV — 2025 evolution with Apple-binary-mimicking persistence.
+            name: "Banshee 3.0",
+            processNames: ["banshee3", "banshee_xv", "bnsh3", "AppleSecureKey", "AppleSyncProxy"],
+            bundleIdentifiers: ["com.banshee.v3", "com.apple.securekey"],
+            filePaths: [
+                "/private/tmp/.banshee3",
+                "~/Library/Application Support/.banshee3",
+            ],
+            launchAgentLabels: ["com.banshee.v3", "com.apple.securekey"]
+        ),
+        SpywareSignature(
+            // Lumma Stealer is primarily Windows but a macOS port appeared in 2025.
+            name: "Lumma Stealer (macOS)",
+            processNames: ["lumma", "Lumma", "lumma_mac", "lumc"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.lumma",
+            ],
+            launchAgentLabels: ["com.lumma.agent"]
+        ),
+        SpywareSignature(
+            // 2024 Russian-speaking actor; macOS RAT distributed via Telegram channels and cracked apps.
+            name: "HZ Rat (macOS)",
+            processNames: ["hzrat", "HZRat", "hz_rat", "OpenVPNConnect_Helper"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.helper", "com.hzrat.daemon"]
+        ),
+        SpywareSignature(
+            // "SwiftAttacker" / "SwiftBelt" malicious variant — Swift-based stealer, 2025.
+            name: "SwiftAttacker",
+            processNames: ["SwiftAttacker", "swiftattacker", "SwiftBeltMalicious", "swiftspy"],
+            bundleIdentifiers: ["com.swift.attacker"],
+            filePaths: [
+                "/private/tmp/.swiftatk",
+                "~/Library/Application Support/.swiftatk",
+            ],
+            launchAgentLabels: ["com.swift.attacker"]
+        ),
+        SpywareSignature(
+            // OSX/Shlayer continues to be one of the most prevalent macOS threats (adware/installer dropper).
+            name: "OSX.Shlayer",
+            processNames: ["shlayer", "Shlayer", "Bundlore", "bundlore", "AdobeFlashPlayer_Installer",
+                           "Player", "FlashUpdate", "MacDefender"],
+            bundleIdentifiers: [
+                "com.adobe.flashplayer.installmanager",
+                "com.bundlore.agent",
+            ],
+            filePaths: [
+                "/private/tmp/.shlayer",
+                "~/Library/Application Support/.shlayer",
+            ],
+            launchAgentLabels: ["com.bundlore.agent", "com.shlayer.installer"]
+        ),
+        SpywareSignature(
+            // 2025 adware-turned-stealer family delivered via SEO-poisoning macOS app cracks.
+            name: "AdLoad (2025)",
+            processNames: ["adload", "AdLoad", "search-defender", "ResultRunner",
+                           "InstantSearch", "ProductSphere", "OmniBoxes"],
+            bundleIdentifiers: [
+                "com.adload.agent", "com.searchdefender.app",
+                "com.resultrunner.helper", "com.instantsearch.helper",
+            ],
+            filePaths: [
+                "~/Library/Application Support/com.AdLoad",
+                "~/Library/Application Support/.AdLoad",
+                "/Library/LaunchDaemons/com.adload.plist",
+            ],
+            launchAgentLabels: ["com.adload.agent", "com.searchdefender.daemon"]
+        ),
+        SpywareSignature(
+            // 2025 commodity macOS RAT sold on Russian-language forums.
+            name: "AuroraStealer (macOS)",
+            processNames: ["aurora", "AuroraStealer", "aurora_mac", "audisrv"],
+            bundleIdentifiers: ["com.aurora.stealer"],
+            filePaths: [
+                "/private/tmp/.aurora",
+                "~/Library/Application Support/.aurora",
+            ],
+            launchAgentLabels: ["com.aurora.audisrv"]
+        ),
+        // 2024-2026 consumer stalkerware / monitoring
+        SpywareSignature(
+            name: "TheOneSpy",
+            processNames: ["TheOneSpy", "theonespy", "tos_service", "tosagent"],
+            bundleIdentifiers: ["com.theonespy.agent"],
+            filePaths: [
+                "~/Library/Application Support/TheOneSpy",
+                "~/Library/Application Support/.TheOneSpy",
+            ],
+            launchAgentLabels: ["com.theonespy.agent"]
+        ),
+        SpywareSignature(
+            name: "uMobix",
+            processNames: ["uMobix", "umobix", "umobix_agent"],
+            bundleIdentifiers: ["com.umobix.agent"],
+            filePaths: ["~/Library/Application Support/.uMobix"],
+            launchAgentLabels: ["com.umobix.service"]
+        ),
+        SpywareSignature(
+            name: "Hoverwatch Plus",
+            processNames: ["HoverwatchPlus", "hwplus", "hoverwatch_plus"],
+            bundleIdentifiers: ["com.hoverwatch.plus"],
+            filePaths: ["~/Library/Application Support/.HoverwatchPlus"],
+            launchAgentLabels: ["com.hoverwatch.plus"]
+        ),
+        SpywareSignature(
+            name: "FamiSafe",
+            processNames: ["FamiSafe", "famisafe", "famisafe_agent"],
+            bundleIdentifiers: ["com.wondershare.famisafe"],
+            filePaths: ["~/Library/Application Support/FamiSafe"],
+            launchAgentLabels: ["com.wondershare.famisafe"]
+        ),
+        SpywareSignature(
+            // Family of stalkerware sold under shifting brands ("eyeZy", "EyeZy", "SafeSpy", etc.)
+            // sharing the same code base. Added 2025 IOCs.
+            name: "SafeSpy / EyeZy variants",
+            processNames: ["safespy", "SafeSpy", "safespyagent", "eyezy_v2"],
+            bundleIdentifiers: ["com.safespy.agent", "com.eyezy.v2"],
+            filePaths: [
+                "~/Library/Application Support/.SafeSpy",
+                "~/Library/Application Support/.EyeZyV2",
+            ],
+            launchAgentLabels: ["com.safespy.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +690,16 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 macOS malware impersonations observed in the wild
+        "com.apple.growth",                 // BlueNoroff / HiddenRisk
+        "com.apple.securekey",              // Banshee 3.0
+        "com.apple.systemupdater",          // RustDoor / Bandit
+        "com.apple.systempreferences.helper", // RustBucket
+        "com.apple.macshare.plist",         // SpectralBlur
+        "com.apple.crashreporter.agent",    // generic stealer drop name
+        "com.apple.bluetooth.helper",       // observed in late-2024 droppers
+        "com.apple.wifi.helper",            // observed in late-2024 droppers
+        "com.apple.search.helper",          // AdLoad family
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +724,19 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 process-name lookalikes used by macOS infostealers and droppers
+        "AdobeReaderUpdater",    // ReaderUpdate / Crimson Stealer
+        "AdobeFlashPlayer_Installer", // Shlayer/Bundlore
+        "ChromeUpdate",          // BeaverTail variants
+        "Visual_Studio_Updater", // RustDoor
+        "VMware-tools",          // RustDoor
+        "OpenVPNConnect_Helper", // HZ Rat
+        "search-defender",       // AdLoad
+        "InstantSearch",         // AdLoad
+        "ResultRunner",          // AdLoad
+        "WindowServer.helper",   // FrigidStealer (real: WindowServer, no .helper)
+        "AppleSecureKey",        // Banshee 3.0 (no such Apple binary)
+        "AppleSyncProxy",        // Banshee 3.0
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

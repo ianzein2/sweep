@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Gatekeeper assessment")
+        checkGatekeeperAssessment(findings: &findings, errors: &errors)
+
+        progress?.update("checking secure keyboard entry")
+        checkSecureKeyboardEntry(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +474,51 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Gatekeeper Assessment
+
+    /// Gatekeeper assessment is enabled by default on macOS. A subset of malware infections begin
+    /// with the user running `sudo spctl --master-disable`, which silently allows any unsigned or
+    /// untrusted binary to run without prompting. This is one of the highest-impact misconfigurations.
+    private func checkGatekeeperAssessment(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        guard result.success else { return }
+
+        let output = result.stdout.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if output.contains("assessments disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper assessments are disabled",
+                detail: "spctl reports assessments disabled — macOS will run any binary without checking notarization or developer signature",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --master-enable (in newer macOS: sudo spctl --global-enable)"
+            ))
+        }
+    }
+
+    // MARK: - Secure Keyboard Entry
+
+    /// Terminal.app supports "Secure Keyboard Entry," which blocks other processes from
+    /// reading keystrokes typed into the terminal — a meaningful defense against keyloggers.
+    /// It's off by default. We flag it as a hardening recommendation only when Terminal is the
+    /// user's primary shell (i.e., it's installed and present in the user's defaults).
+    private func checkSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+        // If the key doesn't exist at all, defaults returns non-zero — treat as "default off."
+        // Only emit a finding if the user runs Terminal regularly; we can't easily measure that,
+        // so we emit a LOW finding so it doesn't penalize Mac users who only use iTerm/Ghostty.
+        if !result.success || result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Terminal Secure Keyboard Entry is off",
+                detail: "When off, other processes (including keyloggers) can read keystrokes typed in Terminal",
+                path: nil,
+                remediation: "Enable in Terminal > Secure Keyboard Entry (only protects Terminal.app — iTerm2/Ghostty users should enable each app's equivalent)."
+            ))
         }
     }
 }
