@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plugin-based persistence (Spotlight, QuickLook, Audio, etc.)")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking Dock auto-launch tampering")
+        scanDockPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,189 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plugin-based Persistence
+
+    /// macOS loads code from several plugin directories at boot, login, file preview, or audio I/O.
+    /// Each of these is a legitimate-but-rarely-used persistence channel that lets a non-root attacker
+    /// run code without a LaunchAgent or login item. Real plugins exist (Folx for QuickLook, AU plugins
+    /// for HAL) but each non-Apple bundle in these paths deserves a quick review.
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // (path, label, extension, severity, why-it's-risky)
+        let pluginDirs: [(path: String, label: String, ext: String, severity: Severity, reason: String)] = [
+            // Spotlight importers run inside the privileged mds_stores process whenever a file matching
+            // their UTI is indexed — runs frequently and silently.
+            ("\(home)/Library/Spotlight",      "User Spotlight importer",      "mdimporter", .medium,
+             "loaded by mds_stores at indexing time — silent code execution"),
+            ("/Library/Spotlight",             "System Spotlight importer",    "mdimporter", .medium,
+             "loaded by mds_stores at indexing time — silent code execution"),
+
+            // QuickLook generators run when files are previewed (Space bar in Finder).
+            ("\(home)/Library/QuickLook",      "User QuickLook generator",     "qlgenerator", .medium,
+             "loaded by quicklookd whenever a file is previewed"),
+            ("/Library/QuickLook",             "System QuickLook generator",   "qlgenerator", .medium,
+             "loaded by quicklookd whenever a file is previewed"),
+
+            // Screen Savers are bundles that run when the screen saver activates — historically abused
+            // for persistence (e.g., CVE-2020-9839-class attacks).
+            ("\(home)/Library/Screen Savers",  "User Screen Saver",            "saver",      .medium,
+             "Screen Saver bundles run code when the screen idles"),
+            ("/Library/Screen Savers",         "System Screen Saver",          "saver",      .medium,
+             "Screen Saver bundles run code when the screen idles"),
+
+            // Audio HAL plugins load into the privileged coreaudiod process — a stealth-grade
+            // persistence channel used by some stalkerware to tap microphone input.
+            ("/Library/Audio/Plug-Ins/HAL",    "System Audio HAL plugin",      "driver",     .high,
+             "loaded into coreaudiod — can intercept microphone audio"),
+            ("/Library/Audio/Plug-Ins/Components", "Audio Unit (.component)",  "component",  .low,
+             "Audio Unit plugins load into hosts like Logic / GarageBand"),
+
+            // Services menu items run AppleScript / Automator workflows on demand.
+            ("\(home)/Library/Services",       "User Services workflow",       "workflow",   .low,
+             "appears in app menus and can be invoked by global keyboard shortcuts"),
+
+            // Color Pickers load into apps that show the color panel — TextEdit, Preview, Mail.
+            ("\(home)/Library/ColorPickers",   "User Color Picker",            "colorPicker", .low,
+             "loaded by apps that present the color panel"),
+
+            // Internet Plug-Ins are the legacy NPAPI path — Safari ignores them on modern macOS but
+            // a bundle here can still be loaded by other browsers/tools and is almost never legit.
+            ("\(home)/Library/Internet Plug-Ins", "User Internet Plug-In",     "plugin",     .medium,
+             "legacy NPAPI plugin location — almost never legitimate in 2024+"),
+            ("/Library/Internet Plug-Ins",     "System Internet Plug-In",      "plugin",     .medium,
+             "legacy NPAPI plugin location — almost never legitimate in 2024+"),
+
+            // PreferencePanes appear in System Settings (Ventura+) and run in cfprefsd context.
+            ("\(home)/Library/PreferencePanes", "User Preference Pane",        "prefPane",   .low,
+             "loaded by System Settings — third-party panes run privileged code"),
+        ]
+
+        for entry in pluginDirs {
+            guard fm.fileExists(atPath: entry.path),
+                  let contents = try? fm.contentsOfDirectory(atPath: entry.path) else { continue }
+
+            for item in contents where item.hasSuffix(".\(entry.ext)") && !item.hasPrefix(".") {
+                let bundlePath = "\(entry.path)/\(item)"
+                let executablePath = findBundleExecutable(bundlePath: bundlePath) ?? bundlePath
+                let isSigned = checkIsSigned(path: executablePath)
+                let bundleIsApple = isAppleSignedBundle(bundlePath: bundlePath)
+
+                // Apple's own plugins (e.g., system Spotlight importers) are noise — skip them.
+                if bundleIsApple { continue }
+
+                // Match against known spyware first
+                if let sig = SpywareSignature.match(processName: item) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware in \(entry.label) directory: \(sig.name)",
+                        detail: "Bundle: \(item) — \(entry.reason)",
+                        path: bundlePath,
+                        remediation: "Remove: rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Services workflows and color pickers are routinely user-created (Automator) and
+                // unsigned by design — don't escalate severity for those. For executable Mach-O plugins
+                // (mdimporter / qlgenerator / driver / saver / component / plugin / prefPane),
+                // unsigned code is a real signal.
+                let userAuthorableExts: Set<String> = ["workflow", "colorPicker"]
+                let escalatesIfUnsigned = !userAuthorableExts.contains(entry.ext)
+                let severity: Severity = (escalatesIfUnsigned && !isSigned) ? .high : entry.severity
+                let signedNote = isSigned ? "third-party signed" : "UNSIGNED"
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: "\(entry.label) installed: \(item)",
+                    detail: "Bundle: \(item) (\(signedNote)) — \(entry.reason)",
+                    path: bundlePath,
+                    remediation: "Verify this is a plugin you installed. To remove: rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    /// Find the main executable inside a macOS bundle by reading Info.plist
+    private func findBundleExecutable(bundlePath: String) -> String? {
+        let infoPlist = "\(bundlePath)/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let exec = plist["CFBundleExecutable"] as? String else { return nil }
+        return "\(bundlePath)/Contents/MacOS/\(exec)"
+    }
+
+    /// Quick test: does the bundle's code signature chain to Apple? Used to filter out Apple's
+    /// system plugins from the plugin-persistence sweep.
+    private func isAppleSignedBundle(bundlePath: String) -> Bool {
+        let url = URL(fileURLWithPath: bundlePath) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let code = staticCode else { return false }
+
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple" as CFString, [], &requirement) == errSecSuccess,
+              let req = requirement else { return false }
+        return SecStaticCodeCheckValidityWithErrors(code, [], req, nil) == errSecSuccess
+    }
+
+    // MARK: - Dock Persistence
+
+    /// Some macOS malware adds an entry to com.apple.dock so the app is relaunched on every login —
+    /// the user sees "an extra icon in the Dock" but rarely connects it to persistence. Flag any
+    /// Dock entry whose target points at /tmp, a hidden directory, or a non-trusted location.
+    private func scanDockPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dockPlist = "\(home)/Library/Preferences/com.apple.dock.plist"
+        guard let data = FileManager.default.contents(atPath: dockPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else { return }
+
+        // Persistent apps array contains the Dock app shortcuts
+        for key in ["persistent-apps", "persistent-others"] {
+            guard let items = plist[key] as? [[String: Any]] else { continue }
+
+            for item in items {
+                guard let tileData = item["tile-data"] as? [String: Any],
+                      let fileData = tileData["file-data"] as? [String: Any],
+                      let urlString = fileData["_CFURLString"] as? String else { continue }
+
+                // Strip file:// prefix and decode percent-encoding for inspection
+                var path = urlString
+                if path.hasPrefix("file://") {
+                    path = String(path.dropFirst(7))
+                }
+                path = path.removingPercentEncoding ?? path
+
+                let isHidden = path.split(separator: "/").contains { $0.hasPrefix(".") }
+                let isTemp = path.hasPrefix("/tmp") || path.hasPrefix("/private/tmp") ||
+                             path.hasPrefix("/var/tmp") || path.hasPrefix("/private/var/tmp")
+                let isUntrustedRoot = !trustedPathPrefixes.contains { path.hasPrefix($0) } &&
+                                       !path.hasPrefix(home)
+
+                if isHidden || isTemp {
+                    let displayName = (tileData["file-label"] as? String) ?? "(unknown)"
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Dock entry points to hidden/temp location",
+                        detail: "Item: \(displayName) -> \(path) — Dock launches this on every login",
+                        path: path,
+                        remediation: "Right-click the Dock icon > Options > Remove from Dock"
+                    ))
+                } else if isUntrustedRoot && FileManager.default.fileExists(atPath: path) {
+                    // Quietly note untrusted-but-existing locations — informational, not a smoking gun.
+                    let displayName = (tileData["file-label"] as? String) ?? "(unknown)"
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Dock entry in unusual location",
+                        detail: "Item: \(displayName) -> \(path)",
+                        path: path,
+                        remediation: "Verify this Dock shortcut is yours"
+                    ))
+                }
+            }
         }
     }
 

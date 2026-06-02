@@ -11,10 +11,21 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 marketplace removals (reported by Datadog/ReversingLabs)
+        "solidity-vscode-plus", "vscode-solidity-helper", "ai-debugger-pro",
+        "remote-shell-helper", "ssh-tunnel-helper", "npm-postinstall-helper",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
+    // Confirmed hijacked Chrome extension. The Dec 2024 supply-chain attack pushed a malicious
+    // update through the Chrome Web Store to Cyberhaven's own extension. Even though the bad
+    // build has been pulled, machines that auto-updated still have its code on disk until the
+    // user actively uninstalls and re-installs.
+    private let knownMaliciousChromeExtIds: [(id: String, label: String)] = [
+        ("pajkjnmeojmbapicmbpliphjmcekeaac", "Cyberhaven (Dec 2024 supply-chain compromise — reinstall to be safe)"),
     ]
 
     // Extensions that are well-known and safe
@@ -143,6 +154,18 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Match against known-compromised extension IDs first.
+                    if let known = knownMaliciousChromeExtIds.first(where: { $0.id == extId }) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known compromise: \(known.label)",
+                            detail: "Extension ID: \(extId) in profile \(profile)",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove and reinstall from the official source: \(browserName) > Extensions (chrome://extensions)"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

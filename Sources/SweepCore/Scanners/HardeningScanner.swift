@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Secure Boot policy")
+        checkSecureBootPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking analytics & ad-tracking sharing")
+        checkAnalyticsSharing(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +450,69 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Secure Boot Policy (Apple Silicon)
+
+    private func checkSecureBootPolicy(findings: inout [Finding], errors: inout [String]) {
+        // bputil exists on Apple Silicon Macs and reports the boot policy of each volume.
+        // "Full Security" is the default — "Reduced" or "Permissive" mean the user explicitly
+        // allowed kernel extensions or non-Apple-signed boot code, which is a real risk surface.
+        guard FileManager.default.fileExists(atPath: "/usr/bin/bputil") else { return }
+        let result = ShellRunner.run("/usr/bin/bputil", arguments: ["--display-all-policies"], timeout: 5)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        let output = result.stdout
+        // bputil --display-all-policies normally requires root; if we got "Permission denied" or
+        // a similar non-output result, skip silently.
+        if output.lowercased().contains("permission denied") || output.lowercased().contains("must be run as") {
+            return
+        }
+
+        if output.contains("Permissive Security") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Secure Boot is set to Permissive Security",
+                detail: "Mac allows boot from any OS, including unsigned kernels — significantly weakens malware defense",
+                path: nil,
+                remediation: "Reboot to Recovery, open Startup Security Utility, set to Full Security (if your workflow allows)"
+            ))
+        } else if output.contains("Reduced Security") {
+            // Reduced Security is a real choice for users who need 3rd-party kexts (audio interfaces,
+            // older VPN drivers, etc.). Note it as informational rather than penalize.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Secure Boot is set to Reduced Security",
+                detail: "Mac allows third-party kernel extensions and any signed macOS — verify this matches your needs",
+                path: nil,
+                remediation: "If you no longer need third-party kexts, raise to Full Security: Recovery > Startup Security Utility"
+            ))
+        }
+    }
+
+    // MARK: - Analytics & Ad-tracking sharing
+
+    /// macOS sends anonymized analytics to Apple, advertisers, and app developers by default.
+    /// Privacy-conscious users may want these off — and an attacker who flips these flags ON gains
+    /// a covert channel to identify the user. We flag the state in either direction for transparency.
+    private func checkAnalyticsSharing(findings: inout [Finding], errors: inout [String]) {
+        // "Share with App Developers" — sends crash data to third-party developers
+        let thirdParty = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist",
+            "ThirdPartyDataSubmissionVersion"
+        ], timeout: 5)
+        if thirdParty.success {
+            let value = thirdParty.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty && value != "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Crash data is shared with third-party app developers",
+                    detail: "App-specific crash reports include device + usage info — privacy-sensitive users may want this off",
+                    path: nil,
+                    remediation: "Disable: System Settings > Privacy & Security > Analytics & Improvements > Share with App Developers"
                 ))
             }
         }

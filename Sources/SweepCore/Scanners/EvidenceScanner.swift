@@ -445,6 +445,20 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // Additional 2024-2025 stealer targets — frequently named in AMOS / Banshee / Frigid IOCs
+        ("Solflare",      "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Rabby",         "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("OKX Wallet",    "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Trust Wallet",  "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Backpack",      "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Brave Wallet",  "odbfpeeihdkbihmopkbjmoonfanlbfcl"),
+        ("Sui Wallet",    "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("Petra (Aptos)", "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("MyMonero",      "MyMonero"),
+        ("Bitcoin Core",  "wallet.dat"),                   // wallet.dat outside Bitcoin Core dir is theft staging
+        ("MyEtherWallet keystore", "UTC--"),               // UTC--<timestamp>--<address> keystore filename
+        ("Daedalus / Yoroi (Cardano)", "Daedalus"),
+        ("Wasabi Wallet", "WalletWasabi"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -452,6 +466,17 @@ public final class EvidenceScanner: Scanner {
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        // macOS native app stores observed in 2024-2025 Banshee / Cuckoo / Frigid loot lists
+        "NoteStore.sqlite",                          // Apple Notes
+        "chat.db",                                   // iMessage
+        "Envelope Index",                            // Apple Mail
+        "AddressBook-v22.abcddb",                    // Contacts
+        "Library.musicdb",                           // Music library (used to fingerprint user)
+        // Common password manager export filenames
+        "1password.opvault", "1passwordvault",
+        "bitwarden_export.json", "bitwarden.csv",
+        "lastpass_export.csv",
+        "keychain.keychain", "Login.keychain",
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
