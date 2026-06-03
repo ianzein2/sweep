@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in persistence directories")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +679,192 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - Plug-in based persistence (mdimporters, QuickLook, HAL, ColorPickers, etc.)
+
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        // macOS loads code automatically out of a number of plug-in directories that aren't
+        // covered by LaunchAgent/Daemon scanning. Any non-Apple bundle that lands in one of
+        // these directories runs inside a trusted host process the next time that host fires.
+        //
+        // We don't try to validate every plug-in — we surface non-Apple bundles and let the
+        // user confirm they recognise them. Signed third-party bundles aren't necessarily bad,
+        // but every user should know what's auto-loading into their address space.
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct PluginLocation {
+            let path: String
+            let label: String
+            let host: String          // what loads this plug-in
+            let baseSeverity: Severity
+            // File extensions that count as "a plug-in"; empty = any directory entry
+            let extensions: [String]
+        }
+
+        let locations: [PluginLocation] = [
+            // Spotlight metadata importers run inside mdworker — load with the user's TCC grants.
+            PluginLocation(path: "/Library/Spotlight",
+                           label: "Spotlight metadata importer", host: "mdworker",
+                           baseSeverity: .medium, extensions: [".mdimporter"]),
+            PluginLocation(path: "\(home)/Library/Spotlight",
+                           label: "Spotlight metadata importer (user)", host: "mdworker",
+                           baseSeverity: .medium, extensions: [".mdimporter"]),
+
+            // QuickLook generators run inside qlmanage / quicklookd whenever Finder previews a file.
+            PluginLocation(path: "/Library/QuickLook",
+                           label: "QuickLook generator", host: "quicklookd",
+                           baseSeverity: .medium, extensions: [".qlgenerator"]),
+            PluginLocation(path: "\(home)/Library/QuickLook",
+                           label: "QuickLook generator (user)", host: "quicklookd",
+                           baseSeverity: .medium, extensions: [".qlgenerator"]),
+
+            // Core Audio Hardware Abstraction Layer plug-ins run inside coreaudiod (root).
+            // BlackHole / Loopback / Soundflower are common legitimate examples; anything else
+            // running as a root audio driver is worth review.
+            PluginLocation(path: "/Library/Audio/Plug-Ins/HAL",
+                           label: "Core Audio HAL driver", host: "coreaudiod (root)",
+                           baseSeverity: .medium, extensions: [".driver"]),
+
+            // Screen savers execute Objective-C code as the user — a classic stealth persistence
+            // target. Apple's own savers live in /System/Library/Screen Savers.
+            PluginLocation(path: "/Library/Screen Savers",
+                           label: "Screen saver", host: "loginwindow / ScreenSaverEngine",
+                           baseSeverity: .medium, extensions: [".saver"]),
+            PluginLocation(path: "\(home)/Library/Screen Savers",
+                           label: "Screen saver (user)", host: "loginwindow / ScreenSaverEngine",
+                           baseSeverity: .medium, extensions: [".saver"]),
+
+            // Color pickers load into every app that shows the Colors panel.
+            PluginLocation(path: "\(home)/Library/ColorPickers",
+                           label: "Color picker (user)", host: "any app showing Colors panel",
+                           baseSeverity: .low, extensions: [".colorPicker"]),
+
+            // Service menu items run on user-initiated Services invocations.
+            PluginLocation(path: "\(home)/Library/Services",
+                           label: "User service", host: "any app using Services",
+                           baseSeverity: .low, extensions: [".workflow", ".app"]),
+
+            // Mail bundles — Apple disables these by default since Big Sur, but a manually-enabled
+            // bundle still runs inside Mail with access to all messages.
+            PluginLocation(path: "\(home)/Library/Mail/Bundles",
+                           label: "Mail.app bundle (user)", host: "Mail.app",
+                           baseSeverity: .high, extensions: [".mailbundle"]),
+            PluginLocation(path: "/Library/Mail/Bundles",
+                           label: "Mail.app bundle", host: "Mail.app",
+                           baseSeverity: .high, extensions: [".mailbundle"]),
+
+            // Internet Plug-Ins are deprecated, but any bundle still installed here is a
+            // very strong red flag — there's no modern reason to add one.
+            PluginLocation(path: "/Library/Internet Plug-Ins",
+                           label: "Internet plug-in (deprecated)", host: "legacy browsers",
+                           baseSeverity: .high, extensions: [".plugin", ".bundle", ".webplugin"]),
+            PluginLocation(path: "\(home)/Library/Internet Plug-Ins",
+                           label: "Internet plug-in (deprecated, user)", host: "legacy browsers",
+                           baseSeverity: .high, extensions: [".plugin", ".bundle", ".webplugin"]),
+
+            // Address Book / Contacts plug-ins (deprecated) execute inside Contacts.app.
+            PluginLocation(path: "\(home)/Library/Address Book Plug-Ins",
+                           label: "Contacts plug-in (deprecated)", host: "Contacts.app",
+                           baseSeverity: .medium, extensions: [".bundle"]),
+
+            // ~/Library/Input Methods loads as the user every login. Used in 2024 stealer wave.
+            PluginLocation(path: "\(home)/Library/Input Methods",
+                           label: "Input method (user)", host: "TextInputSwitcher / loginwindow",
+                           baseSeverity: .high, extensions: [".app", ".inputplugin"]),
+
+            // PreferencePanes auto-load inside System Settings when the user opens that pane.
+            PluginLocation(path: "/Library/PreferencePanes",
+                           label: "PreferencePane", host: "System Settings",
+                           baseSeverity: .low, extensions: [".prefPane"]),
+            PluginLocation(path: "\(home)/Library/PreferencePanes",
+                           label: "PreferencePane (user)", host: "System Settings",
+                           baseSeverity: .low, extensions: [".prefPane"]),
+        ]
+
+        // Apple ships some bundles in the system-wide paths — recognise those by name so we
+        // don't flood the user with findings for stock components.
+        let stockBundleNames: Set<String> = [
+            // Spotlight
+            "Application.mdimporter", "Audio.mdimporter", "Bookmarks.mdimporter", "Chat.mdimporter",
+            "Contacts.mdimporter", "EML.mdimporter", "Font.mdimporter", "iCal.mdimporter",
+            "iWork.mdimporter", "iPhoto.mdimporter", "Image.mdimporter", "Image Raw.mdimporter",
+            "Mail.mdimporter", "Message.mdimporter", "Mint.mdimporter", "Music.mdimporter",
+            "Notes.mdimporter", "PS.mdimporter", "PDF.mdimporter", "PowerPoint.mdimporter",
+            "QuickTime.mdimporter", "RTF.mdimporter", "Shortcuts.mdimporter", "SourceCode.mdimporter",
+            "SystemPrefs.mdimporter", "Vcard.mdimporter", "Word.mdimporter",
+            // QuickLook stock
+            "Audio.qlgenerator", "Image.qlgenerator", "Text.qlgenerator", "Movie.qlgenerator",
+            // Core Audio stock
+            "AppleHDA.driver", "AppleAUUSBAudio.driver", "AppleUSBAudio.driver",
+            "AppleUSBTDM.driver", "AppleGFXHDA.driver", "VirtIOSound.driver",
+        ]
+
+        for location in locations {
+            guard fm.fileExists(atPath: location.path),
+                  let entries = try? fm.contentsOfDirectory(atPath: location.path) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                // Match extension filter when one is supplied.
+                if !location.extensions.isEmpty &&
+                   !location.extensions.contains(where: { entry.hasSuffix($0) }) {
+                    continue
+                }
+                if stockBundleNames.contains(entry) { continue }
+
+                let bundlePath = "\(location.path)/\(entry)"
+                let bundleId = readBundleIdentifier(bundlePath: bundlePath)
+
+                // Apple bundles consistently use com.apple.* identifiers — trust those.
+                if let bid = bundleId, bid.hasPrefix("com.apple.") { continue }
+
+                // Match against the spyware database first; escalate when we have a hit.
+                let baseName = stripPluginExtension(entry)
+                var severity = location.baseSeverity
+                var titlePrefix = "Third-party"
+                var trailer = ""
+                if let bid = bundleId, let sig = SpywareSignature.match(bundleId: bid) {
+                    severity = .high
+                    titlePrefix = "Known-spyware"
+                    trailer = " — matches \(sig.name)"
+                } else if let sig = SpywareSignature.match(processName: baseName) {
+                    severity = .high
+                    titlePrefix = "Known-spyware"
+                    trailer = " — matches \(sig.name)"
+                }
+
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: "\(titlePrefix) \(location.label) present\(trailer)",
+                    detail: "\(entry) auto-loads into \(location.host)" +
+                        (bundleId.map { " (bundle id: \($0))" } ?? "") +
+                        " — anything installed here runs whenever \(location.host) is active",
+                    path: bundlePath,
+                    remediation: "If you don't recognise this bundle, remove it: rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    private func stripPluginExtension(_ name: String) -> String {
+        let suffixes = [".mdimporter", ".qlgenerator", ".driver", ".saver",
+                        ".plugin", ".bundle", ".prefPane", ".colorPicker",
+                        ".workflow", ".mailbundle", ".inputplugin", ".webplugin", ".app"]
+        for suffix in suffixes where name.hasSuffix(suffix) {
+            return String(name.dropLast(suffix.count))
+        }
+        return name
+    }
+
+    private func readBundleIdentifier(bundlePath: String) -> String? {
+        let plistPath = "\(bundlePath)/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let bid = plist["CFBundleIdentifier"] as? String else {
+            return nil
+        }
+        return bid
     }
 
     private func checkIsSigned(path: String) -> Bool {

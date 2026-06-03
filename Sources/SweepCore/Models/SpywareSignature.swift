@@ -434,6 +434,191 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threat families
+        SpywareSignature(
+            // DPRK "Contagious Interview" first-stage loader, delivered via npm packages
+            // and fake interview prep tools. Targets browser data, keychain, crypto wallets.
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "interview_lite", "FCCCallTool"],
+            bundleIdentifiers: ["com.dprk.beavertail"],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.npl",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Python-based DPRK second-stage backdoor dropped by BeaverTail
+            name: "InvisibleFerret",
+            processNames: ["invisible_ferret", "InvisibleFerret", "tcp_pcap_server", "pyp_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ifr",
+                "~/.n2",
+                "~/.npl",
+                "~/Library/Application Support/.ifr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Nim-compiled DPRK loader, first seen mid-2024 from BlueNoroff
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "Zoom_Workplace_Update"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.zoom.update.helper"]
+        ),
+        SpywareSignature(
+            // Go-based information stealer targeting browsers and crypto wallets (2023-2024)
+            name: "JaskaGO",
+            processNames: ["jaskago", "JaskaGo", "CapCutInstaller"],
+            bundleIdentifiers: ["com.jaskago.installer"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.JaskaGO",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Chinese-language RAT seen in 2024 trojanized Chinese app installers
+            name: "HZ RAT",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect_Setup"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/LaunchAgents/com.openVPN.connect.plist",
+            ],
+            launchAgentLabels: ["com.openVPN.connect"]
+        ),
+        SpywareSignature(
+            // ZuRu re-emerged in 2024 via trojanized iTerm2, SecureCRT, Microsoft Remote Desktop
+            name: "ZuRu",
+            processNames: ["zuru", "ZuRu", "g.app", "libcrypto.2.dylib"],
+            bundleIdentifiers: ["com.zuru.helper"],
+            filePaths: [
+                "/private/tmp/.test",
+                "/private/tmp/GoogleUpdate",
+                "/tmp/g.py",
+                "~/Library/Application Support/.zuru",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // 2024 macOS stealer distributed via cracked apps; exfiltrates wallets/keychain
+            name: "DigiStealer",
+            processNames: ["digistealer", "DigiStealer", "dstealer"],
+            bundleIdentifiers: ["com.digistealer.macos"],
+            filePaths: [
+                "/private/tmp/.digi",
+                "~/Library/Application Support/.DigiStealer",
+            ],
+            launchAgentLabels: ["com.digistealer.agent"]
+        ),
+        SpywareSignature(
+            // 2024 Mac stealer, AppleScript-based wrapper around chmod+curl drops
+            name: "Crystal Stealer",
+            processNames: ["crystal", "CrystalStealer", "crystal_mac"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        SpywareSignature(
+            // RustDoor / RustBucket variant tracked through 2024; multiple aliases
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "Visual_Studio_Update", "zshrc_helper"],
+            bundleIdentifiers: ["com.rustdoor.helper"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "/private/var/tmp/.rustdoor",
+                "~/Library/Application Support/.visualstudio",
+            ],
+            launchAgentLabels: ["com.visualstudio.update"]
+        ),
+        SpywareSignature(
+            // 2024-2025 stealer distributed as fake productivity apps; logs keychain and notes
+            name: "FakeUpdate / RodStealer",
+            processNames: ["rodstealer", "FakeUpdate", "macupdater_helper"],
+            bundleIdentifiers: ["com.fakeupdate.macos"],
+            filePaths: [
+                "/private/tmp/.macupdate",
+                "~/Library/Application Support/.macupdater",
+            ],
+            launchAgentLabels: ["com.macupdater.helper"]
+        ),
+        SpywareSignature(
+            // 2024 trojanized "ChatGPT for Mac" wave used as a delivery wrapper
+            name: "FakeChatGPT Installer",
+            processNames: ["ChatGPT_Installer", "ChatGPT_Update", "openai_installer"],
+            bundleIdentifiers: ["com.openai.chatgpt.update", "com.fake.chatgpt"],
+            filePaths: [
+                "/private/tmp/.chatgpt",
+                "~/Library/Application Support/.chatgpt-update",
+            ],
+            launchAgentLabels: ["com.openai.chatgpt.update"]
+        ),
+        SpywareSignature(
+            // CloudChat backdoor (Lazarus-linked, mid-2024)
+            name: "CloudChat",
+            processNames: ["cloudchat", "CloudChat", "CC_helper"],
+            bundleIdentifiers: ["com.cloudchat.agent"],
+            filePaths: [
+                "/private/tmp/.cloudchat",
+                "~/Library/Application Support/.CloudChat",
+            ],
+            launchAgentLabels: ["com.cloudchat.helper"]
+        ),
+        SpywareSignature(
+            // Spectre / pyXtractor — Python-wrapped stealer, late 2024
+            name: "pyXtractor / Spectre",
+            processNames: ["pyxtractor", "Spectre", "macXtract"],
+            bundleIdentifiers: ["com.spectre.stealer"],
+            filePaths: [
+                "/private/tmp/.spectre",
+                "~/Library/Application Support/.macXtract",
+            ],
+            launchAgentLabels: ["com.spectre.helper"]
+        ),
+        SpywareSignature(
+            // Sliver C2 cross-platform implant — increasingly used against macOS
+            name: "Sliver implant",
+            processNames: ["sliver", "Sliver", "sliver-implant"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.sliver",
+                "/private/var/tmp/.sliver",
+                "~/Library/Application Support/.sliver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Cobalt Strike Beacon — long-standing red-team C2, abused by attackers
+            name: "Cobalt Strike beacon",
+            processNames: ["beacon", "Beacon", "cs_beacon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beacon",
+                "/private/var/tmp/.cs",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Mythic C2 macOS agents (Apollo / Poseidon / etc.) — flag generic Mythic markers
+            name: "Mythic C2 agent",
+            processNames: ["apollo_agent", "mythic_agent", "mythicagent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.mythic",
+                "~/Library/Application Support/.mythic",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
