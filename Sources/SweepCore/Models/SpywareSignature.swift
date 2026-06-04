@@ -434,6 +434,192 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threats
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["hzrat", "hz_rat", "HzClient", "OpenVPNConnect"],
+            bundleIdentifiers: ["com.openvpnconnect.helper"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hz",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "fr_helper", "InstallerHelper"],
+            bundleIdentifiers: ["com.frigid.helper", "com.frigidstealer.agent"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.helper"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (Lazarus)",
+            processNames: ["beavertail", "BeaverTail", "p.js", "n2.js", "node_modules_handler"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/.n2/pay",
+                "~/.tmpData",
+                "/private/tmp/p2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Lazarus)",
+            processNames: ["invisibleferret", "ferret", "MicrosoftAutoUpdater", "pyp"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/.n2",
+                "~/.bd",
+                "/private/tmp/.pyp",
+            ],
+            launchAgentLabels: ["com.microsoft.autoupdater2"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK)",
+            processNames: ["TodoSwift", "todoswift", "todo_helper"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (DPRK)",
+            processNames: ["growth", "HiddenRisk", "macroshell", "ProcessRequest"],
+            bundleIdentifiers: ["com.growthproject.agent"],
+            filePaths: [
+                "~/Library/Group Containers/.growth",
+                "/private/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.growth.update"]
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            processNames: ["nimdoor", "NimDoor", "googlechromehelper", "GoogleVPNHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nim",
+                "~/Library/LaunchAgents/com.google.chrome.helper.plist",
+            ],
+            launchAgentLabels: ["com.google.chrome.helper", "com.google.vpn.helper"]
+        ),
+        SpywareSignature(
+            name: "PondRAT (BlueNoroff)",
+            processNames: ["pondrat", "PondRAT", "pyjpegg", "node-pyjp"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.pondrat", "~/.pyjp"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aphub", "applehub"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aphub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "TinyFUD",
+            processNames: ["tinyfud", "TinyFUD", "tfud_helper"],
+            bundleIdentifiers: ["com.tinyfud.agent"],
+            filePaths: ["/private/tmp/.tinyfud"],
+            launchAgentLabels: ["com.tinyfud.service"]
+        ),
+        SpywareSignature(
+            name: "macOS.NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "NLBHelper"],
+            bundleIdentifiers: ["com.notlockbit.ransom"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.NLB",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "SparkRAT",
+            processNames: ["sparkrat", "SparkRAT", "sparkclient", "spark_client"],
+            bundleIdentifiers: ["com.sparkrat.client"],
+            filePaths: [
+                "/private/tmp/.spark",
+                "~/Library/Application Support/.SparkRAT",
+            ],
+            launchAgentLabels: ["com.sparkrat.client"]
+        ),
+        SpywareSignature(
+            name: "MacMa (APT-Q-12)",
+            processNames: ["macma", "MacMa", "UserAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.macma",
+                "~/Library/Preferences/.UserAgent",
+            ],
+            launchAgentLabels: ["com.UserAgent.va"]
+        ),
+        SpywareSignature(
+            name: "AlienFox Stealer",
+            processNames: ["alienfox", "AlienFox", "alf_helper"],
+            bundleIdentifiers: ["com.alienfox.toolkit"],
+            filePaths: ["/private/tmp/.alienfox"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ReaderUpdate Loader",
+            processNames: ["ReaderUpdate", "readerupdate", "ru_helper"],
+            bundleIdentifiers: ["com.reader.update", "com.adobe.readerupdate"],
+            filePaths: [
+                "/private/tmp/.readerupdate",
+                "~/Library/Application Support/.ReaderUpdate",
+            ],
+            launchAgentLabels: ["com.reader.update"]
+        ),
+        SpywareSignature(
+            name: "Crackonosh.macOS",
+            processNames: ["crackonosh", "Crackonosh", "winlogui"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.crack", "~/Library/Application Support/.crackon"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "SoulSearcher.mac",
+            processNames: ["soulsearcher", "SoulSearcher", "ssearch"],
+            bundleIdentifiers: ["com.soulsearcher.agent"],
+            filePaths: ["/private/tmp/.soul"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AMOS (2025 variant)",
+            processNames: ["amos2", "AMOS2", "atomicv2", "stealer_helper"],
+            bundleIdentifiers: ["com.atomic.helper", "com.amos.helper2"],
+            filePaths: [
+                "/private/tmp/.amos2",
+                "~/Library/Caches/.amos",
+            ],
+            launchAgentLabels: ["com.atomic.helper"]
+        ),
+        // Cryptominers — increasingly distributed via cracked apps and fake installers in 2024-2025
+        SpywareSignature(
+            name: "XMRig (cryptominer)",
+            processNames: ["xmrig", "XMRig", "xmrigDaemon", "monerod", "minerd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "/Library/Application Support/.xmrig",
+                "~/Library/Application Support/.xmrig",
+            ],
+            launchAgentLabels: ["com.xmrig.daemon"]
+        ),
+        SpywareSignature(
+            name: "SilverSparrow Miner",
+            processNames: ["silversparrow", "ss_helper", "agent.sh"],
+            bundleIdentifiers: ["com.silver.sparrow.helper"],
+            filePaths: ["/tmp/agent.sh", "~/Library/._insu"],
+            launchAgentLabels: ["com.silver.sparrow.agent"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +636,14 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 fake-Apple labels used by DPRK / infostealer campaigns
+        "com.apple.processhub",
+        "com.apple.systempreferences.helper",
+        "com.apple.chrome.helper",
+        "com.apple.vpn.helper",
+        "com.apple.installer.daemon",
+        "com.apple.autoupdater2",
+        "com.apple.timemachine.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -532,5 +726,45 @@ public struct SpywareSignature {
             return ShellRunner.realUserHome + String(path.dropFirst(1))
         }
         return path
+    }
+
+    /// Check whether any known-spyware file marker exists on disk. Returns the matching
+    /// signature on the first hit so callers can present a single finding.
+    public static func findInstalledOnDisk() -> [(signature: SpywareSignature, path: String)] {
+        let fm = FileManager.default
+        var hits: [(SpywareSignature, String)] = []
+        for sig in known {
+            for raw in sig.filePaths {
+                // Wildcard patterns (e.g. "/private/tmp/AppleScript-*.scpt") need a glob walk.
+                if raw.contains("*") {
+                    if matchGlob(pattern: raw) { hits.append((sig, raw)); break }
+                    continue
+                }
+                let expanded = expandPath(raw)
+                if fm.fileExists(atPath: expanded) {
+                    hits.append((sig, expanded))
+                    break  // one finding per signature is enough
+                }
+            }
+        }
+        return hits
+    }
+
+    /// Tiny glob matcher — supports patterns with a single `*` in the basename. Sufficient
+    /// for AMOS-style markers like `/private/tmp/AppleScript-*.scpt`. We deliberately don't
+    /// pull in a regex engine for this.
+    private static func matchGlob(pattern: String) -> Bool {
+        let expanded = expandPath(pattern)
+        let dir = (expanded as NSString).deletingLastPathComponent
+        let basePattern = (expanded as NSString).lastPathComponent
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return false }
+        guard let star = basePattern.firstIndex(of: "*") else {
+            return entries.contains(basePattern)
+        }
+        let prefix = String(basePattern[..<star])
+        let suffix = String(basePattern[basePattern.index(after: star)...])
+        return entries.contains { entry in
+            entry.hasPrefix(prefix) && entry.hasSuffix(suffix) && entry.count >= prefix.count + suffix.count
+        }
     }
 }

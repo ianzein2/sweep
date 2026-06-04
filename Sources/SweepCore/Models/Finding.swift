@@ -23,6 +23,7 @@ public enum FindingCategory: String, Codable {
     case kernelExtension = "Kernel Extension"
     case systemIntegrity = "System Integrity"
     case hardening = "Hardening"
+    case developerTool = "Developer Tool"
 }
 
 public struct Finding: Codable {

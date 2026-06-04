@@ -60,6 +60,12 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Check known-spyware filesystem markers (AMOS, Banshee, NimDoor, …). These
+        //    paths come from the bundled signature DB and were previously only matched
+        //    when the malware happened to be running.
+        progress?.update("checking known spyware filesystem markers")
+        scanKnownSpywareFiles(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -550,6 +556,23 @@ public final class EvidenceScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - Known-Spyware Filesystem Markers
+
+    /// Each entry in the bundled SpywareSignature database lists filesystem paths used by
+    /// that family. We hit them directly so dormant or copy-only stealer installations
+    /// (no running process, no LaunchAgent) still surface in a scan.
+    private func scanKnownSpywareFiles(findings: inout [Finding], errors: inout [String]) {
+        for (sig, path) in SpywareSignature.findInstalledOnDisk() {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousFile,
+                title: "Known spyware artifact on disk: \(sig.name)",
+                detail: "Found marker for \(sig.name) — the family is known for credential / crypto theft",
+                path: path,
+                remediation: "Quarantine and remove: sudo rm -rf \"\(path)\" — then run a full scan to find related processes / launch agents"
+            ))
         }
     }
 
