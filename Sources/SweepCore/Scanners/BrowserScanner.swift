@@ -17,6 +17,30 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Chrome / Chromium extension IDs publicly confirmed as compromised in 2024-2025
+    /// supply-chain attacks (Cyberhaven Dec 2024 wave, LayerX disclosures, etc.).
+    /// Hash collisions are extremely unlikely; an exact ID match is high-confidence.
+    private let knownMaliciousExtensionIds: [(id: String, campaign: String)] = [
+        // Cyberhaven Dec 2024 supply-chain compromise cluster
+        ("pajkjnmeojmbapicmbpliphjmcekeaac", "Cyberhaven (compromised v24.10.4)"),
+        ("nnpnnpemnckcfdebeekibpiijlicmpom", "Internxt VPN (compromised)"),
+        ("kodbckeokngfcgeicapnafnhdoihegfh", "VPNCity (compromised)"),
+        ("oaikpkmjciadfpddlpjjdapglcihgdle", "Uvoice (compromised)"),
+        ("dpggmcodlahmljkhlmpgpdcffdaoccni", "ParrotTalks (compromised)"),
+        ("mnhffkhmpnefgklngfmlndmkimimbphc", "Castorus (compromised)"),
+        ("acmfnomgphggonodopogfbmkneepfgnh", "Reader Mode (compromised)"),
+        ("kkodiihpgodmdankclfibbiphjkfdenh", "Wayin AI (compromised)"),
+        ("nbjjjjjphlmlpgkfbhbpiomihbplkkbb", "Sort by Oldest (compromised)"),
+        ("pcjkcekcpkbjdpehccpinphmkjelhdjp", "Rewards Search Automator (compromised)"),
+        ("fbmlcbhdmilaggedifpihjbdbkaehmma", "Search Copilot AI (compromised)"),
+        ("oklejhdbgggnkpfapdeibhjapdmhcgep", "AI Assistant — ChatGPT and Gemini (compromised)"),
+        ("hihblcmlaaademjlakdpicchbjnnnkbo", "Bard AI Chat (compromised)"),
+        ("hodiladlefdpcbemnbbcpclbmknkiaem", "Tackker (compromised)"),
+        ("klejifgmmnkgejbhgmpgajemhlnijlon", "Vidnoz Flex (compromised)"),
+        // ChromeLoader / Page Rule highjacker family (ongoing 2023-2025)
+        ("agimnejpjjijgnmlmpekemjlhdnnmgmj", "ChromeLoader variant"),
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +167,19 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-malicious extension IDs from 2024-2025 supply-chain attacks
+                    // get reported regardless of permissions — the ID itself is the IOC.
+                    if let match = knownMaliciousExtensionIds.first(where: { $0.id == extId }) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known supply-chain compromise",
+                            detail: "Extension ID \(extId) — \(match.campaign), profile: \(profile)",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately in \(browserName) > Extensions and rotate any passwords entered in the browser"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

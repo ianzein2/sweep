@@ -112,6 +112,32 @@ public struct Remediator {
             )
         }
 
+        // Credential file permission tightening (Tier A — fully reversible by `chmod`).
+        // The Credential Exposure scanner labels findings with "world-readable",
+        // "group-readable", or "world-writable"; in each case the right fix is to
+        // tighten the file mode back to 0600.
+        let credentialLoose = title.contains("world-readable") ||
+                              title.contains("world-writable") ||
+                              title.contains("group-readable")
+        if credentialLoose, let path = finding.path, finding.category == .permission {
+            return RemediationAction(
+                title: "Tighten permissions on \(path)",
+                description: "chmod 600 \(path)",
+                executable: "/bin/chmod",
+                arguments: ["600", path],
+                safe: true
+            )
+        }
+        if title.contains("has loose permissions"), let path = finding.path, finding.category == .permission {
+            return RemediationAction(
+                title: "Tighten permissions on \(path)",
+                description: "chmod 700 \(path)",
+                executable: "/bin/chmod",
+                arguments: ["700", path],
+                safe: true
+            )
+        }
+
         // Tier B — not auto-applied
         if title.contains("filevault") {
             return RemediationAction(

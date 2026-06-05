@@ -434,6 +434,212 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / Lazarus "Contagious Interview" cluster (2024-2025).
+        // Recruiters target developers with fake npm packages and coding tests
+        // that drop a Python/JS-based stealer (BeaverTail) and a Python backdoor
+        // (InvisibleFerret) which targets keychains, browser data, and wallets.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "MicrosoftAccessibilityChecker", "playgroundd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/p.zi",
+                "~/Library/Application Support/.tmp_b",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            // Avoid matching the legit `pyp` (Python Pipes) command; rely on file paths
+            // and the dropper-shaped names instead.
+            processNames: ["invisibleferret", "InvisibleFerret", "ssh_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2",
+                "/private/tmp/.pyp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["ChromeUpdate", "chromeupdate", "frostyferret"],
+            bundleIdentifiers: ["com.google.chromeupdate"],
+            filePaths: [
+                "/private/var/tmp/ChromeUpdate",
+                "/private/tmp/.frosty",
+            ],
+            launchAgentLabels: ["com.google.chromeupdate.agent"]
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["Visual Studio Code Helper", "vscode_helper", "friendlyferret"],
+            bundleIdentifiers: ["com.microsoft.vscode.helper"],
+            filePaths: ["/private/tmp/.friendly"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "CameraAccess", "ZoomVideoHelper"],
+            bundleIdentifiers: ["com.zoom.helper", "us.zoom.helper"],
+            filePaths: ["/private/tmp/.flex"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todosmac"],
+            bundleIdentifiers: ["com.todosmac.app", "com.todoswift.app"],
+            filePaths: [
+                "~/Library/Application Support/.TodoSwift",
+                "/private/tmp/dump.scpt",
+            ],
+            launchAgentLabels: ["com.todosmac.agent"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "nim_helper", "Zoom Update"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nim",
+                "~/Library/LaunchAgents/com.google.update.plist",
+            ],
+            launchAgentLabels: ["com.google.update", "com.zoom.update"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost",
+            processNames: ["pyland", "pylangghost", "pyl_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.pyp",
+                "/private/tmp/.pyl",
+            ],
+            launchAgentLabels: []
+        ),
+        // LightSpy — modular surveillance framework with macOS support (2024).
+        SpywareSignature(
+            name: "LightSpy",
+            processNames: ["lightspy", "LightSpy", "macircle", "ls_agent"],
+            bundleIdentifiers: ["com.lightspy.macos"],
+            filePaths: [
+                "/var/lightspy",
+                "/private/tmp/.lightspy",
+                "~/Library/Application Support/.macircle",
+            ],
+            launchAgentLabels: ["com.apple.lightspy", "com.macircle.service"]
+        ),
+        // HZ RAT macOS (2024) — Chinese-language targeting via WeChat / DingTalk side-loaders.
+        SpywareSignature(
+            name: "HZ RAT macOS",
+            processNames: ["hz_rat", "hzrat", "OpenVPNConnect_helper"],
+            bundleIdentifiers: ["com.hz.rat", "com.openvpn.connect.helper"],
+            filePaths: [
+                "~/Library/.notify",
+                "~/Library/Application Support/.hzrat",
+                "/private/tmp/.hz",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper", "com.hz.service"]
+        ),
+        // FrigidStealer (Proofpoint, Feb 2025) — fake browser-update prompts on compromised sites.
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "Frigid", "Update"],
+            bundleIdentifiers: ["com.frigid.stealer", "com.update.helper"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "/private/tmp/Update.app",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        // macOS.NotLockBit (SentinelOne, 2024) — Go-based ransomware that exfils then encrypts.
+        SpywareSignature(
+            name: "macOS.NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "notlockbit-darwin", "lockbit_darwin"],
+            bundleIdentifiers: ["com.notlockbit.encryptor"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "/private/tmp/lockbit",
+                "~/Library/Application Support/.lockbit",
+            ],
+            launchAgentLabels: []
+        ),
+        // Lumma Stealer — Windows-dominant family with confirmed macOS samples (late 2024).
+        SpywareSignature(
+            name: "Lumma Stealer (macOS)",
+            processNames: ["lumma", "Lumma", "lumma_mac", "lummac2"],
+            bundleIdentifiers: ["com.lumma.stealer", "com.lummac.agent"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.Lumma",
+            ],
+            launchAgentLabels: ["com.lumma.service"]
+        ),
+        // SparkRAT — cross-platform Go RAT seen on macOS (SentinelOne, 2024).
+        SpywareSignature(
+            name: "SparkRAT (macOS)",
+            processNames: ["SparkRAT", "sparkrat", "sparkrat_client", "spark_client"],
+            bundleIdentifiers: ["com.spark.rat"],
+            filePaths: [
+                "/private/tmp/.spark",
+                "~/Library/Application Support/.SparkRAT",
+            ],
+            launchAgentLabels: ["com.spark.client"]
+        ),
+        // AppleProcessHub stealer (Kandji, late 2024) — masquerades as a system process.
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "processhubd"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        // RustDoor / GateDoor (S2W, late 2023-2024) — Lazarus tooling, Rust-based.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "ZoomShareExt"],
+            bundleIdentifiers: ["com.microsoft.vscode.updater", "com.zoom.shareext"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+            ],
+            launchAgentLabels: ["com.microsoft.vscode.updater", "com.zoom.shareext"]
+        ),
+        SpywareSignature(
+            name: "GateDoor",
+            processNames: ["GateDoor", "gatedoor", "gd_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.gatedoor",
+                "~/Library/Application Support/.gatedoor",
+            ],
+            launchAgentLabels: ["com.gatedoor.service"]
+        ),
+        // FAKEUPDATES / SocGholish macOS variant — drive-by JS that drops a Mach-O loader.
+        SpywareSignature(
+            name: "SocGholish (macOS)",
+            processNames: ["socgholish", "fakeupdates", "SafariUpdate", "ChromeUpdater"],
+            bundleIdentifiers: ["com.apple.safari.update", "com.google.chrome.updater"],
+            filePaths: [
+                "/private/tmp/.socg",
+                "~/Library/Application Support/.SafariUpdate",
+            ],
+            launchAgentLabels: ["com.apple.safari.update"]
+        ),
+        // North Korean "DPRK FERRET" toolkit umbrella (SentinelOne / S2W, 2025)
+        SpywareSignature(
+            name: "DPRK FERRET toolkit",
+            processNames: ["ferret", "FERRET", "ferret_mac", "MacFerret"],
+            bundleIdentifiers: ["com.ferret.macos"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.FERRET",
+            ],
+            launchAgentLabels: ["com.ferret.agent"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +656,13 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed in 2024-2025 DPRK / stealer campaigns
+        "com.apple.safari.update",
+        "com.apple.processhub",
+        "com.apple.lightspy",
+        "com.apple.tcc.helper",
+        "com.apple.xprotect.agent",
+        "com.apple.spotlight.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +687,18 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Observed in 2024-2025 DPRK / stealer campaigns mimicking common apps:
+        "ChromeUpdate",          // FrostyFerret IOC — Google's real updater is GoogleSoftwareUpdate
+        "ChromeUpdater",         // SocGholish mac variant
+        "SafariUpdate",          // Safari ships with macOS — no separate updater binary
+        "ZoomVideoHelper",       // Real: zoom.us — Lazarus Zoom-themed lure
+        "ZoomShareExt",          // RustDoor IOC
+        "VisualStudioUpdater",   // RustDoor IOC — VSCode auto-updates itself
+        "Visual Studio Code Helper",  // FriendlyFerret IOC (note: real VSCode uses "Code Helper")
+        "MicrosoftAccessibilityChecker",  // BeaverTail IOC
+        "OpenVPNConnect_helper",  // HZ RAT IOC
+        "AppleProcessHub",        // 2024 stealer
+        "processhubd",            // AppleProcessHub variant
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

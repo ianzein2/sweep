@@ -47,7 +47,7 @@ struct ScoreView: View {
                     Text("No scan yet")
                         .font(.headline)
                         .foregroundColor(.secondary)
-                    Text("13 scanners ready")
+                    Text("15 scanners ready")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

@@ -1,6 +1,6 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 15 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## Download
 
@@ -64,7 +64,7 @@ sudo sweep --json
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`, `shellhistory`, `credentials`
 
 ## What it checks
 
@@ -83,6 +83,8 @@ sudo sweep --json
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
 | **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Shell History** | Detects ClickFix / fake-CAPTCHA / pastejacking attacks by scanning `~/.zsh_history` and `~/.bash_history` for `curl|sh` patterns, base64-pipe-to-bash, `osascript` shell drops, Gatekeeper bypasses, and known ClickFix lure domains |
+| **Credential Exposure** | Audits permissions on SSH keys, AWS/kubeconfig/Docker credentials, `.netrc`, `.npmrc`, `.git-credentials`, GnuPG and SOPS keys; checks for credential files staged in `/tmp` (stealer behavior) and inline secret tokens in shell history |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
