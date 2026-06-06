@@ -40,6 +40,26 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 IOCs from BeaverTail/InvisibleFerret (DPRK), AMOS panels,
+        // Sliver/Mythic public servers, and Cobalt Strike Mac stagers.
+        1224, 1225,                            // BeaverTail loader
+        50050,                                  // Cobalt Strike default team server
+        13337, 13338,                           // Sliver
+        51820,                                  // WireGuard misuse for tunneling
+        7081, 7082,                             // Mythic agent defaults
+        16385, 16386,                           // FrigidStealer / Lumma macOS
+        24444, 44444,                           // AMOS/Banshee staging
+    ]
+
+    /// Hostnames known to host stealer panels, DPRK loaders, or domain-fronting infra. We only
+    /// flag exact matches against /etc/hosts entries and resolver records — this is intentionally
+    /// conservative to avoid false positives.
+    private let knownC2Domains: Set<String> = [
+        "p.zi", "n.zi",                              // BeaverTail / InvisibleFerret static drops
+        "rocketchat-app.com",                        // Crystal stealer C2 (2024)
+        "appleupdater.net",                          // FrigidStealer infra (2024)
+        "mobile-update.apple.com.update-pkg.com",    // typosquat seen in DeerStealer campaigns
+        "macupdater.io",                             // ReaderUpdate redirector (not the legit MacUpdater)
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -266,6 +286,19 @@ public final class NetworkScanner: Scanner {
                         detail: "Domain: \(domain) → \(ip) — blocks macOS security checks",
                         path: "/etc/hosts",
                         remediation: "Remove this line from /etc/hosts: sudo nano /etc/hosts"
+                    ))
+                }
+            }
+
+            // Known C2 / malware infrastructure listed by hostname
+            for domain in knownC2Domains {
+                if lineStr.lowercased().contains(domain) {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Known malware C2 domain in /etc/hosts",
+                        detail: "Domain: \(domain) → \(ip) — associated with active stealer / loader infrastructure",
+                        path: "/etc/hosts",
+                        remediation: "Remove this line immediately and inspect the machine for the corresponding payload"
                     ))
                 }
             }

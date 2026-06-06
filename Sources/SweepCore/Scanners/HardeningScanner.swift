@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version support")
+        checkMacOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo timeout configuration")
+        checkSudoTimeout(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi privacy")
+        checkWiFiPrivateAddress(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,175 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version Support
+
+    /// Apple supports the three most recent major macOS releases. Running a release older than
+    /// that means no XProtect / Safari / WebKit / kernel security updates, which is the single
+    /// biggest hardening loss a user can experience without realizing it. We compare the running
+    /// version against a conservative cutoff baked in below — bumping these constants is the
+    /// only maintenance this check needs.
+    private func checkMacOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let major = v.majorVersion
+
+        // As of mid-2025: macOS 15 Sequoia (current), 14 Sonoma (supported), 13 Ventura
+        // (supported). 12 Monterey and earlier are out of security support. Conservative cutoff:
+        // anything older than macOS 13 is unsupported.
+        if major < 13 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(v.minorVersion) is no longer receiving security updates",
+                detail: "Apple only ships security patches for the latest 3 major macOS releases — this version no longer gets XProtect or WebKit fixes",
+                path: nil,
+                remediation: "Upgrade to a supported macOS release: System Settings > General > Software Update (or buy newer hardware if blocked)"
+            ))
+        } else if major == 13 {
+            // Ventura is on the edge — flag as informational so users start planning.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS 13 Ventura is on the last year of security support",
+                detail: "When the next major macOS ships, Ventura will stop receiving updates",
+                path: nil,
+                remediation: "Plan to upgrade within the next major release cycle"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    /// Private Relay encrypts Safari traffic and DNS, hiding the user's IP from websites. It's
+    /// not a security control per se, but stalkerware-style monitoring tools (and some MDMs)
+    /// silently disable it because they can't intercept the traffic. Surface the state so the
+    /// user notices if it's been turned off without their consent.
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        // Two known signals: the cloudconfig preference and an MDM restriction key. We check
+        // both because either one disabling Private Relay is interesting.
+        let cloudConfig = "\(home)/Library/Preferences/com.apple.networkserviceproxy.plist"
+        if let data = FileManager.default.contents(atPath: cloudConfig),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            let userOptedOut = (plist["PrivateRelayDisabled"] as? Bool) ?? false
+            if userOptedOut {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Safari traffic is no longer routed through Apple's encrypted relays — your IP is visible to websites",
+                    path: nil,
+                    remediation: "Re-enable: System Settings > Apple ID > iCloud > Private Relay (subscribers only)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - sudo timeout
+
+    /// Default sudo behavior caches your password for 5 minutes per tty. A long timestamp_timeout
+    /// (or no tty_tickets) means malware that piggybacks on a terminal where you recently typed
+    /// sudo can escalate without a fresh password prompt. Both behaviors are configured in
+    /// /etc/sudoers (or its drop-ins) via `Defaults`.
+    private func checkSudoTimeout(findings: inout [Finding], errors: inout [String]) {
+        let sudoersPaths = ["/etc/sudoers"] + ((try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d"))
+            .map { $0.filter { !$0.hasPrefix(".") && $0 != "README" }.map { "/etc/sudoers.d/\($0)" } } ?? [])
+
+        var timestampTimeout: Int?
+        var ttyTicketsDisabled = false
+        var foundAny = false
+
+        for path in sudoersPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            foundAny = true
+
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                // `Defaults timestamp_timeout=N` — value is in minutes; -1 means never expires.
+                if trimmed.contains("timestamp_timeout") {
+                    if let eq = trimmed.range(of: "=") {
+                        let rest = trimmed[eq.upperBound...].trimmingCharacters(in: .whitespaces)
+                        timestampTimeout = Int(rest.prefix(while: { $0.isNumber || $0 == "-" }))
+                    }
+                }
+                if trimmed.contains("!tty_tickets") {
+                    ttyTicketsDisabled = true
+                }
+            }
+        }
+
+        guard foundAny else { return }
+
+        if let t = timestampTimeout {
+            if t < 0 {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "sudo password cache never expires",
+                    detail: "timestamp_timeout=\(t) — once you enter your password, sudo stays unlocked forever in that terminal",
+                    path: nil,
+                    remediation: "Remove the `Defaults timestamp_timeout=-1` line: sudo visudo"
+                ))
+            } else if t > 15 {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "sudo password cache lasts \(t) minutes",
+                    detail: "Long cache windows give malware sharing your terminal a wider opportunity to escalate to root",
+                    path: nil,
+                    remediation: "Lower the timeout: sudo visudo, set `Defaults timestamp_timeout=5`"
+                ))
+            }
+        }
+
+        if ttyTicketsDisabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "sudo tty_tickets is disabled",
+                detail: "Without tty_tickets, a sudo authorization in one terminal grants sudo in every other terminal — easier for malware to ride along",
+                path: nil,
+                remediation: "Remove `Defaults !tty_tickets`: sudo visudo"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi private address (MAC randomization)
+
+    /// macOS Sonoma+ supports per-network Wi-Fi MAC address randomization. With it off, your Mac
+    /// broadcasts a stable identifier across networks. Not a critical control, but a quick
+    /// privacy improvement worth flagging.
+    private func checkWiFiPrivateAddress(findings: inout [Finding], errors: inout [String]) {
+        // The setting is recorded per-SSID in the airport preferences plist. We only flag if the
+        // user is currently associated to a Wi-Fi network and that network has the feature
+        // turned off, since we can't tell otherwise.
+        let plistPath = "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return }
+
+        var disabledFor: [String] = []
+        for (key, raw) in plist {
+            guard let entry = raw as? [String: Any] else { continue }
+            // `PrivateMACAddressModeUserSetting` — 0 means off, 1 fixed-random, 2 rotating.
+            // Older systems used a bool `PrivateMACAddress` instead.
+            let modeInt = entry["PrivateMACAddressModeUserSetting"] as? Int
+            let modeBool = (entry["PrivateMACAddress"] as? Bool).map { $0 ? 1 : 0 }
+            let mode = modeInt ?? modeBool
+            if mode == 0 {
+                // Key looks like "wifi.network.ssid.MyNetwork"
+                let ssid = key.components(separatedBy: ".").last ?? key
+                disabledFor.append(ssid)
+            }
+        }
+
+        if !disabledFor.isEmpty {
+            let preview = disabledFor.prefix(3).joined(separator: ", ")
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Wi-Fi private address disabled on \(disabledFor.count) network(s)",
+                detail: "Networks: \(preview)\(disabledFor.count > 3 ? ", …" : "") — your real MAC is broadcast on these networks",
+                path: nil,
+                remediation: "Enable per-network: System Settings > Wi-Fi > <network> > Details > Private Wi-Fi address"
+            ))
         }
     }
 

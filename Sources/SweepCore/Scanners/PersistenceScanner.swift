@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking Audio / QuickLook / Spotlight plugins")
+        scanThirdPartyPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking Dock auto-launched apps")
+        scanDockPersistedApps(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +683,176 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Folder Actions
+
+    /// Folder Actions run an AppleScript whenever a file is added, removed, or modified in a
+    /// watched folder. They survive reboots and are configured in
+    /// `~/Library/Preferences/com.apple.FolderActionsDispatcher.plist` and
+    /// `~/Library/Workflows/Applications/Folder Actions/`. Recent stalkerware and DPRK-aligned
+    /// installers use them to re-launch payloads after deletion.
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dispatcherPlist = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        let fm = FileManager.default
+
+        if fm.fileExists(atPath: dispatcherPlist),
+           let data = fm.contents(atPath: dispatcherPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            // The dispatcher records "FolderActions" as an array of dicts with FolderPath and
+            // ScriptPath. Any non-empty entry is worth surfacing.
+            let entries = (plist["FolderActions"] as? [[String: Any]]) ?? []
+            for entry in entries {
+                let folder = entry["FolderPath"] as? String ?? "?"
+                let scripts = (entry["Scripts"] as? [[String: Any]]) ?? []
+                for script in scripts {
+                    let scriptPath = script["ScriptPath"] as? String ?? "?"
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Folder Action configured",
+                        detail: "Folder: \(folder), Script: \(scriptPath)",
+                        path: scriptPath,
+                        remediation: "Review with: Automator > File > Open... > \(scriptPath) — or remove via Finder right-click > Services > Folder Actions Setup"
+                    ))
+                }
+            }
+        }
+
+        // Any user-installed Folder Action workflow file is worth listing
+        let workflowDir = "\(home)/Library/Workflows/Applications/Folder Actions"
+        if let entries = try? fm.contentsOfDirectory(atPath: workflowDir) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(workflowDir)/\(entry)"
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Folder Action workflow installed",
+                    detail: "Workflow: \(entry) — runs when files appear in its attached folder",
+                    path: path,
+                    remediation: "Inspect: open \"\(path)\" in Automator"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Audio HAL / QuickLook / Spotlight plugins
+
+    /// macOS auto-loads third-party plugins from several well-known directories. Each of these
+    /// is a stealth persistence surface that malware has been observed abusing:
+    ///
+    /// - Audio HAL plug-ins are loaded by `coreaudiod` (root) at boot.
+    /// - QuickLook generators run inside `quicklookd` whenever the user previews a file in Finder.
+    /// - Spotlight importers run inside `mdworker` for every indexed file type they claim.
+    /// - ColorSync filters are loaded by anything that displays color (Preview, Safari, …).
+    private func scanThirdPartyPlugins(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let pluginDirs: [(path: String, kind: String, severity: Severity)] = [
+            ("/Library/Audio/Plug-Ins/HAL",                       "Audio HAL plug-in",         .medium),
+            ("\(home)/Library/Audio/Plug-Ins/HAL",                "Audio HAL plug-in (user)",  .medium),
+            ("/Library/QuickLook",                                "QuickLook generator",       .medium),
+            ("\(home)/Library/QuickLook",                         "QuickLook generator (user)",.medium),
+            ("/Library/Spotlight",                                "Spotlight importer",        .medium),
+            ("\(home)/Library/Spotlight",                         "Spotlight importer (user)", .medium),
+            ("/Library/ColorSync/Filters",                        "ColorSync filter",          .low),
+            ("\(home)/Library/ColorSync/Filters",                 "ColorSync filter (user)",   .low),
+            ("/Library/ScreenSavers",                             "Screen saver bundle",       .low),
+            ("\(home)/Library/ScreenSavers",                      "Screen saver bundle (user)",.low),
+            ("/Library/Input Methods",                            "Input method (root)",       .medium),
+            ("\(home)/Library/Input Methods",                     "Input method (user)",       .medium),
+        ]
+
+        let fm = FileManager.default
+        for entry in pluginDirs {
+            guard fm.fileExists(atPath: entry.path),
+                  let items = try? fm.contentsOfDirectory(atPath: entry.path) else { continue }
+
+            for item in items where !item.hasPrefix(".") {
+                let bundlePath = "\(entry.path)/\(item)"
+
+                // Skip Apple-bundled defaults — Apple itself ships a small number of QuickLook
+                // generators, ScreenSavers, etc. We use the embedded Info.plist's CFBundleIdentifier
+                // to decide.
+                let bundleId = readBundleIdentifier(at: bundlePath) ?? ""
+                if bundleId.hasPrefix("com.apple.") { continue }
+
+                // Known spyware?
+                if let sig = SpywareSignature.match(bundleId: bundleId) ??
+                             SpywareSignature.match(processName: item) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware \(entry.kind): \(sig.name)",
+                        detail: "Bundle: \(item), ID: \(bundleId.isEmpty ? "(none)" : bundleId)",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Fake Apple ID
+                if SpywareSignature.isFakeAppleBundleId(bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(entry.kind) with fake Apple bundle ID",
+                        detail: "Bundle: \(item), ID: \(bundleId)",
+                        path: bundlePath,
+                        remediation: "Inspect, then remove: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Unsigned third-party plugins — `coreaudiod`, `quicklookd`, `mdworker` are all
+                // root-level or TCC-privileged daemons, so loading an unsigned plugin here is risky.
+                if !checkIsSigned(path: bundlePath) {
+                    findings.append(Finding(
+                        severity: entry.severity, category: .persistence,
+                        title: "Unsigned \(entry.kind)",
+                        detail: "Bundle: \(item)\(bundleId.isEmpty ? "" : ", ID: \(bundleId)") — auto-loaded by macOS at boot or on demand",
+                        path: bundlePath,
+                        remediation: "Verify this plugin is expected — remove if unknown: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    private func readBundleIdentifier(at bundlePath: String) -> String? {
+        // Both .bundle and .qlgenerator (Cocoa bundles) have an Info.plist at Contents/Info.plist.
+        let infoPlist = "\(bundlePath)/Contents/Info.plist"
+        guard FileManager.default.fileExists(atPath: infoPlist),
+              let data = FileManager.default.contents(atPath: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return nil }
+        return plist["CFBundleIdentifier"] as? String
+    }
+
+    // MARK: - Dock auto-launched apps
+
+    /// The Dock keeps a `persistent-apps` array of apps the user pinned. macOS doesn't auto-launch
+    /// these on login, but a parallel `auto-launched-apps` array (less well-known) does. Malware
+    /// has been seen injecting itself here to relaunch on every login while avoiding LaunchAgent
+    /// detectors.
+    private func scanDockPersistedApps(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let plistPath = "\(home)/Library/Preferences/com.apple.dock.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return }
+
+        let autoArr = (plist["auto-launched-apps"] as? [[String: Any]]) ?? []
+        for entry in autoArr {
+            guard let tile = entry["tile-data"] as? [String: Any] else { continue }
+            let label = (tile["file-label"] as? String) ?? "?"
+            let urlDict = tile["file-data"] as? [String: Any]
+            let url = (urlDict?["_CFURLString"] as? String) ?? "?"
+
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "App scheduled to auto-launch via Dock plist",
+                detail: "App: \(label), URL: \(url)",
+                path: url.hasPrefix("file://") ? URL(string: url)?.path : url,
+                remediation: "Remove this entry: defaults delete com.apple.dock auto-launched-apps && killall Dock"
             ))
         }
     }
