@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Advanced Data Protection")
+        checkAdvancedDataProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Items")
+        checkBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo Touch ID")
+        checkSudoTouchID(findings: &findings, errors: &errors)
+
+        progress?.update("checking T2/Secure Boot")
+        checkSecureBoot(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +483,203 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    /// iCloud+ users get Private Relay (per-domain DNS + IP-cloaking through Apple's relays).
+    /// If it's explicitly off on an iCloud+ account, the user is exposing real IP + DNS to every
+    /// site they visit in Safari. We treat it as informational — many enterprise networks block it.
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "NSPProxiedDevicesEnabled"
+        ], timeout: 5)
+        // The key is set to 0 only when the user has actively disabled Private Relay
+        // (vs. never having had iCloud+). Only flag the explicit-off case.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Real IP address and DNS queries are visible to every website and network operator",
+                    path: nil,
+                    remediation: "Enable if you have iCloud+: System Settings > Apple ID > iCloud > Private Relay"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Advanced Data Protection
+
+    /// iCloud Advanced Data Protection extends end-to-end encryption to iCloud Backup, Drive,
+    /// Photos, Notes, etc. Without it, those categories are decryptable by Apple (and reachable
+    /// via lawful-access requests or stolen Apple ID). Informational only.
+    private func checkAdvancedDataProtection(findings: inout [Finding], errors: inout [String]) {
+        // ADP state is held in CloudKit; we can't query it directly without auth, but the
+        // local recovery-contact / recovery-key state is a strong proxy. If neither is set,
+        // ADP definitely is not on.
+        let recoveryKey = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.icloud.fmfd", "iCloudRecoveryKeyConfigured"
+        ], timeout: 5)
+        let contactKeyVerify = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.imdsd", "ContactKeyVerificationEnabled"
+        ], timeout: 5)
+        let hasRecoveryKey = recoveryKey.success &&
+            recoveryKey.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        let hasContactVerify = contactKeyVerify.success &&
+            contactKeyVerify.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        // We don't penalize an account that isn't iCloud-signed in; only nudge when the user is
+        // clearly an iCloud user (has the daemons reporting) but neither hardening control is on.
+        if recoveryKey.success && !hasRecoveryKey {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Account Recovery Key is not configured",
+                detail: "Without a recovery key, account recovery depends on Apple Support — and ADP cannot be turned on",
+                path: nil,
+                remediation: "Set one up: System Settings > Apple ID > Sign-In & Security > Account Recovery"
+            ))
+        }
+        if contactKeyVerify.success && !hasContactVerify {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iMessage Contact Key Verification is off",
+                detail: "Contact Key Verification protects iMessage conversations against sophisticated server-side attackers (state-level threats)",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Contact Key Verification"
+            ))
+        }
+    }
+
+    // MARK: - Background Items (SMAppService) review
+
+    /// macOS Ventura introduced a unified Login Items / Background Items pane. SMAppService-style
+    /// background items are sometimes ignored by other persistence scanners because they don't
+    /// drop a .plist under /Library/LaunchAgents — the framework keeps them registered via the app
+    /// bundle. `sfltool dumpbtm` exposes the registered items.
+    private func checkBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 8)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // dumpbtm output is record-based; we parse loosely. Each record has lines like:
+        //   Name: …
+        //   Developer Name: …
+        //   Bundle Identifier: …
+        //   Disposition: [enabled/disabled allowed/disallowed]
+        var currentName: String?
+        var currentBundle: String?
+        var currentDev: String?
+        var currentDisposition: String?
+
+        func emitIfSuspicious() {
+            defer {
+                currentName = nil; currentBundle = nil
+                currentDev = nil; currentDisposition = nil
+            }
+            guard let bundle = currentBundle else { return }
+            // Apple-signed items are routine
+            if bundle.hasPrefix("com.apple.") { return }
+            // Trusted developers
+            let trustedDevs: Set<String> = [
+                "Google, Inc.", "Microsoft Corporation", "Dropbox, Inc.",
+                "1Password 7 - Password Manager", "AgileBits Inc.",
+                "Slack Technologies, Inc.", "Adobe Inc.", "Apple",
+                "Backblaze, Inc.", "JetBrains s.r.o.",
+            ]
+            if let dev = currentDev, trustedDevs.contains(dev) { return }
+            // Spyware match by bundle ID
+            if let sig = SpywareSignature.match(bundleId: bundle) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as Background Item: \(sig.name)",
+                    detail: "Bundle: \(bundle), Disposition: \(currentDisposition ?? "?")",
+                    path: nil,
+                    remediation: "Remove in System Settings > General > Login Items > Open at Login, then delete \(sig.name)"
+                ))
+                return
+            }
+            // Fake Apple bundle ID disguised as a system service
+            if SpywareSignature.isFakeAppleBundleId(bundle) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Item uses fake Apple bundle ID",
+                    detail: "Bundle: \(bundle), Name: \(currentName ?? "?")",
+                    path: nil,
+                    remediation: "Remove in System Settings > General > Login Items"
+                ))
+                return
+            }
+        }
+
+        for raw in result.stdout.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                emitIfSuspicious()
+                continue
+            }
+            if line.hasPrefix("Name:") {
+                currentName = line.replacingOccurrences(of: "Name:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Bundle Identifier:") {
+                currentBundle = line.replacingOccurrences(of: "Bundle Identifier:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Developer Name:") {
+                currentDev = line.replacingOccurrences(of: "Developer Name:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Disposition:") {
+                currentDisposition = line.replacingOccurrences(of: "Disposition:", with: "").trimmingCharacters(in: .whitespaces)
+            }
+        }
+        emitIfSuspicious()  // flush trailing record
+    }
+
+    // MARK: - sudo Touch ID
+
+    /// pam_tid in /etc/pam.d/sudo_local is the supported way to enable Touch ID for sudo on
+    /// macOS Sonoma+. It survives OS upgrades (the pre-Sonoma trick of editing /etc/pam.d/sudo did not).
+    /// We treat its presence as informational and its absence on Touch ID-capable Macs as a low nudge.
+    private func checkSudoTouchID(findings: inout [Finding], errors: inout [String]) {
+        let localPam = "/etc/pam.d/sudo_local"
+        let fm = FileManager.default
+        if fm.fileExists(atPath: localPam),
+           let content = try? String(contentsOfFile: localPam, encoding: .utf8),
+           content.contains("pam_tid.so") {
+            // already enabled — no finding needed
+            return
+        }
+        // Heuristic: only nudge if the Mac is Apple Silicon (most likely has Touch ID).
+        let arch = ShellRunner.run("/usr/bin/uname", arguments: ["-m"], timeout: 3)
+        let isAppleSilicon = arch.success && arch.stdout.contains("arm64")
+        guard isAppleSilicon else { return }
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Touch ID for sudo is not enabled",
+            detail: "Enabling pam_tid in /etc/pam.d/sudo_local removes a typed-password attack surface for privilege escalation",
+            path: localPam,
+            remediation: "Run: sudo sh -c 'echo \"auth       sufficient     pam_tid.so\" > /etc/pam.d/sudo_local' (Sonoma+)"
+        ))
+    }
+
+    // MARK: - Secure Boot / T2
+
+    /// Apple Silicon and T2 Macs ship with Full Security secure boot by default. If a user
+    /// dropped it to Permissive or Reduced (e.g. to run third-party kexts), the boot chain
+    /// can be tampered with. `bputil --display-all-policies` shows the policy.
+    private func checkSecureBoot(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/bputil", arguments: ["--display-all-policies"], timeout: 5)
+        // bputil requires root and may fail on non-Apple-Silicon systems; that's fine.
+        guard result.success, !result.stdout.isEmpty else { return }
+        let lower = result.stdout.lowercased()
+
+        // Permissive Security = boot policy reduced, third-party kexts allowed
+        if lower.contains("permissive security") || lower.contains("reduced security") {
+            findings.append(Finding(
+                severity: .high, category: .systemIntegrity,
+                title: "Secure boot policy is reduced (Permissive/Reduced)",
+                detail: "Boot chain accepts unsigned/older code and third-party kexts — a rootkit installed in this state can persist across reboots",
+                path: nil,
+                remediation: "Boot into Recovery (hold power on Apple Silicon) > Startup Security Utility > Full Security"
+            ))
         }
     }
 }

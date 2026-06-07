@@ -129,6 +129,66 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: Stealer fingerprint — browser credential copy + crypto wallet staging +
+        // active outbound network = AMOS / Banshee / Poseidon / Atomic-family campaign in progress.
+        let evidenceForCorrelation = results.first(where: { $0.scannerName == "Evidence Scan" })?.findings ?? []
+        let stolenCreds = evidenceForCorrelation.contains { $0.title.contains("credential store") }
+        let stolenWallet = evidenceForCorrelation.contains { $0.title.contains("wallet files staged") }
+        let stolenCredsByDevEnv = (results.first(where: { $0.scannerName == "Dev Environment Scan" })?
+            .findings.contains { $0.title.contains("credential-shaped file in temp") }) ?? false
+        let networkActive = !(results.first(where: { $0.scannerName == "Network Scan" })?.findings.isEmpty ?? true)
+        if (stolenCreds || stolenWallet || stolenCredsByDevEnv) && networkActive {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "Infostealer fingerprint: credentials staged + active network",
+                detail: "AMOS-family stealers (Atomic, Banshee, Poseidon, Cthulhu, FrigidStealer) copy browser/wallet/cloud creds before exfiltrating them",
+                path: nil,
+                remediation: "Disconnect from the network, rotate every credential the stealer can read (browser saved passwords, AWS/GCP keys, wallet seed phrases), then investigate Evidence Scan + Network Scan findings"
+            ))
+        }
+
+        // Pattern 7: DPRK "Contagious Interview" — Node/Python being asked to run staged code,
+        // combined with a suspicious launch agent or recent SSH-config tampering. The campaign
+        // baits crypto/Web3 devs into running malicious "take-home" projects.
+        let devFindings = results.first(where: { $0.scannerName == "Dev Environment Scan" })?.findings ?? []
+        let processFindings = results.first(where: { $0.scannerName == "Process Scan" })?.findings ?? []
+        let npmTampered = devFindings.contains { $0.title.contains(".npmrc") }
+        let sshTampered = devFindings.contains { $0.title.contains("SSH ProxyCommand") || $0.title.contains("SSH LocalCommand") }
+        let nodeOrPythonSuspect = processFindings.contains {
+            let lc = $0.detail.lowercased()
+            return lc.contains("node") || lc.contains("python") || lc.contains("ferret") || lc.contains("beavertail")
+        }
+        if nodeOrPythonSuspect && (npmTampered || sshTampered) {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "Possible DPRK 'Contagious Interview' campaign pattern",
+                detail: "Suspicious Node/Python process plus tampered dev-tool configuration — matches the BeaverTail / InvisibleFerret / FlexibleFerret kill chain",
+                path: nil,
+                remediation: "Disconnect, kill the suspect process, revert .npmrc / SSH config, and rotate any keys/wallets you touched recently"
+            ))
+        }
+
+        // Pattern 8: Custom root CA + proxy/PAC enabled = TLS interception is live. Each alone is
+        // a yellow flag; together they're a confirmed traffic-interception setup (corporate or hostile).
+        let deepFindings = results.first(where: { $0.scannerName == "Deep Inspection Scan" })?.findings ?? []
+        let networkFindings = results.first(where: { $0.scannerName == "Network Scan" })?.findings ?? []
+        let customCA = deepFindings.contains { $0.title.contains("Custom root CA") }
+        let proxyOn = networkFindings.contains {
+            $0.title.contains("proxy") || $0.title.contains("PAC")
+        }
+        if customCA && proxyOn {
+            findings.append(Finding(
+                severity: .high,
+                category: .networkActivity,
+                title: "TLS interception is configured (custom CA + proxy)",
+                detail: "A custom trusted root CA combined with an active proxy means HTTPS traffic can be silently inspected end-to-end",
+                path: nil,
+                remediation: "If this isn't your employer's MDM-managed setup, treat the machine as compromised — remove the CA in Keychain Access and disable the proxy"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,
