@@ -434,6 +434,212 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threat additions
+        SpywareSignature(
+            // DPRK-attributed Nim-based loader/backdoor (SentinelOne, July 2024).
+            // Often delivered via fake "Zoom meeting SDK" or job-interview installers.
+            name: "NimDoor",
+            processNames: ["nimdoor", "GoogIeHelper", "MicrosoftAUDaemon", "CoreKitAgent",
+                           "ZoomVideoBackground"],
+            bundleIdentifiers: ["com.zoom.update", "com.google.updater"],
+            filePaths: [
+                "/private/tmp/.nim",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/LaunchAgents/com.google.updater.plist",
+            ],
+            launchAgentLabels: ["com.google.updater", "com.zoom.update", "com.microsoft.audaemon"]
+        ),
+        SpywareSignature(
+            // BeaverTail / InvisibleFerret — DPRK "Contagious Interview" campaign
+            // delivered as fake coding-test packages (npm + Python).
+            name: "BeaverTail / InvisibleFerret",
+            processNames: ["beavertail", "invisibleferret", "ferret", "node_helper",
+                           "miner.py", "iSecurityAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.invisible",
+                "~/Library/Application Support/.tinker",
+            ],
+            launchAgentLabels: ["com.apple.ttserver"]
+        ),
+        SpywareSignature(
+            // Late 2024 / early 2025 — distributed via fake browser-update pop-ups (TDS).
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "Setup_safari", "WindowServers"],
+            bundleIdentifiers: ["com.frigid.stealer", "marsoperator.frigid"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            // Go-based stealer / RAT (AT&T Alien Labs, late 2023; macOS variant 2024).
+            name: "JaskaGo",
+            processNames: ["JaskaGo", "jaskago", "GoPanda", "AppleHelper.helper"],
+            bundleIdentifiers: ["com.jaska.app"],
+            filePaths: [
+                "/private/tmp/.jaska",
+                "~/Library/Application Support/.JaskaGo",
+            ],
+            launchAgentLabels: ["com.apple.systempref.helper"]
+        ),
+        SpywareSignature(
+            // macOS port of LockBit ransomware seen in 2024.
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "lockbit", "MyDocLocker", "MyEncryptor"],
+            bundleIdentifiers: ["com.lockbit.macos"],
+            filePaths: [
+                "/private/tmp/.lockbit",
+                "/private/tmp/encrypt.tmp",
+            ],
+            launchAgentLabels: ["com.apple.docs.encrypt"]
+        ),
+        SpywareSignature(
+            // 2025 loader/dropper that delivers AMOS/Poseidon via fake PDF reader installers.
+            name: "ReaderUpdate",
+            processNames: ["ReaderUpdate", "readerupdate", "PDFReader_setup",
+                           "Adobe_Acrobat_Update"],
+            bundleIdentifiers: ["com.adobe.update", "com.pdfreader.update"],
+            filePaths: [
+                "/private/tmp/.reader",
+                "~/Library/Application Support/.ReaderUpdate",
+            ],
+            launchAgentLabels: ["com.adobe.acrobat.update"]
+        ),
+        SpywareSignature(
+            // DPRK-linked Swift backdoor (Aug 2024, Kandji & Phylum reports).
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "ZoomCommunications.app", "GoogleEDU"],
+            bundleIdentifiers: ["com.todo.swift"],
+            filePaths: [
+                "/private/tmp/.todo",
+                "~/Library/Group Containers/.todoswift",
+            ],
+            launchAgentLabels: ["com.apple.todo.helper"]
+        ),
+        SpywareSignature(
+            // DPRK "Hidden Risk" — fake crypto-news PDF dropper (SentinelOne, Nov 2024).
+            // Persists via zshenv to survive shell launches without a LaunchAgent file.
+            name: "HiddenRisk",
+            processNames: ["HiddenRisk", "growth", "Hidden Risk Behind New Surge of Bitcoin Price",
+                           "macnotes"],
+            bundleIdentifiers: ["com.bohemian.cryptominer"],
+            filePaths: [
+                "/private/tmp/.zshenv",
+                "~/Library/Application Support/.hiddenrisk",
+                "~/Library/Application Support/.macnotes",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Active 2024-2025 RAT (BlackBerry/Lookout reporting); macOS variants used against
+            // journalists and dissidents.
+            name: "LightSpy",
+            processNames: ["LightSpy", "lightspy", "macsysd", "macupdater_helper"],
+            bundleIdentifiers: ["com.lookout.lightspy"],
+            filePaths: [
+                "/Library/.lightspy",
+                "/private/var/tmp/.lightspy",
+            ],
+            launchAgentLabels: ["com.apple.macsysd"]
+        ),
+        SpywareSignature(
+            // KrustyLoader (Volexity, Jan 2024) — Rust-based first-stage downloader.
+            name: "KrustyLoader",
+            processNames: ["krusty", "KrustyLoader", "rust_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.krusty",
+                "/private/var/tmp/.krustyd",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Python-based stealer family active in 2024 — delivered via cracked apps and
+            // fake productivity tools on warez sites.
+            name: "PythonStealer (CryptoChameleon)",
+            processNames: ["pythonstealer", "py_stealer", "ChromeUpdater", "wallet.py"],
+            bundleIdentifiers: ["com.python.stealer"],
+            filePaths: [
+                "/private/tmp/.pystealer",
+                "~/Library/Application Support/.PyStealer",
+            ],
+            launchAgentLabels: ["com.python.helper"]
+        ),
+        SpywareSignature(
+            // AppleProcessHub (early 2025, MacPaw Moonlock) — fake Apple-branded loader.
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "applehub"],
+            bundleIdentifiers: ["com.apple.process.hub"],
+            filePaths: [
+                "/private/tmp/.applehub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.process.hub"]
+        ),
+        SpywareSignature(
+            // RustyAttr — BlueNoroff (DPRK), Nov 2024. Stores payload in macOS extended attrs.
+            name: "RustyAttr",
+            processNames: ["rustyattr", "RustyAttr", "xattr_loader"],
+            bundleIdentifiers: ["com.rustyattr.loader"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // FlexibleFerret (Cisco Talos / Phylum, late 2024) — Electron-disguised stealer
+            // distributed through fake video conferencing app installers.
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "ferret", "FerretService",
+                           "MicrosoftFerret"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.FlexibleFerret",
+            ],
+            launchAgentLabels: ["com.apple.ferret.helper"]
+        ),
+        SpywareSignature(
+            // WizardUpdate / Adload — long-running adware that escalated in 2024 to drop
+            // stealer payloads alongside ad injection.
+            name: "WizardUpdate / Adload",
+            processNames: ["WizardUpdate", "wizardupdate", "PostfixCacheService",
+                           "ExtensionAgent", "AnalysisInjector"],
+            bundleIdentifiers: ["com.WizardUpdate.helper", "com.adload.installer"],
+            filePaths: [
+                "/Library/Application Support/.WizardUpdate",
+                "~/Library/Application Support/.WizardUpdate",
+            ],
+            launchAgentLabels: ["com.WizardUpdate.helper", "com.WizardUpdate.update"]
+        ),
+        SpywareSignature(
+            // Mac.OSX.SpaceHopper / Pirrit successor — pop-up + tracking + stealer hybrid (2024).
+            name: "SpaceHopper",
+            processNames: ["SpaceHopper", "spacehopper", "spaceupdater"],
+            bundleIdentifiers: ["com.spacehopper.agent"],
+            filePaths: [
+                "~/Library/Application Support/.spacehopper",
+                "/private/tmp/.spacehopper",
+            ],
+            launchAgentLabels: ["com.spacehopper.helper"]
+        ),
+        SpywareSignature(
+            // Crypter-installed clipboard-hijacker family (2024-2025) that swaps copied
+            // crypto wallet addresses with attacker-controlled addresses.
+            name: "ClipboardSwapper",
+            processNames: ["ClipboardSwapper", "clipswap", "clipboarder",
+                           "Pasteboard_helper", "CopyAgent"],
+            bundleIdentifiers: ["com.clipboard.swapper", "com.copy.helper"],
+            filePaths: [
+                "/private/tmp/.clipswap",
+                "~/Library/Application Support/.ClipboardSwapper",
+            ],
+            launchAgentLabels: ["com.copy.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +656,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 stealer/RAT IOCs disguising themselves as Apple services
+        "com.apple.ttserver",
+        "com.apple.macsysd",
+        "com.apple.todo.helper",
+        "com.apple.process.hub",
+        "com.apple.ferret.helper",
+        "com.apple.docs.encrypt",
+        "com.apple.systempref.helper",
+        "com.apple.macupdater.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

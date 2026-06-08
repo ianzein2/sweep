@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook plugins")
+        scanQuickLookPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript folder actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking zsh / bash env files")
+        scanShellEnvFiles(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Task Management registry")
+        scanBackgroundTaskManagement(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +701,256 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Spotlight Importers
+
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        // .mdimporter bundles load into mdworker_shared, which runs whenever the system
+        // indexes a file Spotlight cares about — a stealthy persistence channel. Apple
+        // ships its own importers under /System/. Anything in /Library/Spotlight or the
+        // user's library should be a known third-party app (e.g., GPGTools, Letter Opener).
+        let importerDirs = [
+            "/Library/Spotlight",
+            "\(ShellRunner.realUserHome)/Library/Spotlight",
+        ]
+        let fm = FileManager.default
+
+        for dir in importerDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .high,
+                    category: .persistence,
+                    title: isSigned
+                        ? "Third-party Spotlight importer installed"
+                        : "Unsigned Spotlight importer installed",
+                    detail: "Importer: \(entry) — loaded into mdworker whenever Spotlight indexes a matching file type",
+                    path: path,
+                    remediation: isSigned
+                        ? "Verify this importer belongs to an app you trust"
+                        : "Inspect and remove if unexpected: sudo rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - QuickLook plugins
+
+    private func scanQuickLookPlugins(findings: inout [Finding], errors: inout [String]) {
+        // QuickLook plugins (.qlgenerator) execute whenever the user previews a file with
+        // spacebar — historically abused (e.g., MacRansom) to trigger code from a thumbnail.
+        let dirs = [
+            "/Library/QuickLook",
+            "\(ShellRunner.realUserHome)/Library/QuickLook",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned QuickLook plugin installed",
+                        detail: "Plugin: \(entry) — code runs whenever you preview a matching file type with spacebar",
+                        path: path,
+                        remediation: "Remove if you didn't install it: sudo rm -rf \"\(path)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Folder Actions (AppleScript persistence)
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions run AppleScript whenever a watched folder gains/loses items.
+        // Stealers (notably AMOS variants) attach a script to ~/Downloads or the Desktop
+        // so new files are immediately scanned/exfiltrated.
+        let dirs = [
+            "\(ShellRunner.realUserHome)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".scpt") || entry.hasSuffix(".applescript") {
+                let path = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script present",
+                    detail: "Script: \(entry) — runs whenever a watched folder changes. Verify it's intentional.",
+                    path: path,
+                    remediation: "Review attached folders: open ~/Library/Scripts/'Folder Action Scripts' or in Script Editor"
+                ))
+            }
+        }
+    }
+
+    // MARK: - zsh / bash env files
+
+    private func scanShellEnvFiles(findings: inout [Finding], errors: inout [String]) {
+        // /etc/zshenv runs on EVERY zsh launch, including non-interactive ones (xcrun, git
+        // hooks, sshd subshells). The HiddenRisk (DPRK, Nov 2024) family uses this exact
+        // path because there's no LaunchAgent file to find. Apple does not ship /etc/zshenv.
+        let envFiles = [
+            "/etc/zshenv",
+            "/etc/zprofile",
+            "/etc/bashrc_Apple_Terminal",  // legit but tampering still worth noting
+            "\(ShellRunner.realUserHome)/.zshenv",
+        ]
+
+        for envFile in envFiles {
+            guard let content = try? String(contentsOfFile: envFile, encoding: .utf8) else { continue }
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            let isSystemFile = envFile == "/etc/zshenv" || envFile == "/etc/zprofile"
+            let isAppleDefault = envFile == "/etc/bashrc_Apple_Terminal" &&
+                                 content.contains("Apple")
+
+            // Any non-empty /etc/zshenv is suspicious because Apple doesn't ship one.
+            if isSystemFile {
+                let preview = String(trimmed.prefix(120))
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "System-wide shell startup file is non-empty: \(URL(fileURLWithPath: envFile).lastPathComponent)",
+                    detail: "macOS ships this file empty/absent. Anything here runs on every zsh launch (cron, ssh, scripts). Preview: \(preview)",
+                    path: envFile,
+                    remediation: "Inspect contents (sudo cat \(envFile)) and remove if not intentional"
+                ))
+            } else if !isAppleDefault {
+                // ~/.zshenv runs on every zsh — interactive or not. Flag if it contains
+                // network downloads or base64 decoders.
+                let lower = content.lowercased()
+                let suspicious = ["curl", "wget", "base64", "eval $(", "python -c", "osascript -e"]
+                if suspicious.contains(where: lower.contains) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious commands in \(URL(fileURLWithPath: envFile).lastPathComponent)",
+                        detail: ".zshenv runs on every zsh launch — downloads/decoders here are a stealth persistence channel",
+                        path: envFile,
+                        remediation: "Inspect: cat \(envFile)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Background Task Management
+
+    private func scanBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        // `sfltool dumpbtm` (Ventura+) prints every item registered in Background Task
+        // Management — login items, LaunchAgents, LaunchDaemons. Many modern persistence
+        // techniques (SMAppService, helper apps) appear ONLY here, not in plist directories.
+        // Reading it requires root; run silently when unprivileged.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Group output into per-record blocks separated by "Record" headers
+        let lines = result.stdout.split(separator: "\n").map(String.init)
+        var currentRecord: [String] = []
+        var records: [[String]] = []
+        for line in lines {
+            if line.contains("Record #") {
+                if !currentRecord.isEmpty { records.append(currentRecord) }
+                currentRecord = [line]
+            } else if !currentRecord.isEmpty {
+                currentRecord.append(line)
+            }
+        }
+        if !currentRecord.isEmpty { records.append(currentRecord) }
+
+        for record in records {
+            let block = record.joined(separator: "\n")
+            let blockLC = block.lowercased()
+            // Skip disabled records — they're not actually running
+            if blockLC.contains("disposition: [disabled") { continue }
+
+            // Extract bundle identifier / executable path
+            let bundleId = extractField(block, key: "Bundle Identifier") ?? ""
+            let identifier = extractField(block, key: "Identifier") ?? ""
+            let executablePath = extractField(block, key: "Executable Path") ?? ""
+            let label = bundleId.isEmpty ? identifier : bundleId
+
+            if label.isEmpty && executablePath.isEmpty { continue }
+
+            // Known spyware label
+            if !label.isEmpty, let sig = SpywareSignature.match(label: label) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered in Background Task Management: \(sig.name)",
+                    detail: "BTM record: \(label) -> \(executablePath)",
+                    path: executablePath.isEmpty ? nil : executablePath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions, then delete \(sig.name)"
+                ))
+                continue
+            }
+
+            // Fake Apple bundle ID
+            if !label.isEmpty && SpywareSignature.isFakeAppleBundleId(label) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID in Background Task Management",
+                    detail: "BTM record: \(label) -> \(executablePath)",
+                    path: executablePath.isEmpty ? nil : executablePath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                continue
+            }
+
+            // Hidden executable path
+            if !executablePath.isEmpty &&
+               (executablePath.contains("/.") ||
+                executablePath.hasPrefix("/tmp/") ||
+                executablePath.hasPrefix("/private/tmp/") ||
+                executablePath.hasPrefix("/var/tmp/")) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Task Management item points to hidden / temp path",
+                    detail: "Label: \(label.isEmpty ? "(none)" : label), Path: \(executablePath)",
+                    path: executablePath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions and inspect: ls -la \"\(executablePath)\""
+                ))
+                continue
+            }
+
+            // Executable missing — orphaned login item
+            if !executablePath.isEmpty &&
+               !FileManager.default.fileExists(atPath: executablePath) &&
+               !executablePath.hasPrefix("/System/") {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Background Task Management item references missing executable",
+                    detail: "Label: \(label), Missing: \(executablePath)",
+                    path: executablePath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+    }
+
+    private func extractField(_ block: String, key: String) -> String? {
+        for line in block.split(separator: "\n") {
+            let s = String(line).trimmingCharacters(in: .whitespaces)
+            // Format: "Key: value" or "Key = value" depending on macOS version
+            for sep in [": ", " = "] {
+                if let r = s.range(of: "\(key)\(sep)") {
+                    return String(s[r.upperBound...])
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\";"))
+                        .trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+        return nil
     }
 }

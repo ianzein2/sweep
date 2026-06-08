@@ -67,6 +67,11 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Detect known stealer C2 channels (Telegram bot API, Discord webhooks).
+        //    These are the dominant exfil channels for 2024-2025 infostealer families.
+        progress?.update("checking for known stealer C2 channels")
+        scanForStealerC2Channels(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -362,6 +367,57 @@ public final class NetworkScanner: Scanner {
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
             }
+        }
+    }
+
+    // MARK: - Known Stealer C2 Channels
+
+    /// Hostnames that legitimate Telegram/Discord apps connect to. Used to suppress noise
+    /// when those apps are actually running.
+    private let knownTelegramDiscordProcesses: Set<String> = [
+        "Telegram", "telegram", "Telegram Helper",
+        "Discord", "DiscordHelper", "Discord Helper", "Discord Helper (Renderer)",
+        "Discord Helper (GPU)",
+    ]
+
+    private func scanForStealerC2Channels(findings: inout [Finding], errors: inout [String]) {
+        // 2024-2025 stealer families (AMOS, Banshee, NimDoor, JaskaGo, FrigidStealer, etc.)
+        // overwhelmingly exfiltrate via the Telegram Bot API or Discord webhooks because
+        // both are free, encrypted, and indistinguishable from legitimate user traffic.
+        //
+        // We use lsof to find ESTABLISHED connections to these hosts, then resolve which
+        // process owns them — if it's not the real Telegram or Discord app, that's exfil.
+        let result = ShellRunner.run("/bin/sh", arguments: [
+            "-c",
+            "lsof -i -n -P -w 2>/dev/null | grep -iE 'telegram|discord' | grep ESTABLISHED | head -50"
+        ], timeout: 10)
+
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            let parts = lineStr.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { continue }
+            let command = String(parts[0])
+            let pid = String(parts[1])
+
+            // Skip the real Telegram/Discord clients
+            if knownTelegramDiscordProcesses.contains(where: { command.hasPrefix($0) }) { continue }
+            // Skip browsers — users open Telegram Web all the time
+            if ["Safari", "firefox", "Google", "Brave", "Microsoft", "Arc"]
+                .contains(where: { command.hasPrefix($0) }) { continue }
+            if command.hasPrefix("com.apple.") { continue }
+
+            let isTelegram = lineStr.lowercased().contains("telegram")
+            let channel = isTelegram ? "Telegram Bot API" : "Discord webhook"
+
+            findings.append(Finding(
+                severity: .high, category: .networkActivity,
+                title: "Non-messenger process connecting to \(channel)",
+                detail: "Process: \(command) (PID \(pid)) — \(channel) is the dominant exfiltration channel for 2024-2025 macOS infostealers",
+                path: nil,
+                remediation: "Investigate this process: ps -p \(pid) -o command — kill if not legitimate"
+            ))
         }
     }
 

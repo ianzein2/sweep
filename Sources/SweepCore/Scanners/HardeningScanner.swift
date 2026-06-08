@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Task Management")
+        checkBackgroundTaskManagement(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My / Activation Lock")
+        checkFindMyAndActivationLock(findings: &findings, errors: &errors)
+
+        progress?.update("checking secure boot (Apple Silicon)")
+        checkAppleSiliconSecureBoot(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment policy")
+        checkGatekeeperAssessmentPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version against latest security updates")
+        checkMacOSVersionFreshness(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +486,186 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Background Task Management (macOS Ventura+)
+
+    private func checkBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        // Background Task Management (BTM) — introduced in Ventura — surfaces every login
+        // item, LaunchAgent, and LaunchDaemon added by an app and notifies the user when one
+        // is registered. Malware families (e.g. Bahamut, RustBucket variants) have shipped
+        // technique to silence BTM by killing/disabling the backgroundtaskmanagementagent.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        if launchctl.success {
+            if !launchctl.stdout.contains("com.apple.backgroundtaskmanagementagent") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Background Task Management agent is not running",
+                    detail: "BTM (backgroundtaskmanagementagent) is the macOS service that notifies you when an app adds itself to startup — its absence allows silent persistence",
+                    path: nil,
+                    remediation: "Reboot and re-check; if it stays missing, investigate possible tampering. Apple ships it in /System/Library/LaunchAgents — it should always be loaded."
+                ))
+            }
+        }
+
+        // BTM notifications can be disabled per-app in Notification Center. If they're disabled
+        // globally for the BTM agent, the user gets no warning when malware persists.
+        let notifResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.ncprefs", "apps"
+        ], timeout: 5)
+        if notifResult.success, notifResult.stdout.contains("backgroundtaskmanagementagent"),
+           notifResult.stdout.contains("flags = 8") {
+            // flags 8 in ncprefs marks notifications hidden — best-effort heuristic.
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Background Task Management notifications appear disabled",
+                detail: "BTM alerts inform you when apps add login items or LaunchAgents — disabling them removes a key spyware tripwire",
+                path: nil,
+                remediation: "Re-enable in System Settings > Notifications > Background Task Management"
+            ))
+        }
+    }
+
+    // MARK: - Find My / Activation Lock
+
+    private func checkFindMyAndActivationLock(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac and Activation Lock dramatically lower the value of a stolen Mac to a
+        // thief and enable remote wipe of sensitive data. Apple Silicon Macs gain Activation
+        // Lock automatically when Find My Mac is enabled.
+        let fmResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        if fmResult.success {
+            let value = fmResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "Without Find My Mac you cannot locate, lock, or wipe this Mac if it is lost or stolen — and Activation Lock will not engage",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+
+        // Activation Lock state on Apple Silicon is reported by system_profiler.
+        let activationResult = ShellRunner.run("/usr/sbin/system_profiler",
+                                               arguments: ["SPHardwareDataType"], timeout: 10)
+        if activationResult.success {
+            let lower = activationResult.stdout.lowercased()
+            if lower.contains("activation lock status") && lower.contains("disabled") {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Activation Lock is disabled",
+                    detail: "Activation Lock prevents a thief from reactivating your Mac after a wipe — it requires Find My Mac and an Apple ID",
+                    path: nil,
+                    remediation: "Enable Find My Mac (System Settings > iCloud > Find My Mac) — Activation Lock will engage automatically on Apple Silicon"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Apple Silicon secure boot
+
+    private func checkAppleSiliconSecureBoot(findings: inout [Finding], errors: inout [String]) {
+        // On Apple Silicon, `bputil -d` reports the current Security Policy. Anything other
+        // than "Full Security" means the user has weakened boot integrity to allow kernel
+        // extensions or unsigned macOS — a major surface for persistent rootkits.
+        let bputil = ShellRunner.run("/usr/bin/bputil", arguments: ["-d"], timeout: 5)
+        guard bputil.success else { return }  // not Apple Silicon, or insufficient privileges
+
+        let output = bputil.stdout + bputil.stderr
+        let lower = output.lowercased()
+
+        if lower.contains("reduced security") || lower.contains("permissive security") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Apple Silicon secure boot is weakened",
+                detail: "Boot policy is Reduced/Permissive Security — third-party kernel extensions and unsigned OS can run, enabling rootkit-class spyware",
+                path: nil,
+                remediation: "Reboot into Recovery Mode > Startup Security Utility and set Full Security"
+            ))
+        }
+
+        if lower.contains("3rd party kexts: enabled") || lower.contains("3rd party kexts enabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Third-party kernel extensions are allowed",
+                detail: "3rd-party KEXTs run in the kernel; a malicious one has full system access. Most users no longer need this — Apple has moved drivers to user space (DriverKit).",
+                path: nil,
+                remediation: "Disable in Recovery Mode > Startup Security Utility unless you specifically need a 3rd-party kext"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper assessment policy
+
+    private func checkGatekeeperAssessmentPolicy(findings: inout [Finding], errors: inout [String]) {
+        // The default "Allow apps from" policy in macOS Sequoia removed the "Anywhere" UI option,
+        // but it can still be weakened via `spctl --master-disable` or assessment overrides.
+        // `spctl --status --verbose` reports per-policy state including Developer ID.
+        let dev = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status", "--verbose"], timeout: 5)
+        let combined = (dev.stdout + dev.stderr).lowercased()
+        if combined.contains("developer id: disabled") || combined.contains("notarized developer id: disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper policy weakened (Developer ID checks disabled)",
+                detail: "spctl reports the Developer ID assessment as disabled — apps from unidentified developers can run without warning",
+                path: nil,
+                remediation: "Restore: sudo spctl --global-enable && sudo spctl --master-enable"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay (informational)
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // iCloud+ Private Relay hides DNS and HTTP destinations from network observers. We
+        // don't fault its absence (it's a paid feature) but warn if it's been explicitly
+        // disabled at the system level after being enabled — a known anti-forensic technique
+        // some malware uses to keep your traffic on the unencrypted path it can intercept.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.networkserviceproxy", "NSPDisabled"
+        ], timeout: 5)
+        if result.success,
+           result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is explicitly disabled at the system level",
+                detail: "Some malware disables Private Relay to expose plain-DNS traffic for interception. If you didn't disable it, investigate.",
+                path: nil,
+                remediation: "Re-enable in System Settings > [your name] > iCloud > Private Relay (requires iCloud+)"
+            ))
+        }
+    }
+
+    // MARK: - macOS version freshness
+
+    private func checkMacOSVersionFreshness(findings: inout [Finding], errors: inout [String]) {
+        // Apple only ships security fixes to the current major and (usually) the previous two
+        // major macOS releases. Running an unsupported macOS means unfixed CVEs forever.
+        // Currently supported (as of mid-2025): Sequoia 15, Sonoma 14, Ventura 13.
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        if major < 13 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(version.minorVersion) no longer receives security updates",
+                detail: "Apple supports the current and two prior major releases. Older versions accumulate unpatched CVEs that exploit kits target.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS (Ventura 13 or later) via System Settings > General > Software Update"
+            ))
+        } else if major == 13 {
+            // Ventura is on its way out — encourage upgrade but don't alarm.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS Ventura is in its final year of security support",
+                detail: "Plan to upgrade to Sonoma (14) or Sequoia (15) before Apple's next major release ends Ventura updates",
+                path: nil,
+                remediation: "Plan an upgrade in System Settings > General > Software Update"
+            ))
         }
     }
 }

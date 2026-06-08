@@ -60,6 +60,12 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Inspect dropped AppleScript files — AMOS, Atomic, Banshee and most clones
+        //    package their main payload as an osascript with a fake password prompt and
+        //    keychain/wallet enumeration. Catching the staged script is high-confidence.
+        progress?.update("inspecting dropped AppleScript payloads")
+        scanForMaliciousAppleScripts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -547,6 +553,98 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Dropped AppleScript Stealer Payloads
+
+    /// Phrases the AMOS / Atomic / Banshee / Poseidon stealer families use to socially
+    /// engineer the user's macOS password out of the password prompt. Catching these
+    /// strings inside a dropped `.scpt`/`.applescript` in a temp/staging directory is
+    /// high-confidence evidence of a stealer that's mid-execution.
+    private let stealerLureStrings: [String] = [
+        "macos needs to access",
+        "macos wants to access",
+        "system preferences wants to make changes",
+        "please enter the password for",
+        "to allow this, type your password",
+        "your password is required to install",
+    ]
+
+    /// API calls a stealer needs to dump credentials/wallets via AppleScript.
+    private let stealerTargetAPIs: [String] = [
+        "security find-generic-password",
+        "security dump-keychain",
+        "do shell script",
+        "/library/keychains",
+        "metamask",
+        "exodus",
+        "electrum",
+        "keychain-db",
+        "do shell script \"chmod",
+    ]
+
+    private func scanForMaliciousAppleScripts(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let scriptRoots = [
+            "/tmp", "/private/tmp", "/var/tmp",
+            "\(ShellRunner.realUserHome)/Library/Application Scripts",
+        ]
+
+        for root in scriptRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 3 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let ext = url.pathExtension.lowercased()
+                guard ext == "scpt" || ext == "applescript" || ext == "scptd" else { continue }
+
+                // Stealer scripts are tiny — anything beyond 64KB is almost certainly a
+                // legitimate compiled script.
+                guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                      values.isRegularFile == true,
+                      let size = values.fileSize, size < 64_000 else { continue }
+
+                // Compiled .scpt is a binary blob — best-effort scan by reading raw bytes
+                // and checking both UTF-8 and UTF-16 LE decodings, since AppleScript stores
+                // string literals as UTF-16 inside compiled bundles.
+                guard let data = try? Data(contentsOf: url) else { continue }
+                let utf8 = String(data: data, encoding: .utf8) ?? ""
+                let utf16 = String(data: data, encoding: .utf16LittleEndian) ?? ""
+                let haystack = (utf8 + " " + utf16).lowercased()
+
+                let lureHit = stealerLureStrings.first { haystack.contains($0) }
+                let apiHit = stealerTargetAPIs.first { haystack.contains($0) }
+
+                // The combination of a password-prompt lure AND credential dumping is the
+                // textbook AMOS payload. The lure alone in a temp directory is also notable.
+                if lureHit != nil && apiHit != nil {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Stealer-style AppleScript dropped in \(root)",
+                        detail: "Script contains a fake password prompt (\"\(lureHit!)\") and credential-dump code (\(apiHit!)) — matches the AMOS/Atomic/Banshee playbook",
+                        path: url.path,
+                        remediation: "Identify the parent process (lsof \"\(url.path)\") then delete the script: rm \"\(url.path)\""
+                    ))
+                } else if lureHit != nil &&
+                          (root.hasPrefix("/tmp") || root.hasPrefix("/private/tmp") || root.hasPrefix("/var/tmp")) {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "AppleScript with password-prompt lure in temp directory",
+                        detail: "Script contains \"\(lureHit!)\" — common in stealer payloads",
+                        path: url.path,
+                        remediation: "Inspect: osadecompile \"\(url.path)\" — delete if unexpected"
                     ))
                 }
             }
