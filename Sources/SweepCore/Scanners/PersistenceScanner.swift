@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking browser native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
+        progress?.update("checking Automator Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,140 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Browser Native Messaging Hosts
+
+    /// Chrome/Brave/Edge/Firefox let extensions launch native helper binaries via JSON manifests
+    /// dropped into per-browser NativeMessagingHosts directories. Recent stealer campaigns
+    /// (2024-2025) abuse this as quiet persistence: a malicious extension stays installed and
+    /// every time the browser starts, the manifest spawns an arbitrary local binary.
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Per-browser host directories — user-level and machine-level.
+        let hostDirs: [(path: String, browser: String)] = [
+            ("\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts", "Chrome"),
+            ("/Library/Google/Chrome/NativeMessagingHosts", "Chrome (system)"),
+            ("\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts", "Brave"),
+            ("\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts", "Edge"),
+            ("/Library/Microsoft/Edge/NativeMessagingHosts", "Edge (system)"),
+            ("\(home)/Library/Application Support/Chromium/NativeMessagingHosts", "Chromium"),
+            ("\(home)/Library/Application Support/Arc/User Data/NativeMessagingHosts", "Arc"),
+            ("\(home)/Library/Application Support/Mozilla/NativeMessagingHosts", "Firefox"),
+            ("/Library/Application Support/Mozilla/NativeMessagingHosts", "Firefox (system)"),
+        ]
+
+        // Manifests shipped by well-known, legitimate tools — skip these to keep noise down.
+        let knownLegitNames: Set<String> = [
+            "com.1password.1password.json",
+            "com.1password.browser_support.json",
+            "com.google.chrome.remote_desktop.json",
+            "com.google.chrome.native_messaging.gnubbyd.json",
+            "com.bitwarden.bitwarden.json",
+            "com.lastpass.lpnatmsg.json",
+            "com.dashlane.dashlane.json",
+            "org.keepassxc.keepassxc_browser.json",
+            "com.honey.browser_helper.json",
+            "com.grammarly.desktopIntegrations.json",
+            "com.evernote.webclipper.json",
+            "com.amazon.kindle.json",
+        ]
+
+        for (dir, browser) in hostDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                if knownLegitNames.contains(entry) { continue }
+
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                let manifestName = (json["name"] as? String) ?? entry
+                let execPath = (json["path"] as? String) ?? ""
+
+                // A manifest that points the browser at a hidden binary or a temp directory is
+                // the classic "extension persistence" stealer pattern.
+                let isHidden = execPath.contains("/.") ||
+                    execPath.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+                let isTemp = execPath.hasPrefix("/tmp") || execPath.hasPrefix("/private/tmp") ||
+                    execPath.hasPrefix("/var/tmp") || execPath.hasPrefix("/Users/Shared/.")
+                let isSystemPath = execPath.hasPrefix("/System/") || execPath.hasPrefix("/usr/") ||
+                    execPath.hasPrefix("/Applications/") || execPath.hasPrefix("/Library/Apple/") ||
+                    execPath.hasPrefix("/opt/homebrew/") || execPath.hasPrefix("/usr/local/")
+
+                if isHidden || isTemp {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(browser) native messaging host points to hidden / temp binary",
+                        detail: "Manifest \"\(manifestName)\" launches \(execPath) — a stealthy extension-driven persistence path",
+                        path: manifestPath,
+                        remediation: "Remove the manifest if not expected: rm \"\(manifestPath)\" and uninstall the related browser extension"
+                    ))
+                    continue
+                }
+
+                if !execPath.isEmpty && !isSystemPath {
+                    // Non-hidden but not from a trusted location — surface for review.
+                    let isExecSigned = fm.fileExists(atPath: execPath) && checkIsSigned(path: execPath)
+                    findings.append(Finding(
+                        severity: isExecSigned ? .low : .medium, category: .persistence,
+                        title: "\(browser) native messaging host registered",
+                        detail: "Manifest \"\(manifestName)\" launches \(execPath)" +
+                            (isExecSigned ? " (signed)" : " (unsigned or missing)"),
+                        path: manifestPath,
+                        remediation: "Verify this is from an installed browser extension you trust"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Automator Folder Actions
+
+    /// Folder Action Scripts run whenever a file is added to a watched folder — an underused
+    /// AppleScript-based persistence channel. A script in this directory that wasn't put there
+    /// by the user is highly suspicious.
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        let folderActionDirs = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+
+        for dir in folderActionDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                // Apple ships a handful of stock scripts under /Library/Scripts/Folder Action Scripts —
+                // they're owned by root in a system path, so leave them alone.
+                if dir.hasPrefix("/Library/Scripts/Folder Action Scripts") {
+                    if let attrs = try? fm.attributesOfItem(atPath: entryPath),
+                       let owner = attrs[.ownerAccountID] as? Int, owner == 0 {
+                        continue
+                    }
+                }
+
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed",
+                    detail: "Script \"\(entry)\" can be triggered automatically whenever attached folders change",
+                    path: entryPath,
+                    remediation: "Inspect contents and remove if you didn't add it: open \"\(entryPath)\""
+                ))
+            }
         }
     }
 

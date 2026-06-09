@@ -55,6 +55,9 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkWiFiMACRandomization(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -447,6 +450,61 @@ public final class HardeningScanner: Scanner {
                 ))
             }
         }
+    }
+
+    // MARK: - Wi-Fi MAC Address Randomization
+
+    /// macOS Sonoma+ supports per-SSID "Private Wi-Fi Address" — a randomized MAC that prevents
+    /// trackers and rogue captive portals from fingerprinting your device across networks. The
+    /// preference lives in com.apple.wifi.known-networks. We look for any saved network where
+    /// the user has explicitly turned randomization OFF, which is the only way to leak the real MAC.
+    private func checkWiFiMACRandomization(findings: inout [Finding], errors: inout [String]) {
+        // The known-networks plist isn't readable as a regular user — it requires Full Disk Access.
+        // That's fine: if we can't read it we just skip, mirroring how other Hardening checks behave.
+        let knownNetworksPath = "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        guard let data = FileManager.default.contents(atPath: knownNetworksPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return }
+
+        var disabledSSIDs: [String] = []
+
+        for (key, value) in plist {
+            guard let networkInfo = value as? [String: Any] else { continue }
+
+            // The flag lives under PrivateMACAddressModeUserSetting (Sonoma+) or
+            // randomization_mode (older). 0 / "off" means the real MAC is being broadcast.
+            let modeUser = networkInfo["PrivateMACAddressModeUserSetting"]
+            let modeLegacy = networkInfo["randomization_mode"]
+
+            let isDisabled: Bool = {
+                if let v = modeUser as? Int, v == 0 { return true }
+                if let v = modeUser as? String, v.lowercased() == "off" { return true }
+                if let v = modeLegacy as? String,
+                   ["off", "none", "0"].contains(v.lowercased()) { return true }
+                return false
+            }()
+
+            if isDisabled {
+                // Key looks like "wifi.network.ssid.<base64-ssid>" — strip the prefix for display.
+                let ssid = key
+                    .replacingOccurrences(of: "wifi.network.ssid.", with: "")
+                    .replacingOccurrences(of: "wifi.ssid.", with: "")
+                disabledSSIDs.append(ssid)
+            }
+        }
+
+        guard !disabledSSIDs.isEmpty else { return }
+
+        let examples = disabledSSIDs.prefix(3).joined(separator: ", ")
+        let suffix = disabledSSIDs.count > 3 ? " (and \(disabledSSIDs.count - 3) more)" : ""
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Private Wi-Fi Address disabled on \(disabledSSIDs.count) saved network(s)",
+            detail: "Your real MAC is broadcast on: \(examples)\(suffix) — networks can fingerprint and track this Mac",
+            path: knownNetworksPath,
+            remediation: "Re-enable: System Settings > Wi-Fi > (i) next to network > Private Wi-Fi Address: Rotating"
+        ))
     }
 
     // MARK: - Rapid Security Response

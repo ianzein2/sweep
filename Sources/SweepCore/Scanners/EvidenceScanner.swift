@@ -60,6 +60,16 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. SSH keys and cloud / developer tokens staged outside their normal homes — a hallmark
+        //    of recent stealer campaigns that go beyond browser data into dev-tool credentials.
+        progress?.update("checking SSH key / dev token staging")
+        scanForDevCredentialStaging(home: home, findings: &findings, errors: &errors)
+
+        // 8. AppleScript-driven password phishing. `osascript ... with administrator privileges`
+        //    pops a native macOS auth dialog that's indistinguishable from a real system prompt.
+        progress?.update("checking AppleScript admin prompts")
+        scanForAppleScriptAdminPrompts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -550,6 +560,126 @@ public final class EvidenceScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - SSH / Dev Token Staging
+
+    /// Files whose names match developer / cloud credential stores. Stealers (AMOS variants,
+    /// JaskaGo, Banshee) routinely copy these into /tmp or a hidden directory before zipping
+    /// and uploading. The presence of one of these *outside* its canonical home is a strong
+    /// indicator that exfiltration is being staged.
+    // The staging roots iterated below (/tmp, /var/tmp, /Users/Shared, ~/Library/Caches, ~/.local,
+    // and ~/Library/Application Support after isKnownAppPath filtering) never legitimately contain
+    // these files — they live in ~/.ssh, ~/.aws, ~/.docker, ~/.config/gh, etc. So any hit in a
+    // staging root is by definition out of place.
+    private let devCredentialMarkers: [(filename: String, label: String)] = [
+        // SSH private keys
+        ("id_rsa",          "SSH private key (RSA)"),
+        ("id_ed25519",      "SSH private key (Ed25519)"),
+        ("id_ecdsa",        "SSH private key (ECDSA)"),
+        ("id_dsa",          "SSH private key (DSA)"),
+        // Cloud / SaaS / dev tool credentials — names that aren't shared with generic project files.
+        (".netrc",          "netrc credentials"),
+        (".npmrc",          "npm token"),
+        (".pypirc",         "PyPI token"),
+        ("hosts.yml",       "gh CLI token"),
+        ("gcloud-cli.json", "gcloud credentials"),
+        // LLM / API tokens — recent (2025) stealers explicitly target these.
+        (".claude.json",    "Anthropic Claude credentials"),
+    ]
+
+    private func scanForDevCredentialStaging(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        // Staging locations where credentials are routinely dropped before exfiltration.
+        let stagingRoots = [
+            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+            "/Users/Shared",
+            "\(home)/Library/Application Support",
+            "\(home)/Library/Caches",
+            "\(home)/.local",
+        ]
+
+        for root in stagingRoots {
+            guard fm.fileExists(atPath: root),
+                  let enumerator = fm.enumerator(
+                    at: URL(fileURLWithPath: root),
+                    includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                    options: [.skipsPackageDescendants]
+                  )
+            else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 5 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let dirName = url.deletingLastPathComponent().lastPathComponent
+                if skipDirs.contains(dirName) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                if isKnownAppPath(url.path) { continue }
+
+                let filename = url.lastPathComponent
+                let path = url.path
+
+                if let marker = devCredentialMarkers.first(where: { $0.filename == filename }) {
+                    // Skip files too small to be a real credential.
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                    if size < 32 { continue }
+
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(marker.label) staged outside its canonical location",
+                        detail: "File \"\(filename)\" found at \(path) — modern stealers copy these files before exfiltration",
+                        path: path,
+                        remediation: "Rotate the credential immediately and investigate the process that wrote this file"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - AppleScript Admin-Privilege Phishing
+
+    /// `osascript -e 'do shell script "..." with administrator privileges'` triggers a native
+    /// authentication prompt that's visually identical to the macOS system password dialog.
+    /// Stealer campaigns (AMOS-family) use this to harvest the user's password without ever
+    /// touching TCC. A long-running osascript with these tokens in argv is high-confidence bad.
+    private func scanForAppleScriptAdminPrompts(findings: inout [Finding], errors: inout [String]) {
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        guard psResult.success else { return }
+
+        for line in psResult.stdout.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+            // pid, comm, args... — we only flag when the process basename is osascript.
+            guard parts.count >= 3 else { continue }
+            let comm = (String(parts[1]) as NSString).lastPathComponent
+            guard comm == "osascript" else { continue }
+
+            let lowered = trimmed.lowercased()
+            // "with administrator privileges" is the exact phrase that triggers the system
+            // password dialog — the documented AMOS / stealer phishing pattern.
+            guard lowered.contains("administrator privileges") ||
+                  lowered.contains("with administrator") else { continue }
+
+            // Don't self-flag: Sweep's SwiftUI "Scan as Admin" invokes osascript with these
+            // very tokens to elevate the CLI. If the argv mentions our binary, the parent IS us.
+            if lowered.contains("sweep") { continue }
+
+            let pid = String(parts[0])
+            let snippet = String(trimmed.prefix(180))
+
+            findings.append(Finding(
+                severity: .high, category: .suspiciousProcess,
+                title: "AppleScript triggering an admin-password prompt",
+                detail: "PID \(pid): \(snippet)",
+                path: nil,
+                remediation: "If you didn't run this, do NOT enter your password. Kill the process: kill \(pid) — AMOS-family stealers use this exact AppleScript pattern to harvest credentials"
+            ))
         }
     }
 

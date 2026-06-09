@@ -67,6 +67,16 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Tunneling tools (ngrok, cloudflared, frp, chisel, gost) — increasingly used as
+        //    lightweight C2 channels because they egress over 443 to legitimate cloud hosts.
+        progress?.update("checking for tunneling tools")
+        scanTunnelingTools(findings: &findings, errors: &errors)
+
+        // 5. Browser remote-debugging port (CDP 9222) — when reachable, anything on the host
+        //    can read cookies, session tokens, and saved logins from the live browser.
+        progress?.update("checking browser debugging ports")
+        scanRemoteDebuggingPorts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -362,6 +372,139 @@ public final class NetworkScanner: Scanner {
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
             }
+        }
+    }
+
+    // MARK: - Tunneling Tools
+
+    /// Process names belonging to popular tunneling tools. Each of these can punch a hole
+    /// through NAT and forward arbitrary local traffic to a remote operator, which is exactly
+    /// what modern C2 frameworks (and red-team kits) want.
+    private let tunnelingProcessNames: [(name: String, label: String, severity: Severity)] = [
+        ("ngrok",         "ngrok",         .medium),
+        ("cloudflared",   "cloudflared",   .medium),
+        ("frpc",          "frp client",    .high),
+        ("frps",          "frp server",    .high),
+        ("chisel",        "chisel tunnel", .high),
+        ("gost",          "gost tunnel",   .high),
+        ("localtunnel",   "localtunnel",   .medium),
+        ("rathole",       "rathole tunnel",.high),
+        ("wstunnel",      "wstunnel",      .high),
+        ("revsocks",      "revsocks (reverse SOCKS)", .high),
+        ("rsockstun",     "rsockstun (reverse SOCKS)", .high),
+        // Mesh / remote-access tools — legitimate but visible: flag at .low so the user knows
+        // they're running, since they're a common cover for unauthorized access.
+        ("tailscaled",    "Tailscale",     .low),
+        ("zerotier-one",  "ZeroTier",      .low),
+    ]
+
+    private func scanTunnelingTools(findings: inout [Finding], errors: inout [String]) {
+        // ps -axo pid,comm,args gives us pid + the process basename (comm) + full argv.
+        // We match on comm (exact) so a binary named "ngrok" matches but a log file path or
+        // an unrelated command containing "ngrok" in argv does not.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        guard psResult.success else { return }
+
+        let toolsByName = Dictionary(uniqueKeysWithValues: tunnelingProcessNames.map {
+            ($0.name.lowercased(), ($0.label, $0.severity))
+        })
+
+        let lines = psResult.stdout.split(separator: "\n").dropFirst() // skip header
+        var reported = Set<String>()
+
+        for line in lines {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            // parts[0] = pid, parts[1] = comm, parts[2...] = args
+            let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { continue }
+
+            let pid = String(parts[0])
+            let comm = String(parts[1])
+            // Process basename may include a path (e.g. "ngrok" vs "/usr/local/bin/ngrok").
+            let basename = (comm as NSString).lastPathComponent.lowercased()
+
+            guard let tool = toolsByName[basename] else { continue }
+            if reported.contains(basename) { continue }
+            reported.insert(basename)
+
+            let snippet = String(trimmed.prefix(160))
+            let severity = tool.1
+            let lowSeverityNote = severity == .low
+                ? " (legitimate mesh/access tool — only investigate if unexpected)"
+                : ""
+
+            findings.append(Finding(
+                severity: severity, category: .networkActivity,
+                title: "Tunneling tool running: \(tool.0)",
+                detail: "PID \(pid): \(snippet)\(lowSeverityNote)",
+                path: nil,
+                remediation: severity == .low
+                    ? "Verify this tunnel is yours — these tools can also be used to exfiltrate data"
+                    : "Tunneling clients are a common C2 channel — terminate if not expected: kill \(pid)"
+            ))
+        }
+    }
+
+    // MARK: - Browser Remote Debugging Ports
+
+    /// Chromium-based browsers expose the DevTools protocol on TCP 9222 when started with
+    /// --remote-debugging-port. Anything that can reach that port can read cookies, session
+    /// tokens, and saved passwords from the live browser. Stealer campaigns increasingly
+    /// abuse this rather than going after sqlite cookie databases at rest.
+    private let remoteDebuggingPorts: Set<Int> = [9222, 9223, 9229, 9230]
+
+    private func scanRemoteDebuggingPorts(findings: inout [Finding], errors: inout [String]) {
+        // Build a quick port -> process map from lsof. We can't use the parsed connections from
+        // scanActiveConnections because they were not retained.
+        let result = ShellRunner.run("/usr/sbin/lsof", arguments: [
+            "-iTCP", "-sTCP:LISTEN", "-n", "-P", "+c", "0"
+        ], timeout: 10)
+        guard result.success else { return }
+
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            if lineStr.hasPrefix("COMMAND") { continue }
+
+            let parts = lineStr.split(separator: " ", omittingEmptySubsequences: true)
+            guard parts.count >= 9 else { continue }
+
+            let command = String(parts[0])
+            let pid = String(parts[1])
+            let conn = String(parts.last ?? "")
+
+            // Find the trailing :PORT in the NAME column. lsof prints things like "*:9222 (LISTEN)"
+            // or "127.0.0.1:9222 (LISTEN)" — both work with rangeOfLast(":").
+            guard let colon = conn.range(of: ":", options: .backwards) else { continue }
+            let portStr = conn[colon.upperBound...]
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "(LISTEN)", with: "")
+            guard let port = Int(portStr), remoteDebuggingPorts.contains(port) else { continue }
+
+            // Local-loopback bindings are slightly safer than wildcard ones, but a local stealer
+            // can still talk to loopback, so we always surface this.
+            let isLoopback = conn.hasPrefix("127.0.0.1:") || conn.hasPrefix("[::1]:") ||
+                conn.hasPrefix("localhost:")
+            let nodeJSPort = (port == 9229 || port == 9230)
+
+            // Node Inspector ports get a slightly softer message — they're commonly opened by devs.
+            let title = nodeJSPort
+                ? "Node.js debugger port \(port) is open"
+                : "Browser remote-debugging port \(port) is open"
+            let detail = "\(command) (PID \(pid)) listening on \(isLoopback ? "loopback" : "all interfaces")" +
+                (nodeJSPort
+                    ? " — local processes can attach a debugger to this Node runtime"
+                    : " — local processes can read cookies / session tokens via DevTools Protocol")
+
+            findings.append(Finding(
+                severity: nodeJSPort ? .low : .high,
+                category: .networkActivity,
+                title: title,
+                detail: detail,
+                path: nil,
+                remediation: nodeJSPort
+                    ? "Stop the debugger when not in use, or restrict access (--inspect=127.0.0.1)"
+                    : "Quit \(command) and relaunch it without --remote-debugging-port"
+            ))
         }
     }
 

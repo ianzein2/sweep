@@ -434,6 +434,210 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threats
+        // DPRK "Contagious Interview" cluster — Nim/Go-based RATs delivered via fake
+        // job interview projects. Active throughout 2024-2025 against developers.
+        // Distinctive names only — the matchers do substring search against shell/cron content,
+        // so short or generic strings ("pay", "marshal", "config") would cause false positives.
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            processNames: [
+                "TestPasswordResetDone", "lvldNew", "InjectWithDyldArm64",
+                "nimdoor", "GoogleVCRedist",
+            ],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.pwd_agent",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "/private/var/tmp/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.update"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK)",
+            processNames: [
+                "beavertail", "BeaverTail",
+            ],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: [
+                "invisibleferret", "InvisibleFerret", "anydesk_pay",
+            ],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "/tmp/.invisible",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK)",
+            processNames: [
+                "FlexibleFerret", "ChromeUpdater", "FROSTYFERRET_UI",
+                "InstallerAlert", "VisibleFerret",
+            ],
+            bundleIdentifiers: ["com.flexibleferret.agent"],
+            filePaths: [
+                "/private/var/tmp/.flexibleferret",
+                "/private/tmp/com.apple.codesigning.Update.plist",
+            ],
+            launchAgentLabels: ["com.apple.codesigning.Update"]
+        ),
+        SpywareSignature(
+            name: "macOS.RustyAttr (Lazarus)",
+            processNames: ["rustyattr", "RustyAttr"],
+            bundleIdentifiers: ["com.notepad.lazarus.app"],
+            filePaths: [
+                "/tmp/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024 Chinese surveillance / espionage
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["hzrat", "HZRat", "QQHelper", "OICQHelper"],
+            bundleIdentifiers: ["com.tencent.qq.helper"],
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/var/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.tencent.qq.helper"]
+        ),
+        SpywareSignature(
+            name: "PasivRobber",
+            processNames: [
+                "PasivRobber", "wsus", "tokenexec", "wschk",
+                "passivrobber", "passivedr",
+            ],
+            bundleIdentifiers: ["com.passivrobber.agent"],
+            filePaths: [
+                "/private/var/tmp/.pasiv",
+                "~/Library/Application Support/.PasivRobber",
+            ],
+            launchAgentLabels: ["com.pasiv.robber"]
+        ),
+        SpywareSignature(
+            name: "macOS.LightSpy",
+            processNames: ["lightspy", "LightSpy", "irc_loader", "WifiTask"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Caches/com.apple.os.update",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "macOS.ZuRu",
+            processNames: ["zuru", "ZuRu", "itermd", "g.bundle"],
+            bundleIdentifiers: ["com.iterm2.zuru"],
+            filePaths: [
+                "/Users/Shared/.iterm2",
+                "/private/tmp/.zuru",
+                "/tmp/g.bundle",
+            ],
+            launchAgentLabels: ["com.apple.libfsplist", "com.apple.iterm2"]
+        ),
+        // 2024-2025 infostealers (new families)
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: [
+                "AppleProcessHub", "appleprocesshub", "applehub_agent",
+            ],
+            bundleIdentifiers: ["com.appleprocesshub.agent"],
+            filePaths: [
+                "/private/tmp/.applehub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.appleprocesshub.service"]
+        ),
+        SpywareSignature(
+            name: "DigitStealer",
+            processNames: ["DigitStealer", "digitstealer", "dstealer"],
+            bundleIdentifiers: ["com.digit.stealer"],
+            filePaths: [
+                "/private/tmp/.digit",
+                "~/Library/Application Support/.DigitStealer",
+            ],
+            launchAgentLabels: ["com.digit.stealer"]
+        ),
+        SpywareSignature(
+            name: "JaskaGo",
+            processNames: ["JaskaGo", "jaskago", "jaska_loader"],
+            bundleIdentifiers: ["com.jaskago.agent"],
+            filePaths: [
+                "/private/tmp/.jaska",
+                "~/Library/Application Support/.JaskaGo",
+            ],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "Crystal Stealer",
+            processNames: ["CrystalStealer", "crystalstealer", "crysteal"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.CrystalStealer",
+            ],
+            launchAgentLabels: ["com.crystal.stealer"]
+        ),
+        SpywareSignature(
+            name: "WhiteFlag Stealer",
+            processNames: ["WhiteFlag", "whiteflag", "wflag_agent"],
+            bundleIdentifiers: ["com.whiteflag.stealer"],
+            filePaths: [
+                "/private/tmp/.whiteflag",
+                "~/Library/Application Support/.WhiteFlag",
+            ],
+            launchAgentLabels: ["com.whiteflag.service"]
+        ),
+        SpywareSignature(
+            name: "TidoneStealer",
+            processNames: ["Tidone", "tidone", "tidonestealer", "tdn_agent"],
+            bundleIdentifiers: ["com.tidone.stealer"],
+            filePaths: [
+                "/private/tmp/.tidone",
+                "~/Library/Application Support/.Tidone",
+            ],
+            launchAgentLabels: ["com.tidone.service"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (Lazarus)",
+            processNames: ["TodoSwift", "todoswift"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "CoreWarrior",
+            processNames: ["CoreWarrior", "corewarrior", "cwagent"],
+            bundleIdentifiers: ["com.corewarrior.agent"],
+            filePaths: [
+                "/private/tmp/.corewarrior",
+                "~/Library/Application Support/.CoreWarrior",
+            ],
+            launchAgentLabels: ["com.corewarrior.service"]
+        ),
+        // Crypto-clipping malware: silently replaces wallet addresses on clipboard.
+        // 2024-2025 campaigns delivered via cracked apps and fake updates.
+        SpywareSignature(
+            name: "ClipperOSX",
+            processNames: ["clipperosx", "ClipperOSX", "clipswap", "pasteswap"],
+            bundleIdentifiers: ["com.clipperosx.agent"],
+            filePaths: [
+                "/private/tmp/.clipper",
+                "~/Library/Application Support/.Clipper",
+            ],
+            launchAgentLabels: ["com.clipperosx.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -474,6 +678,18 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        "ChromeUpdater",         // Real: GoogleSoftwareUpdateAgent — used by FlexibleFerret (DPRK)
+        "ChromeUpdate",          // Real: GoogleSoftwareUpdateAgent — used by DPRK loaders
+        "GoogleVCRedist",        // Not a real Google process — NimDoor (DPRK) signature
+        "GoogleUpdateHelper",    // Real Google updater has no "Helper" suffix
+        "SafariHelper",          // Used by RustBucket — Safari has no Helper daemon
+        "InstallerAlert",        // Used by FlexibleFerret loaders
+        "VisibleFerret",         // DPRK loader name
+        "FROSTYFERRET_UI",       // DPRK loader name
+        "macOSUpdater",          // Not a real Apple process — generic stealer name
+        "MacOSUpdateAgent",      // Mimics softwareupdated
+        "AppleCloudService",     // Real: cloudd
+        "iCloudUpdater",         // Not a real Apple process
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID
