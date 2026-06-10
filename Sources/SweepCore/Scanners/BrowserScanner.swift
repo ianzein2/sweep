@@ -11,10 +11,20 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2025 reported malicious extension families
+        "solana-rpc-helper", "solana-program-helper", "ethereum-remix-plus",
+        "metamask-extension-helper", "phantom-wallet-helper", "wallet-debug-utilities",
+        "rust-extension-pack-helper", "crypto-rpc-helper", "wallet-data-exporter",
+        "openai-vscode-helper", "github-copilot-tools-plus", "claude-vscode-helper-plus",
+        "windsurf-helper-plus", "cursor-ai-utilities-plus", "ai-toolkit-helper",
+        "discord-rich-presence-plus", "vscode-ai-tools-plus", "etherscan-helper-pro",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Stealer / drainer naming conventions seen in 2024-2025 incidents
+        "drainer", "siphon", "mnemonic", "seed-phrase",
+        "private-key", "cookie-export", "token-export",
     ]
 
     // Extensions that are well-known and safe

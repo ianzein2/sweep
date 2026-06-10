@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server configuration")
+        checkSSHServerHardening(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo timeout")
+        checkSudoTimeout(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -445,6 +451,134 @@ public final class HardeningScanner: Scanner {
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
+            }
+        }
+    }
+
+    // MARK: - SSH Server Hardening
+
+    private func checkSSHServerHardening(findings: inout [Finding], errors: inout [String]) {
+        // Only inspect sshd_config if Remote Login is actually enabled — otherwise the file
+        // is dormant. macOS uses /etc/ssh/sshd_config on Ventura+ (some installs still have
+        // /etc/sshd_config). Check both.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        guard sshState.success, sshState.stdout.lowercased().contains(": on") else { return }
+
+        let candidatePaths = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+        guard let configPath = candidatePaths.first(where: { FileManager.default.fileExists(atPath: $0) }),
+              let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+
+        // sshd uses first-wins for each parameter, per sshd_config(5). Stop on Match blocks
+        // so per-host overrides don't get conflated with global settings.
+        var directives: [String: String] = [:]
+        for rawLine in content.split(separator: "\n") {
+            let trimmed = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            let parts = trimmed.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard parts.count >= 2 else { continue }
+            let key = parts[0].lowercased()
+            if key == "match" { break }
+            if directives[key] == nil {
+                directives[key] = parts[1].lowercased()
+            }
+        }
+
+        // PermitRootLogin: defaults to "prohibit-password" on modern macOS; "yes" is dangerous.
+        if directives["permitrootlogin"] == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login",
+                detail: "PermitRootLogin yes in sshd_config — anyone reaching SSH can attempt the root password directly",
+                path: configPath,
+                remediation: "Set 'PermitRootLogin no' (or 'prohibit-password') in \(configPath), then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        if directives["permitemptypasswords"] == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords",
+                detail: "PermitEmptyPasswords yes — accounts without a password can authenticate over SSH",
+                path: configPath,
+                remediation: "Set 'PermitEmptyPasswords no' in \(configPath)"
+            ))
+        }
+
+        // PasswordAuthentication: modern macOS ships with this explicitly disabled, so we
+        // only flag an explicit "yes" rather than guessing at the unset default.
+        if directives["passwordauthentication"] == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH password authentication is enabled",
+                detail: "PasswordAuthentication yes — passwords can be brute-forced. Key-based authentication is significantly more secure.",
+                path: configPath,
+                remediation: "Add your SSH key (ssh-copy-id), then set 'PasswordAuthentication no' and 'ChallengeResponseAuthentication no' in \(configPath)"
+            ))
+        }
+
+        if directives["x11forwarding"] == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding is enabled",
+                detail: "X11Forwarding yes — clients can forward graphical displays, which can be abused for keylogging if a client is malicious",
+                path: configPath,
+                remediation: "Set 'X11Forwarding no' in \(configPath) unless you need it for remote GUI apps"
+            ))
+        }
+
+        if directives["allowtcpforwarding"] == "yes" {
+            // TCP forwarding lets authenticated SSH users tunnel arbitrary traffic through this Mac.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH TCP forwarding is enabled",
+                detail: "AllowTcpForwarding yes — SSH users can tunnel arbitrary traffic through this Mac",
+                path: configPath,
+                remediation: "Set 'AllowTcpForwarding no' in \(configPath) if you don't use SSH tunnels"
+            ))
+        }
+
+        if let proto = directives["protocol"], proto.contains("1") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH protocol 1 is enabled",
+                detail: "Protocol 1 is cryptographically broken — only Protocol 2 should be used",
+                path: configPath,
+                remediation: "Set 'Protocol 2' in \(configPath)"
+            ))
+        }
+    }
+
+    // MARK: - Sudo Timeout
+
+    private func checkSudoTimeout(findings: inout [Finding], errors: inout [String]) {
+        // A long sudo timestamp_timeout means a stolen terminal session keeps elevated rights
+        // for hours. macOS default is 5 minutes; values much larger are a hardening regression.
+        // Negative values disable the timeout entirely (always require password — fine).
+        let sudoersFiles = ["/etc/sudoers"] + (
+            (try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d"))?
+                .filter { !$0.hasPrefix(".") && $0 != "README" }
+                .map { "/etc/sudoers.d/\($0)" } ?? []
+        )
+
+        for path in sudoersFiles {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for rawLine in content.split(separator: "\n") {
+                let trimmed = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                guard let range = trimmed.range(of: "timestamp_timeout=") else { continue }
+                let valuePart = trimmed[range.upperBound...]
+                let numStr = valuePart.prefix(while: { $0.isNumber || $0 == "-" })
+                guard let minutes = Int(numStr) else { continue }
+                if minutes > 60 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "sudo password timeout is very long (\(minutes) minutes)",
+                        detail: "timestamp_timeout=\(minutes) means a single sudo unlocks privileged commands for \(minutes) minutes — a stolen terminal keeps root for that long",
+                        path: path,
+                        remediation: "Lower timestamp_timeout to 5–15 in \(path) (sudo visudo -f \(path))"
+                    ))
+                }
             }
         }
     }

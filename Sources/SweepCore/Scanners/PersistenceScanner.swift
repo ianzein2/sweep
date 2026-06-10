@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Action Scripts")
+        scanFolderActionScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH client config")
+        scanSSHClientConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Automator workflows")
+        scanAutomatorWorkflows(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,156 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Folder Action Scripts (AppleScript persistence)
+
+    private func scanFolderActionScripts(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions can attach an AppleScript to any directory; the script fires whenever
+        // the folder is modified. MITRE ATT&CK T1547.015. Attacker-installed scripts here run
+        // every time the watched folder receives a file — durable, silent persistence.
+        let home = ShellRunner.realUserHome
+        let scriptDirs = [
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+
+        for dir in scriptDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for file in entries where !file.hasPrefix(".") {
+                let filePath = "\(dir)/\(file)"
+                // Apple ships sample scripts (e.g., "add - new item alert.scpt"). User-added
+                // scripts here are uncommon and worth surfacing.
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action Script installed",
+                    detail: "Script: \(file) — runs when its attached folder is modified",
+                    path: filePath,
+                    remediation: "Inspect with Script Editor, then remove if unrecognized. Active bindings: System Settings > Privacy & Security > Automation"
+                ))
+            }
+        }
+
+        // Active bindings live in this plist. Empty/default = no bindings.
+        let bindingsPlist = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if let data = fm.contents(atPath: bindingsPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let folderActions = plist["FolderActions"] as? [Any],
+           !folderActions.isEmpty {
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "Folder Action bindings configured (\(folderActions.count))",
+                detail: "FolderActionsDispatcher has \(folderActions.count) active script binding(s) — scripts fire on folder changes",
+                path: bindingsPlist,
+                remediation: "Review via Script Editor > Folder Actions Setup, remove unrecognized entries"
+            ))
+        }
+    }
+
+    // MARK: - SSH client config (ProxyCommand / LocalCommand abuse)
+
+    private func scanSSHClientConfig(findings: inout [Finding], errors: inout [String]) {
+        // ~/.ssh/config supports ProxyCommand and LocalCommand directives that execute arbitrary
+        // shell commands on every ssh invocation. Attackers add these for silent code execution
+        // whenever the user reaches for ssh — a "live off the land" persistence pattern.
+        let home = ShellRunner.realUserHome
+        let configs = [
+            (path: "\(home)/.ssh/config", scope: "user"),
+            (path: "/etc/ssh/ssh_config", scope: "system"),
+        ]
+
+        let directives: [(name: String, reason: String)] = [
+            ("ProxyCommand", "ProxyCommand runs a shell command on every ssh invocation"),
+            ("LocalCommand", "LocalCommand executes a shell command after each connection"),
+        ]
+
+        for cfg in configs {
+            guard let content = try? String(contentsOfFile: cfg.path, encoding: .utf8) else { continue }
+            let lines = content.split(separator: "\n")
+
+            for (idx, rawLine) in lines.enumerated() {
+                let trimmed = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                // Split on whitespace to get the directive name as the first token — matches
+                // both space- and tab-separated config lines.
+                let tokens = trimmed.split(whereSeparator: { $0.isWhitespace }).map { String($0).lowercased() }
+                guard let first = tokens.first else { continue }
+                let lower = trimmed.lowercased()
+
+                for d in directives where first == d.name.lowercased() {
+                    // Wrappers piping the command through a shell, downloader, or netcat are the
+                    // classic backdoor shape — escalate severity for those.
+                    let isHighRisk = lower.contains("curl ") || lower.contains("wget ") ||
+                                     lower.contains(" nc ") || lower.contains("socat ") ||
+                                     lower.contains("eval ") || lower.contains("base64") ||
+                                     lower.contains("|sh") || lower.contains("| sh") ||
+                                     lower.contains("|bash") || lower.contains("| bash") ||
+                                     lower.contains("/tmp/")
+                    findings.append(Finding(
+                        severity: isHighRisk ? .high : .medium,
+                        category: .persistence,
+                        title: "SSH \(cfg.scope) config defines \(d.name)",
+                        detail: "Line \(idx + 1): \(String(trimmed.prefix(160))) — \(d.reason)",
+                        path: cfg.path,
+                        remediation: "Inspect line \(idx + 1) of \(cfg.path) and remove the directive if you didn't add it"
+                    ))
+                    break
+                }
+
+                if first == "permitlocalcommand" && tokens.count >= 2 && tokens[1] == "yes" {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "SSH \(cfg.scope) config sets PermitLocalCommand yes",
+                        detail: "Line \(idx + 1): enables LocalCommand directives — pairs with LocalCommand for arbitrary execution",
+                        path: cfg.path,
+                        remediation: "Remove this line unless you intentionally use SSH LocalCommand"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Automator Workflows
+
+    private func scanAutomatorWorkflows(findings: inout [Finding], errors: inout [String]) {
+        // Saved Automator workflows can be wired into LaunchAgents, login items, or folder
+        // actions to run on a schedule. Attackers stash *.workflow bundles in user dirs and
+        // attach them, which dodges plist-only persistence scanners.
+        let home = ShellRunner.realUserHome
+        let watchedDirs = [
+            "\(home)/Library/Services",
+            "\(home)/Library/Workflows",
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+        ]
+        let fm = FileManager.default
+
+        for dir in watchedDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".workflow") {
+                let bundlePath = "\(dir)/\(entry)"
+                let infoPath = "\(bundlePath)/Contents/document.wflow"
+                guard let content = try? String(contentsOfFile: infoPath, encoding: .utf8) else { continue }
+
+                // Workflows that shell out are the high-risk shape — look for "Run Shell Script"
+                // actions or AppleScript that itself spawns shells.
+                let hasShell = content.contains("RunShellScriptAction") ||
+                               content.contains("do shell script") ||
+                               content.contains("RunAppleScriptAction")
+                if hasShell {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Automator workflow with shell/script action",
+                        detail: "Workflow: \(entry) — runs shell or AppleScript code",
+                        path: bundlePath,
+                        remediation: "Inspect in Automator.app, remove if not yours: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
         }
     }
 

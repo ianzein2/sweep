@@ -434,6 +434,164 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS infostealers / drainers
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "frigid", "DwnldGenuineUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigid",
+                "/private/tmp/DwnldGenuineUpdater",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault", "shvault"],
+            bundleIdentifiers: ["com.shadowvault.agent"],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.ShadowVault",
+            ],
+            launchAgentLabels: ["com.shadowvault.service"]
+        ),
+        SpywareSignature(
+            name: "OdysseyStealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odyssey-agent"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        SpywareSignature(
+            name: "PolkadotStealer",
+            processNames: ["Polkadot", "polkastealer", "polkadot_agent"],
+            bundleIdentifiers: ["com.polkadot.stealer"],
+            filePaths: ["/private/tmp/.polkadot"],
+            launchAgentLabels: ["com.polkadot.service"]
+        ),
+        // Lazarus / BlueNoroff macOS campaigns (Contagious Interview, Hidden Risk, etc.)
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node_modules_helper"],
+            bundleIdentifiers: ["com.miroinst.app", "com.contagious.interview"],
+            filePaths: [
+                "/private/tmp/.beaver",
+                "~/Library/Caches/.npl",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Process names are intentionally distinctive — Lazarus' second-stage Python
+            // backdoor drops as "p.py"/"pay" but those are too generic for an exact-match
+            // signature, so we match the install paths instead.
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "/private/tmp/.invisibleferret",
+                "~/Library/Caches/.iff",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FROSTYFERRET_UI"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: ["com.zoom.us.helper"]
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "FROSTYFERRET_UI", "frosty_ferret"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.frostyferret"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (Lazarus)",
+            processNames: ["hiddenrisk", "verify_pdf", "RustBucket2"],
+            bundleIdentifiers: ["com.crypto.growth"],
+            filePaths: [
+                "/private/var/tmp/.hidden_risk",
+                "~/Library/Application Support/.hiddenrisk",
+                "~/Library/Application Support/Growth",
+            ],
+            launchAgentLabels: ["com.google.fileservice"]
+        ),
+        SpywareSignature(
+            name: "GreetingGhoul (BlueNoroff)",
+            processNames: ["greetingghoul", "GreetingGhoul", "kandyhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.greeting",
+                "~/Library/Caches/.kandykorn",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor (Lazarus)",
+            processNames: ["nimdoor", "syscoreservice", "NimDoor", "GoogIeHelper", "ZoomDaemon"],
+            bundleIdentifiers: ["com.zoom.us.helper"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nimcache",
+                "/private/var/tmp/zoom_sdk_helper",
+            ],
+            launchAgentLabels: ["com.google.update.helper"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (Lazarus)",
+            processNames: ["TodoSwift", "TodoTasks", "todoswift_helper"],
+            bundleIdentifiers: ["org.swift.todo", "com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "rusty_attr"],
+            bundleIdentifiers: ["com.rustyattr.helper"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.rustyattr.service"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["OpenVPNCheck", "OpenVPN_Check", "HZRat", "hzrat_agent"],
+            bundleIdentifiers: ["com.openvpn.checker"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.checker.helper"]
+        ),
+        SpywareSignature(
+            name: "MoonPeak (Kimsuky)",
+            processNames: ["moonpeak", "MoonPeak", "moon_peak_agent"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.moonpeak"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Cookiespy (FERRET family)",
+            processNames: ["Cookiespy", "cookiespy", "cookies_helper"],
+            bundleIdentifiers: ["com.cookiespy.agent"],
+            filePaths: ["/private/tmp/.cookiespy"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +608,17 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 impersonation patterns seen in Lazarus / BlueNoroff campaigns
+        "com.apple.zoom.helper",
+        "com.apple.swiftsupport",
+        "com.apple.recording.helper",
+        "com.apple.google.update.helper",
+        "com.apple.cloudkit.sync",
+        "com.apple.airdrop.helper",
+        "com.apple.spotlight.helper",
+        "com.apple.preview.helper",
+        "com.apple.terminal.helper",
+        "com.apple.crashreporter.agent",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +643,17 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 impersonations seen in active campaigns
+        "mdworker_helper",       // Real: mdworker_shared
+        "mdmclient_helper",      // Real: mdmclient
+        "syslogd_helper",        // Real: syslogd
+        "GoogIeHelper",          // Typo: capital-i instead of L
+        "ZoomDaemon",            // Zoom doesn't ship a daemon
+        "SafariBookmarksHelper", // No such Apple process
+        "appleupdater",          // Real: softwareupdated
+        "crashreporter_agent",   // Real: ReportCrash
+        "syscoreservice",        // Not a real Apple process
+        "FROSTYFERRET_UI",       // Lazarus 2025 IOC
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

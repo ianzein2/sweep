@@ -40,6 +40,14 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 stealer / C2 ports observed in the wild
+        2222,                                  // Alt SSH used by Lazarus implants
+        4445, 4446, 4447,                      // Cobalt Strike defaults / clones
+        50050,                                 // Cobalt Strike team server default
+        4040, 4041,                            // ngrok dashboard (often used by ad-hoc tunnels)
+        7878,                                  // FrigidStealer / Banshee observed callbacks
+        7575,                                  // MoonPeak C2
+        9050, 9051,                            // Tor SOCKS / control port — flag if a non-tor process listens
     ]
 
     private let blockedAppleDomains: Set<String> = [
