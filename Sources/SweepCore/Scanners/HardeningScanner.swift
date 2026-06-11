@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking root account")
+        checkRootAccount(findings: &findings, errors: &errors)
+
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth discoverability")
+        checkBluetoothDiscoverable(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,112 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Root Account
+    //
+    // The macOS root account is disabled by default. AuthenticationAuthority encodes the
+    // account state: ";DisabledUser;" means it's locked. A populated ShadowHash entry means
+    // a password is set and the account can be logged into — the 2017 High Sierra "blank
+    // root" CVE is the canonical reminder of why this matters.
+
+    private func checkRootAccount(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/dscl", arguments: [".", "-read", "/Users/root", "AuthenticationAuthority"], timeout: 5)
+        guard result.success else { return }
+
+        let output = result.stdout.lowercased()
+        // Standard locked state is "; DisabledUser ;;" — if we see ShadowHash without DisabledUser,
+        // root is enabled with a real password.
+        let hasShadowHash = output.contains("shadowhash")
+        let hasDisabledMarker = output.contains("disableduser")
+
+        if hasShadowHash && !hasDisabledMarker {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Root account appears to be enabled",
+                detail: "/Users/root has a ShadowHash entry without the DisabledUser marker — root login is normally disabled on macOS",
+                path: nil,
+                remediation: "Disable root: open Directory Utility, then Edit menu > Disable Root User"
+            ))
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+    //
+    // macOS 12+ ships AirPlay Receiver — devices on the same network (or with the right Apple
+    // ID) can stream and (with screen sharing) mirror to this Mac. Convenient on personal
+    // machines, but on a work laptop it widens the wireless attack surface considerably.
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // ControlCenter stores the AirPlay Receiver toggle. Apple shipped both spellings of
+        // the key ("Reciever" / "Receiver") across releases — accept either.
+        let keys = ["AirplayRecieverEnabled", "AirplayReceiverEnabled"]
+        for key in keys {
+            let r = ShellRunner.run("/usr/bin/defaults", arguments: [
+                "read", "com.apple.controlcenter", key
+            ], timeout: 5)
+            guard r.success else { continue }
+            let value = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "AirPlay Receiver is enabled",
+                    detail: "Other Apple devices can stream content to this Mac — broadens local-network attack surface",
+                    path: nil,
+                    remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+                ))
+                return
+            }
+        }
+    }
+
+    // MARK: - Bluetooth Discoverability
+    //
+    // On modern macOS, Bluetooth is only "discoverable" while the Bluetooth pane is open. But
+    // the underlying `bluetoothd` preference can be coerced into permanent discoverability via
+    // a configuration profile or a direct write — both are observed in real intrusions for
+    // setting up rogue HID devices (keystroke injection).
+
+    private func checkBluetoothDiscoverable(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "DiscoverableState"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Bluetooth set to permanently discoverable",
+                    detail: "Mac is broadcasting Bluetooth presence even when the settings pane is closed — unusual",
+                    path: nil,
+                    remediation: "Reset: sudo defaults delete /Library/Preferences/com.apple.Bluetooth DiscoverableState"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+    //
+    // Find My Mac is the user's primary recourse if the Mac is lost or stolen. We can't always
+    // tell whether it's enabled, but we can check the system flag and warn if it's clearly off.
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Activation Lock is the most reliable cross-architecture signal — Apple silicon shows
+        // it in SPHardwareDataType, and on Intel it is reported when FMM is on with a T2 chip.
+        let result = ShellRunner.run("/usr/sbin/system_profiler", arguments: ["SPHardwareDataType"], timeout: 10)
+        guard result.success else { return }
+
+        // Only emit a finding when we positively observe Activation Lock disabled. Older Macs
+        // may simply not report the field at all — we don't want to nag those users.
+        if result.stdout.contains("Activation Lock Status: Disabled") {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Activation Lock is disabled",
+                detail: "Find My / Activation Lock isn't active — if this Mac is lost or stolen, you won't be able to locate, lock, or wipe it remotely",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Find My Mac"
+            ))
         }
     }
 

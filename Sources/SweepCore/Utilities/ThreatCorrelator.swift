@@ -129,6 +129,93 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: Hidden user account + SSH key + sudo NOPASSWD = persistent backdoor
+        let persistenceResults = results.first(where: { $0.scannerName == "Persistence Scan" })
+        let hasHiddenUser = persistenceResults?.findings.contains {
+            $0.title.contains("Hidden") && ($0.title.contains("admin user") || $0.title.contains("user account"))
+        } ?? false
+        let hasSSHKey = persistenceResults?.findings.contains {
+            $0.title.contains("SSH authorized key")
+        } ?? false
+        let hasNopasswd = persistenceResults?.findings.contains {
+            $0.title.contains("Passwordless sudo")
+        } ?? false
+
+        let backdoorIndicators = [hasHiddenUser, hasSSHKey, hasNopasswd].filter { $0 }.count
+        if backdoorIndicators >= 2 {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Multiple remote-access backdoor indicators",
+                detail: "Combination present: " +
+                    (hasHiddenUser ? "hidden user account, " : "") +
+                    (hasSSHKey ? "SSH authorized key, " : "") +
+                    (hasNopasswd ? "passwordless sudo entry, " : "") +
+                    "— individually unusual, together a classic post-compromise backdoor pattern",
+                path: nil,
+                remediation: "Review each finding in the Persistence Scan above — these often belong to the same backdoor"
+            ))
+        }
+
+        // Pattern 7: Recent suspicious package install + unsigned process + persistence = post-install compromise
+        let deepResults = results.first(where: { $0.scannerName == "Deep Inspection Scan" })
+        let hasRecentPkg = deepResults?.findings.contains {
+            $0.title.contains("Recent non-Apple package install")
+        } ?? false
+        let hasUnsignedPersistence = persistenceResults?.findings.contains {
+            $0.title.lowercased().contains("unsigned") && $0.severity >= .medium
+        } ?? false
+        if hasRecentPkg && hasUnsignedPersistence {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Recent installer + new unsigned persistence",
+                detail: "A non-Apple package was installed recently and an unsigned LaunchAgent/Daemon was added — packages can run preinstall/postinstall scripts as root",
+                path: nil,
+                remediation: "Cross-reference the install date with the persistence file's creation time"
+            ))
+        }
+
+        // Pattern 8: Plug-in surface persistence (QuickLook/Spotlight/Mail/Screen Saver) + network = covert payload
+        let pluginPersistence = persistenceResults?.findings.contains {
+            $0.title.contains("QuickLook plugin") ||
+            $0.title.contains("Spotlight importer") ||
+            $0.title.contains("Mail bundle") ||
+            $0.title.contains("screen saver is unsigned")
+        } ?? false
+        let networkFindings = results.first(where: { $0.scannerName == "Network Scan" })?.findings ?? []
+        let hasUnsignedNetwork = networkFindings.contains { $0.title.contains("Unsigned process with network") }
+
+        if pluginPersistence && hasUnsignedNetwork {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Plug-in persistence + unsigned network activity",
+                detail: "An unsigned plug-in (QuickLook / Spotlight / Mail / screen saver) is installed and an unsigned process is making network calls — likely related",
+                path: nil,
+                remediation: "Inspect both findings together; plug-ins are a stealth alternative to LaunchAgents"
+            ))
+        }
+
+        // Pattern 9: Browser native-messaging host + dangerous browser extension = sandbox escape vector
+        let hasNativeHost = deepResults?.findings.contains {
+            $0.title.contains("native messaging host")
+        } ?? false
+        let browserResults = results.first(where: { $0.scannerName == "Browser Extension Scan" })
+        let hasBroadExtension = browserResults?.findings.contains {
+            $0.title.contains("broad permissions") || $0.title.contains("spy-like")
+        } ?? false
+        if hasNativeHost && hasBroadExtension {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "Broad-permission browser extension + native messaging host",
+                detail: "An extension with wide permissions has a registered native messaging host — combined, these can execute code outside the browser sandbox",
+                path: nil,
+                remediation: "Identify the extension and remove it, then delete the native host manifest"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,

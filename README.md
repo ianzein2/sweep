@@ -72,19 +72,21 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, SSH authorized_keys, sudoers, PAM, emond rules, QuickLook plugins, Spotlight importers, Mail bundles, Screen Savers, Internet Plug-Ins, Application Scripts, hidden local user accounts, login window banner |
+| **Evidence** | Looks for stored screenshots, keystroke logs, recording artifacts, exfil staging archives, and crypto-wallet/credential theft |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
-| **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants, hardlinked binaries, mounted DMGs |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy/PAC hijacking |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari/VSCode/Cursor extensions for dangerous permissions and known malicious families |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, browser native messaging hosts, recent .pkg installs, APFS snapshots |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, Rapid Security Response, root account, AirPlay Receiver, Bluetooth discoverability, Find My Mac |
 
-After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
+After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat; hidden user + SSH key + NOPASSWD sudo = backdoor; broad-permission browser extension + native messaging host = sandbox escape).
+
+The signature database tracks 60+ macOS threats, including 2024-2025 families: AMOS v3+, Banshee v2, BeaverTail / InvisibleFerret (DPRK Contagious Interview), Hidden Risk (BlueNoroff), FERRET family, RustDoor, HZ RAT, JaskaGO, ZuRu, MacMa, ThiefQuest, FullHouse.Doored, AppleSeed (Kimsuky), DigitStealer, NodeStealer, OSAMiner, DubRobber/XCSSET 2024, and more.
 
 ## Security score
 

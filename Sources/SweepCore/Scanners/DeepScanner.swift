@@ -37,6 +37,22 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for browser native messaging host registrations — a 2024/2025
+        //    growth area: a native host is a binary that any extension with
+        //    `nativeMessaging` permission can launch outside the browser sandbox.
+        progress?.update("checking browser native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
+        // 7. Recent package installs — `.pkg` installers can ship preinstall/postinstall
+        //    scripts that run as root, a very common initial-access vector on macOS.
+        progress?.update("checking recent package installs")
+        scanRecentPackageInstalls(findings: &findings, errors: &errors)
+
+        // 8. APFS local snapshots can be used to stash data for later exfiltration
+        //    or to roll back undesirable changes after compromise.
+        progress?.update("checking APFS snapshots")
+        scanAPFSSnapshots(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -309,6 +325,169 @@ public final class DeepScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - Browser Native Messaging Hosts
+    //
+    // Native messaging hosts are JSON manifests that point at a local binary; any browser
+    // extension with the `nativeMessaging` permission can launch the binary out-of-process,
+    // bypassing browser sandboxing. Malicious extensions in 2024-2025 increasingly rely on
+    // these to drop payloads outside the browser's reach.
+
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let hostDirs: [(path: String, browser: String)] = [
+            ("\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts", "Chrome"),
+            ("/Library/Google/Chrome/NativeMessagingHosts", "Chrome (system)"),
+            ("\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts", "Brave"),
+            ("\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts", "Edge"),
+            ("\(home)/Library/Application Support/Chromium/NativeMessagingHosts", "Chromium"),
+            ("\(home)/Library/Application Support/Mozilla/NativeMessagingHosts", "Firefox"),
+            ("/Library/Application Support/Mozilla/NativeMessagingHosts", "Firefox (system)"),
+            ("\(home)/Library/Application Support/Google/Chrome Canary/NativeMessagingHosts", "Chrome Canary"),
+            ("\(home)/Library/Application Support/Arc/User Data/NativeMessagingHosts", "Arc"),
+        ]
+
+        // Well-known legitimate native hosts. Anything outside this set warrants surfacing.
+        let knownLegit: Set<String> = [
+            "com.1password.1password",            // 1Password
+            "com.1password.browser_support",
+            "com.bitwarden.browser",              // Bitwarden
+            "com.dashlane.app",                   // Dashlane
+            "com.lastpass.lastpass",              // LastPass
+            "org.keepassxc.keepassxc_browser",    // KeePassXC
+            "com.honey.app",                      // Honey
+            "com.malwarebytes.browserguard",      // Malwarebytes
+            "com.docker.desktop",                 // Docker Desktop
+            "com.tampermonkey.host",              // Tampermonkey
+        ]
+
+        let fm = FileManager.default
+
+        for (path, browser) in hostDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: path) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(path)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let hostName = (manifest["name"] as? String) ?? entry.replacingOccurrences(of: ".json", with: "")
+                let binaryPath = manifest["path"] as? String ?? ""
+                if knownLegit.contains(hostName) { continue }
+
+                // Resolve relative binary paths against the manifest's directory
+                let resolvedBinary: String = binaryPath.hasPrefix("/")
+                    ? binaryPath
+                    : "\(path)/\(binaryPath)"
+
+                let binaryExists = fm.fileExists(atPath: resolvedBinary)
+                let inSuspiciousLocation = resolvedBinary.hasPrefix("/tmp") ||
+                    resolvedBinary.hasPrefix("/private/tmp") ||
+                    resolvedBinary.hasPrefix("/var/tmp") ||
+                    resolvedBinary.split(separator: "/").contains { $0.hasPrefix(".") && $0 != ".cargo" && $0 != ".local" }
+
+                let severity: Severity = inSuspiciousLocation ? .high :
+                    (binaryExists ? .medium : .low)
+
+                findings.append(Finding(
+                    severity: severity, category: .suspiciousFile,
+                    title: "\(browser) native messaging host registered: \(hostName)",
+                    detail: "Manifest: \(manifestPath) → binary: \(resolvedBinary)" +
+                        (inSuspiciousLocation ? " — binary in temp/hidden directory" : "") +
+                        (binaryExists ? "" : " — binary missing"),
+                    path: manifestPath,
+                    remediation: "Verify which extension installed this host — remove the manifest if you don't recognize it: rm \"\(manifestPath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Recent Package Installs
+    //
+    // /Library/Receipts/InstallHistory.plist (and /var/db/receipts) record every .pkg
+    // installed on the system. Recent unsigned/non-Apple installs are often the breadcrumb
+    // for an initial-access compromise — particularly the "fake update" pattern.
+
+    private func scanRecentPackageInstalls(findings: inout [Finding], errors: inout [String]) {
+        let plistPath = "/Library/Receipts/InstallHistory.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let list = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [[String: Any]]
+        else { return }
+
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-30 * 86400)  // last 30 days
+
+        // Trusted package source names from Apple / common vendor installers.
+        let trustedNamePrefixes: [String] = [
+            "macOS", "Safari", "iOS", "iPad", "iPhone",
+            "XProtect", "Gatekeeper", "MRT", "Xcode",
+            "Command Line Tools", "Rosetta",
+        ]
+        let trustedProcessNames: Set<String> = [
+            "softwareupdated",
+            "com.apple.SoftwareUpdate",
+            "Installer",  // mac App Store / system installer
+            "App Store",
+            "system_installd",
+            "appstoreagent",
+            "storeagent",
+        ]
+
+        var recentSuspicious: [(name: String, process: String, date: Date)] = []
+
+        for entry in list {
+            guard let date = entry["date"] as? Date, date >= cutoff,
+                  let name = entry["displayName"] as? String else { continue }
+            let process = (entry["processName"] as? String) ?? "unknown"
+
+            // Apple-issued / store-issued packages are routine. Anything else gets a closer look.
+            if trustedProcessNames.contains(process) { continue }
+            if trustedNamePrefixes.contains(where: { name.hasPrefix($0) }) { continue }
+
+            recentSuspicious.append((name: name, process: process, date: date))
+        }
+
+        // Cap output — the receipts list can get long on dev machines.
+        for entry in recentSuspicious.suffix(20) {
+            let dayFmt = DateFormatter()
+            dayFmt.dateFormat = "yyyy-MM-dd"
+            findings.append(Finding(
+                severity: .low, category: .suspiciousFile,
+                title: "Recent non-Apple package install: \(entry.name)",
+                detail: "Installed \(dayFmt.string(from: entry.date)) by \(entry.process) — .pkg installers run preinstall/postinstall scripts as root",
+                path: plistPath,
+                remediation: "Verify this install was intentional. If not, the package's receipts are under /var/db/receipts/<id>.*"
+            ))
+        }
+    }
+
+    // MARK: - APFS Snapshots
+    //
+    // `tmutil listlocalsnapshots /` lists Time Machine local snapshots, which Time Machine
+    // creates and rotates automatically. A snapshot that isn't named with TM's standard prefix
+    // (`com.apple.TimeMachine.<date>`) was created manually — possibly to roll back changes
+    // after compromise, or to stash data before exfiltration.
+
+    private func scanAPFSSnapshots(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["listlocalsnapshots", "/"], timeout: 10)
+        guard result.success else { return }
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("Snapshots for disk") { continue }
+
+            // Time Machine snapshots all start with this label.
+            if line.contains("com.apple.TimeMachine.") { continue }
+
+            findings.append(Finding(
+                severity: .medium, category: .suspiciousFile,
+                title: "Non–Time-Machine APFS snapshot found",
+                detail: "Snapshot: \(line) — APFS snapshots outside Time Machine's naming convention are rare and can be used to hide files",
+                path: nil,
+                remediation: "Inspect, then delete if not yours: tmutil deletelocalsnapshots <snapshot-id>"
+            ))
         }
     }
 }

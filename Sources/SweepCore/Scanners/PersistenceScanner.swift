@@ -78,6 +78,31 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        // Newer persistence vectors used by 2024-2025 macOS malware
+        progress?.update("checking QuickLook plugins")
+        scanQuickLookPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking Mail bundles")
+        scanMailBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen savers")
+        scanScreenSavers(findings: &findings, errors: &errors)
+
+        progress?.update("checking Internet Plug-Ins")
+        scanInternetPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking Application Scripts")
+        scanApplicationScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking hidden user accounts")
+        scanHiddenUsers(findings: &findings, errors: &errors)
+
+        progress?.update("checking login window banner")
+        scanLoginWindowBanner(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +711,332 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - QuickLook plugins
+    //
+    // QuickLook generators are loaded by qlmanage / Finder when previewing files. A malicious
+    // .qlgenerator runs in the user's context the first time any file of its supported UTI is
+    // previewed — a stealthy persistence vector and a classic XCSSET-family technique.
+
+    private func scanQuickLookPlugins(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            ("\(home)/Library/QuickLook", "User"),
+            ("/Library/QuickLook", "System"),
+        ]
+        let fm = FileManager.default
+
+        for (dir, scope) in dirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high, category: .persistence,
+                    title: "\(scope) QuickLook plugin installed: \(entry)",
+                    detail: "QuickLook generators run when Finder previews a matching file — \(isSigned ? "signed" : "UNSIGNED") plugin in a non-Apple location",
+                    path: path,
+                    remediation: "Verify the plugin is legitimate, or remove: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Spotlight importer plugins
+    //
+    // Spotlight importers (.mdimporter bundles) are loaded by mds/mdworker to extract metadata
+    // from files. A rogue importer runs in mdworker's context whenever a matching file is indexed
+    // — broadly equivalent to a user-context backdoor that auto-runs against new downloads.
+
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            ("\(home)/Library/Spotlight", "User"),
+            ("/Library/Spotlight", "System"),
+        ]
+        let fm = FileManager.default
+
+        for (dir, scope) in dirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high, category: .persistence,
+                    title: "\(scope) Spotlight importer installed: \(entry)",
+                    detail: "Spotlight importers run inside mdworker whenever a matching file is indexed — \(isSigned ? "signed" : "UNSIGNED")",
+                    path: path,
+                    remediation: "Inspect contents and remove if not from a recognized vendor: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Mail bundles
+    //
+    // ~/Library/Mail/Bundles holds plugins that load inside Mail.app — they can read every
+    // message, intercept compose actions, and exfiltrate attachments. Apple has progressively
+    // restricted these, but rogue bundles still get installed when a user is tricked into
+    // re-enabling unsigned plugins.
+
+    private func scanMailBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/Mail/Bundles",
+            "/Library/Mail/Bundles",
+            // Per-version directories used by Apple over the years
+            "\(home)/Library/Mail/V8/Bundles",
+            "\(home)/Library/Mail/V9/Bundles",
+            "\(home)/Library/Mail/V10/Bundles",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".mailbundle") || entry.hasSuffix(".bundle") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high, category: .persistence,
+                    title: "Mail bundle installed: \(entry)",
+                    detail: "Mail bundles run inside Mail.app and can read every message and attachment — \(isSigned ? "signed" : "UNSIGNED")",
+                    path: path,
+                    remediation: "Remove if not deliberately installed (very few legitimate Mail plugins exist on modern macOS): rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Screen Savers
+    //
+    // .saver bundles execute arbitrary code from /System/Library/Frameworks/ScreenSaver.framework
+    // whenever the screen saver runs. A signed .saver is normal; an unsigned one — or one that
+    // matches a spyware signature — is a clean persistence channel.
+
+    private func scanScreenSavers(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            ("\(home)/Library/Screen Savers", "User"),
+            ("/Library/Screen Savers", "System"),
+        ]
+        let fm = FileManager.default
+
+        for (dir, scope) in dirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".saver") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(scope) screen saver is unsigned: \(entry)",
+                        detail: "Screen savers run arbitrary code whenever the system idles — unsigned .saver in user-writable location",
+                        path: path,
+                        remediation: "Remove if not deliberately installed: rm -rf \"\(path)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Internet Plug-Ins
+    //
+    // /Library/Internet Plug-Ins and ~/Library/Internet Plug-Ins used to host browser NPAPI
+    // plugins. Browsers no longer load these, but the directories are still scanned by some
+    // apps (and by attackers as a quiet drop site for follow-on payloads). Any non-Apple file
+    // here is at least worth surfacing.
+
+    private func scanInternetPlugins(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "\(home)/Library/Internet Plug-Ins",
+            "/Library/Internet Plug-Ins",
+        ]
+        let fm = FileManager.default
+
+        // Older Apple plug-ins that may still appear and are not a concern
+        let allowed: Set<String> = [
+            "JavaAppletPlugin.plugin", "QuickTime Plugin.plugin",
+            "Default Browser.plugin",
+            ".DS_Store", "Disabled Plug-Ins",
+        ]
+
+        for dir in dirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                if allowed.contains(entry) { continue }
+                if !(entry.hasSuffix(".plugin") || entry.hasSuffix(".webplugin") || entry.hasSuffix(".bundle")) { continue }
+
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .medium, category: .persistence,
+                    title: "Non-standard Internet Plug-In: \(entry)",
+                    detail: "Modern browsers no longer load NPAPI plug-ins — files dropped here often go unnoticed (\(isSigned ? "signed" : "UNSIGNED"))",
+                    path: path,
+                    remediation: "Remove if not recognized: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Application Scripts
+    //
+    // ~/Library/Application Scripts/<bundle id>/ holds scripts that an app can invoke via
+    // NSUserAppleScriptTask — a sandbox-friendly way for an app to run AppleScript on the
+    // user's behalf. The XCSSET family and AMOS v3+ drop AppleScript payloads here under
+    // legitimate-looking Apple bundle IDs (com.apple.notes, com.apple.mail).
+
+    private func scanApplicationScripts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let root = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+
+        guard let bundleDirs = try? fm.contentsOfDirectory(atPath: root) else { return }
+
+        // Apple system bundle IDs that frequently get abused — scripts here for these are
+        // suspicious because Apple rarely ships them.
+        let appleBundlesToFlag: Set<String> = [
+            "com.apple.notes", "com.apple.mail", "com.apple.systempreferences",
+            "com.apple.dt.Xcode", "com.apple.finder", "com.apple.iCal",
+        ]
+
+        for bundleDir in bundleDirs where !bundleDir.hasPrefix(".") {
+            let dir = "\(root)/\(bundleDir)"
+            guard let scripts = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            let isFlaggedApple = appleBundlesToFlag.contains(bundleDir)
+
+            for script in scripts where !script.hasPrefix(".") {
+                let extLower = (script as NSString).pathExtension.lowercased()
+                guard ["scpt", "applescript", "sh", "py", "rb", "js"].contains(extLower) else { continue }
+                let path = "\(dir)/\(script)"
+
+                // Inspect plain-text scripts for download/exec patterns; .scpt is binary
+                var hasSuspiciousContent = false
+                if extLower != "scpt",
+                   let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                    let lower = content.lowercased()
+                    if (lower.contains("curl ") || lower.contains("wget ") || lower.contains("nscurl")) &&
+                       (lower.contains("|sh") || lower.contains("| sh") || lower.contains("eval ") || lower.contains("base64")) {
+                        hasSuspiciousContent = true
+                    }
+                    if lower.contains("do shell script") || lower.contains("osascript -e") {
+                        hasSuspiciousContent = true
+                    }
+                }
+
+                let severity: Severity = hasSuspiciousContent ? .high : (isFlaggedApple ? .high : .medium)
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: isFlaggedApple
+                        ? "Application Script in Apple bundle directory: \(bundleDir)"
+                        : "Application Script installed: \(bundleDir)/\(script)",
+                    detail: "Script: \(script)" +
+                        (hasSuspiciousContent ? " — contains shell/download patterns" : "") +
+                        (isFlaggedApple ? " — Apple bundles very rarely ship NSUserAppleScriptTask scripts (XCSSET/AMOS pattern)" : ""),
+                    path: path,
+                    remediation: "Inspect: cat \"\(path)\" — then remove if it isn't from an app you trust"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Hidden Local User Accounts
+    //
+    // A common privilege-escalation backdoor: create a local user with UID < 500 so the macOS
+    // login window hides it by default. dscl(1) is the only reliable way to enumerate every
+    // local account regardless of UID or "IsHidden" flag.
+
+    private func scanHiddenUsers(findings: inout [Finding], errors: inout [String]) {
+        // List every local user record (Open Directory queries /Local/Default)
+        let result = ShellRunner.run("/usr/bin/dscl", arguments: [".", "list", "/Users", "UniqueID"], timeout: 10)
+        guard result.success else { return }
+
+        // Known macOS system accounts we expect to see (UID < 500). Any UID < 500 not in this
+        // list is hidden from the login window and worth surfacing.
+        let knownSystemAccounts: Set<String> = [
+            "_amavisd", "_analyticsd", "_appinstalld", "_appleevents", "_applepay",
+            "_appowner", "_appserver", "_appstore", "_ard", "_assetcache",
+            "_astris", "_atsserver", "_avbdeviced", "_biome", "_calendar",
+            "_ces", "_clamav", "_cmiodalassistants", "_coreaudiod", "_coremediaiod",
+            "_ctkd", "_cvmsroot", "_cvs", "_cyrus", "_darwindaemon", "_devdocs",
+            "_devicemgr", "_diskimagesiod", "_displaypolicyd", "_distnote",
+            "_dovecot", "_dovenull", "_driverkit", "_eppc", "_findmydevice",
+            "_fpsd", "_ftp", "_fud", "_gamecontrollerd", "_geod", "_hidd",
+            "_iconservices", "_installassistant", "_installcoordinationd", "_installer",
+            "_jabber", "_kadmin_admin", "_kadmin_changepw", "_knowledgegraphd",
+            "_krb_anonymous", "_krb_changepw", "_krb_kadmin", "_krb_kerberos",
+            "_krb_krbtgt", "_krbtgt", "_launchservicesd", "_lda", "_locationd",
+            "_logd", "_lp", "_mailman", "_mbsetupuser", "_mcxalr", "_mdnsresponder",
+            "_mobileasset", "_mysql", "_nbcd", "_netbios", "_netstatistics",
+            "_networkd", "_nfsd", "_notification_proxy", "_nsurlsessiond",
+            "_nsurlstoraged", "_ondemand", "_oahd", "_opendirectoryd", "_pcastagentd",
+            "_postfix", "_postgres", "_qtss", "_reportmemoryexception", "_rmd",
+            "_sandbox", "_screensaver", "_scsd", "_securityagent", "_serialnumberd",
+            "_signaturedirectory", "_softwareupdate", "_spotlight", "_sshd", "_svn",
+            "_taskgated", "_teamsserver", "_terastrust", "_timed", "_timezone",
+            "_tokend", "_trustd", "_trustevaluationagent", "_unknown", "_update_sharing",
+            "_usbmuxd", "_uucp", "_warmd", "_webauthserver", "_windowserver",
+            "_wireless", "_wwwproxy", "_xserverdocs", "daemon", "nobody", "root",
+        ]
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            // Each row is "username  UID"; tokens may be tab- or space-separated.
+            let parts = String(rawLine).components(separatedBy: CharacterSet.whitespaces).filter { !$0.isEmpty }
+            guard parts.count >= 2, let uid = Int(parts.last!) else { continue }
+            let user = parts[0]
+
+            // Hide-from-login is the classic indicator: UID below 500 (legacy) or 501 (Big Sur+).
+            let isHidden = uid >= 0 && uid < 501 && !knownSystemAccounts.contains(user)
+            if !isHidden { continue }
+
+            // Check admin group membership — hidden + admin is the backdoor pattern.
+            let admin = ShellRunner.run("/usr/bin/dseditgroup", arguments: ["-o", "checkmember", "-m", user, "admin"], timeout: 5)
+            let isAdmin = admin.stdout.lowercased().contains("yes \(user.lowercased()) is a member")
+
+            findings.append(Finding(
+                severity: isAdmin ? .high : .medium, category: .persistence,
+                title: isAdmin
+                    ? "Hidden admin user account: \(user) (UID \(uid))"
+                    : "Hidden local user account: \(user) (UID \(uid))",
+                detail: "User does not appear at the login window because UID < 501 — " +
+                    (isAdmin ? "and is a member of the admin group (full root-via-sudo)" : "non-Apple system account"),
+                path: nil,
+                remediation: "Inspect and remove if not yours: sudo dscl . -delete /Users/\(user)"
+            ))
+        }
+    }
+
+    // MARK: - Login Window Banner / Message
+    //
+    // /Library/Preferences/com.apple.loginwindow.plist supports LoginwindowText (banner above
+    // the login prompt). MacRansom-style attackers set this to demand payment; legitimate
+    // organizations sometimes use it for compliance banners. Either way, the user should know
+    // it's there.
+
+    private func scanLoginWindowBanner(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.loginwindow", "LoginwindowText"
+        ], timeout: 5)
+        guard result.success else { return }
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+
+        let lower = text.lowercased()
+        let ransomKeywords = ["bitcoin", "btc", "ransom", "decrypt", "encrypted",
+                              "monero", "xmr", "pay ", "wallet"]
+        let isRansomLike = ransomKeywords.contains { lower.contains($0) }
+        findings.append(Finding(
+            severity: isRansomLike ? .high : .low, category: .persistence,
+            title: isRansomLike
+                ? "Login window message contains ransom-like keywords"
+                : "Custom login window banner is set",
+            detail: "Text: \(String(text.prefix(160)))",
+            path: "/Library/Preferences/com.apple.loginwindow.plist",
+            remediation: isRansomLike
+                ? "Investigate immediately, then clear: sudo defaults delete /Library/Preferences/com.apple.loginwindow LoginwindowText"
+                : "If not your organization's banner, clear: sudo defaults delete /Library/Preferences/com.apple.loginwindow LoginwindowText"
+        ))
     }
 }
