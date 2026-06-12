@@ -64,6 +64,12 @@ public final class BrowserScanner: Scanner {
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
 
+        // 5. MCP (Model Context Protocol) server configs — a 2025 attack surface for AI tools
+        //    (Claude Desktop, Cursor, Windsurf, Continue, etc.). A malicious MCP server runs on
+        //    every AI launch with full user privileges.
+        progress?.update("scanning MCP server configs")
+        scanMCPServers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -375,6 +381,163 @@ public final class BrowserScanner: Scanner {
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
                 }
+            }
+        }
+    }
+
+    // MARK: - MCP Server Config Inspection
+
+    /// MCP (Model Context Protocol) lets AI tools spawn local servers — a 2025-era attack vector
+    /// where a malicious config makes the AI tool launch attacker-controlled binaries with the
+    /// user's privileges on every startup. We inspect the JSON configs that all major AI tools share.
+    private func scanMCPServers(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let configs: [(tool: String, path: String)] = [
+            ("Claude Desktop",
+             "\(home)/Library/Application Support/Claude/claude_desktop_config.json"),
+            ("Cursor (user)", "\(home)/.cursor/mcp.json"),
+            ("Cursor (global)", "\(home)/Library/Application Support/Cursor/User/mcp.json"),
+            ("Windsurf", "\(home)/.codeium/windsurf/mcp_config.json"),
+            ("Continue", "\(home)/.continue/config.json"),
+            ("Cline", "\(home)/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"),
+            ("Zed", "\(home)/.config/zed/settings.json"),
+            ("Codex CLI", "\(home)/.codex/config.json"),
+        ]
+
+        let fm = FileManager.default
+        for (tool, path) in configs {
+            guard fm.fileExists(atPath: path),
+                  let data = fm.contents(atPath: path),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            // Most configs nest servers under "mcpServers"; Continue uses "mcpServers" / "models";
+            // Codex uses "mcp_servers"; Zed uses "context_servers".
+            let serverContainers: [[String: Any]] = [
+                json["mcpServers"] as? [String: Any],
+                json["mcp_servers"] as? [String: Any],
+                json["context_servers"] as? [String: Any],
+            ].compactMap { $0 }
+
+            for servers in serverContainers {
+                for (serverName, rawDef) in servers {
+                    guard let def = rawDef as? [String: Any] else { continue }
+                    inspectMCPServer(tool: tool, configPath: path, serverName: serverName,
+                                     def: def, findings: &findings)
+                }
+            }
+        }
+    }
+
+    private func inspectMCPServer(tool: String, configPath: String, serverName: String,
+                                  def: [String: Any], findings: inout [Finding]) {
+        let command = (def["command"] as? String) ?? ""
+        let args = (def["args"] as? [String])?.joined(separator: " ") ?? ""
+        let url = (def["url"] as? String) ?? ""
+        let env = def["env"] as? [String: Any] ?? [:]
+        let combined = "\(command) \(args)".lowercased()
+
+        // 1. Commands from temp / hidden paths — these should never be where a legitimate MCP server lives.
+        let suspiciousPathPrefixes = ["/tmp/", "/private/tmp/", "/var/tmp/", "/dev/shm/"]
+        let isFromTempDir = suspiciousPathPrefixes.contains { command.hasPrefix($0) }
+        if isFromTempDir {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "\(tool) MCP server runs binary from temp directory",
+                detail: "Server: \"\(serverName)\" runs: \(command) \(args.prefix(80))",
+                path: configPath,
+                remediation: "Remove this entry from \(configPath) — legitimate MCP servers don't live in /tmp"
+            ))
+            return
+        }
+
+        if command.contains("/.") && !command.hasPrefix(".") {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "\(tool) MCP server runs binary from hidden directory",
+                detail: "Server: \"\(serverName)\" runs: \(command)",
+                path: configPath,
+                remediation: "Remove this entry from \(configPath) — binaries in hidden dirs are a strong spyware indicator"
+            ))
+            return
+        }
+
+        // 2. Stage-1 loader patterns: curl|bash, wget|sh, base64 decode + exec.
+        // Pair-required to fire: token must appear and the line must also contain a shell
+        // chain operator (|, ;, &&). That filters out benign args that happen to contain "curl".
+        let loaderPatterns: [(String, String)] = [
+            ("curl ", "downloads and executes remote code on every AI tool launch"),
+            ("wget ", "downloads and executes remote code on every AI tool launch"),
+            ("base64 -d", "decodes a hidden payload"),
+            ("base64 --decode", "decodes a hidden payload"),
+            ("eval(", "evaluates dynamic code"),
+            ("exec(base64", "decodes and executes a hidden payload"),
+        ]
+        for (pattern, reason) in loaderPatterns {
+            // For inherently dangerous patterns (eval(/exec(base64), the chain operator isn't required.
+            let alwaysFire = pattern == "eval(" || pattern == "exec(base64"
+            let hasChainOp = combined.contains("|") || combined.contains(";") || combined.contains("&&")
+            if combined.contains(pattern) && (alwaysFire || hasChainOp) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "\(tool) MCP server contains stage-1 loader command",
+                    detail: "Server: \"\(serverName)\" — \(reason) (\(String(combined.prefix(120))))",
+                    path: configPath,
+                    remediation: "Remove this entry from \(configPath) — review what was added to your AI tool config"
+                ))
+                return
+            }
+        }
+
+        // 3. HTTP MCP transport pointing at a non-HTTPS or unfamiliar host — a malicious remote MCP
+        //    server can return prompt-injection payloads that the AI then acts on with user privileges.
+        if !url.isEmpty {
+            let isPlainHTTP = url.lowercased().hasPrefix("http://")
+            let lower = url.lowercased()
+            let isLocalhost = lower.contains("://localhost") || lower.contains("://127.0.0.1") || lower.contains("://[::1]")
+            if isPlainHTTP && !isLocalhost {
+                findings.append(Finding(
+                    severity: .high, category: .networkActivity,
+                    title: "\(tool) MCP server uses plain HTTP transport",
+                    detail: "Server: \"\(serverName)\" → \(url) — traffic and prompt-injection content can be tampered with in transit",
+                    path: configPath,
+                    remediation: "Switch to https:// or remove this entry from \(configPath)"
+                ))
+            }
+        }
+
+        // 4. Match the server's command against the known spyware database — a low-effort
+        //    way to catch an attacker who pasted a stealer binary into the AI config.
+        if let sig = SpywareSignature.match(processName: command) {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "\(tool) MCP server matches known spyware: \(sig.name)",
+                detail: "Server: \"\(serverName)\" runs: \(command)",
+                path: configPath,
+                remediation: "Remove from \(configPath) and remove \(sig.name)"
+            ))
+            return
+        }
+
+        // 5. Environment-variable exfil: storing real API keys/tokens in plaintext under env
+        //    means a leaked config = leaked secrets. Surface this so users know to rotate.
+        for (key, value) in env {
+            guard let strVal = value as? String, !strVal.isEmpty else { continue }
+            let keyUpper = key.uppercased()
+            let isSecret = keyUpper.contains("KEY") || keyUpper.contains("TOKEN") ||
+                           keyUpper.contains("SECRET") || keyUpper.contains("PASSWORD") ||
+                           keyUpper.contains("API")
+            // Heuristic: 20+ char alphanumeric-with-dashes string = a likely secret, not a placeholder.
+            let looksLikeRealSecret = strVal.count >= 20 &&
+                !strVal.contains("YOUR_") && !strVal.contains("<") && !strVal.contains("xxxxx")
+            if isSecret && looksLikeRealSecret {
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "\(tool) MCP config stores secret in plaintext",
+                    detail: "Server: \"\(serverName)\" has env var \(key) — anyone with read access to this config can exfiltrate the secret",
+                    path: configPath,
+                    remediation: "Use a secrets manager or reference an environment variable instead of pasting the value"
+                ))
+                break  // one finding per server is enough
             }
         }
     }

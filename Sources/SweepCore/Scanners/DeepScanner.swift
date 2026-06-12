@@ -37,6 +37,17 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for Gatekeeper bypass — downloaded binaries that have had their
+        //    com.apple.quarantine xattr stripped. Common technique for FrigidStealer,
+        //    ClickFix, and other 2024-2025 social-engineering droppers.
+        progress?.update("checking for Gatekeeper bypass")
+        scanForQuarantineBypass(findings: &findings, errors: &errors)
+
+        // 7. Check for exposed developer secrets — .env, AWS creds, npm tokens, GH PATs.
+        //    Atomic Stealer / BeaverTail explicitly scrape these on every macOS infection.
+        progress?.update("checking for exposed credentials")
+        scanForExposedCredentials(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -276,6 +287,248 @@ public final class DeepScanner: Scanner {
                 detail: "This file is owned by root in your user directory — unusual for user apps",
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper Bypass (quarantine xattr stripping)
+
+    /// macOS attaches `com.apple.quarantine` to every file downloaded via Safari, Chrome, AirDrop, etc.
+    /// Gatekeeper uses this xattr to gate first-run execution. A common 2024-2025 social-engineering
+    /// pattern (ClickFix, FrigidStealer, AMOS DMGs) is to instruct users to run `xattr -d` on the
+    /// downloaded payload to bypass that check. We detect the result: a Mach-O binary in Downloads
+    /// or a temp dir that was downloaded but has had its quarantine attribute stripped.
+    private func scanForQuarantineBypass(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // Directories where downloaded payloads land but where Gatekeeper has not yet had a chance
+        // to evaluate the file's first-run. /Applications is excluded — apps moved there are
+        // legitimately "installed".
+        let searchDirs = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "/private/tmp",
+            "/tmp",
+            "/var/tmp",
+        ]
+
+        let fm = FileManager.default
+        var flaggedCount = 0
+        let flagLimit = 8
+
+        for dir in searchDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries {
+                if flaggedCount >= flagLimit { break }
+                if entry.hasPrefix(".") { continue }
+
+                let entryPath = "\(dir)/\(entry)"
+
+                // We're after standalone binaries (Mach-O) and .app bundles.
+                let isApp = entry.hasSuffix(".app")
+                let mainBinary = isApp
+                    ? "\(entryPath)/Contents/MacOS/\(entry.replacingOccurrences(of: ".app", with: ""))"
+                    : entryPath
+                guard isMachOBinary(path: mainBinary) else { continue }
+
+                // Was this file ever downloaded? Look for *WhereFroms* (Spotlight's "downloaded from"
+                // metadata) and the absence of a quarantine xattr. Either alone is noisy; the combo is rare.
+                let xattrResult = ShellRunner.run("/usr/bin/xattr", arguments: [entryPath], timeout: 3)
+                guard xattrResult.success else { continue }
+                let xattrs = xattrResult.stdout
+                let hasWhereFroms = xattrs.contains("com.apple.metadata:kMDItemWhereFroms")
+                let hasQuarantine = xattrs.contains("com.apple.quarantine")
+                guard hasWhereFroms && !hasQuarantine else { continue }
+
+                // Final filter: a notarized app may not need quarantine — only flag the unsigned ones.
+                let sigInfo = checkCodeSignatureForBypass(path: mainBinary)
+                guard !sigInfo.isAppleSignedOrNotarized else { continue }
+
+                // Extract origin URL for context — helps the user recognize where the file came from.
+                let originResult = ShellRunner.run("/bin/sh", arguments: [
+                    "-c", "xattr -p com.apple.metadata:kMDItemWhereFroms \"\(entryPath)\" 2>/dev/null | xxd -r -p | strings | head -1"
+                ], timeout: 3)
+                let origin = originResult.success
+                    ? originResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : ""
+                let originNote = origin.isEmpty ? "" : " (downloaded from: \(String(origin.prefix(80))))"
+
+                findings.append(Finding(
+                    severity: .high, category: .systemIntegrity,
+                    title: "Downloaded binary missing Gatekeeper quarantine attribute",
+                    detail: "File: \(entry) — appears downloaded but quarantine xattr was stripped\(originNote)",
+                    path: entryPath,
+                    remediation: "Common bypass: `xattr -d com.apple.quarantine`. Verify you trust the source. " +
+                                 "If not, delete the file: rm -rf \"\(entryPath)\""
+                ))
+                flaggedCount += 1
+            }
+            if flaggedCount >= flagLimit { break }
+        }
+    }
+
+    private func isMachOBinary(path: String) -> Bool {
+        guard let fh = FileHandle(forReadingAtPath: path) else { return false }
+        defer { fh.closeFile() }
+        let header = fh.readData(ofLength: 4)
+        guard header.count == 4 else { return false }
+        let magic = header.withUnsafeBytes { $0.load(as: UInt32.self) }
+        let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+        return machoMagics.contains(magic)
+    }
+
+    private struct BypassCheckSigInfo {
+        let isAppleSignedOrNotarized: Bool
+    }
+
+    private func checkCodeSignatureForBypass(path: String) -> BypassCheckSigInfo {
+        let url = URL(fileURLWithPath: path) as CFURL
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url, [], &staticCode) == errSecSuccess,
+              let code = staticCode else {
+            return BypassCheckSigInfo(isAppleSignedOrNotarized: false)
+        }
+        // "anchor apple generic" matches anything signed with an Apple-issued cert chain,
+        // including notarized Developer ID code. That's the bar Gatekeeper itself uses.
+        var requirement: SecRequirement?
+        guard SecRequirementCreateWithString("anchor apple generic" as CFString, [], &requirement) == errSecSuccess,
+              let req = requirement else {
+            return BypassCheckSigInfo(isAppleSignedOrNotarized: false)
+        }
+        let valid = SecStaticCodeCheckValidityWithErrors(code, [], req, nil) == errSecSuccess
+        return BypassCheckSigInfo(isAppleSignedOrNotarized: valid)
+    }
+
+    // MARK: - Exposed Developer Credentials
+
+    /// 2024-2025 macOS infostealers (AMOS, BeaverTail, FrigidStealer) explicitly exfiltrate developer
+    /// credential files. We don't have a way to know if these have already been stolen, but we can
+    /// at least surface the high-risk ones so the user can move them into a secrets manager or
+    /// tighten their permissions before the next stealer lands.
+    private func scanForExposedCredentials(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct CredTarget {
+            let path: String
+            let label: String
+            let why: String
+            let severityIfWorldReadable: Severity
+        }
+
+        let targets: [CredTarget] = [
+            CredTarget(path: "\(home)/.aws/credentials",
+                       label: "AWS credentials",
+                       why: "AWS keys give programmatic access to your cloud account — a top target for stealers",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.aws/config",
+                       label: "AWS config",
+                       why: "May contain MFA or SSO session tokens",
+                       severityIfWorldReadable: .medium),
+            CredTarget(path: "\(home)/.gcp/credentials.json",
+                       label: "GCP credentials",
+                       why: "Google Cloud service-account keys",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.config/gcloud/application_default_credentials.json",
+                       label: "gcloud ADC",
+                       why: "Application Default Credentials — gives access to GCP resources you own",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.kube/config",
+                       label: "Kubernetes kubeconfig",
+                       why: "Cluster admin tokens for any cluster you've kubectl'd into",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.npmrc",
+                       label: "npm credentials",
+                       why: "npm auth tokens — used for publishing packages and reading private registries",
+                       severityIfWorldReadable: .medium),
+            CredTarget(path: "\(home)/.pypirc",
+                       label: "PyPI credentials",
+                       why: "PyPI auth tokens",
+                       severityIfWorldReadable: .medium),
+            CredTarget(path: "\(home)/.netrc",
+                       label: "netrc credentials",
+                       why: "Plaintext credentials used by curl/wget/git",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.config/gh/hosts.yml",
+                       label: "GitHub CLI token",
+                       why: "GitHub Personal Access Token with the scopes you've granted to `gh`",
+                       severityIfWorldReadable: .high),
+            CredTarget(path: "\(home)/.docker/config.json",
+                       label: "Docker config",
+                       why: "May contain registry auth tokens",
+                       severityIfWorldReadable: .medium),
+        ]
+
+        for target in targets {
+            guard fm.fileExists(atPath: target.path) else { continue }
+            guard let attrs = try? fm.attributesOfItem(atPath: target.path),
+                  let posix = attrs[.posixPermissions] as? NSNumber else { continue }
+            let mode = posix.uint16Value
+
+            // Anything group-readable or world-readable is dangerous for a secrets file. The "correct"
+            // mode is 0600 (owner-only).
+            let groupReadable = (mode & 0o040) != 0
+            let worldReadable = (mode & 0o004) != 0
+
+            if worldReadable {
+                findings.append(Finding(
+                    severity: target.severityIfWorldReadable, category: .suspiciousFile,
+                    title: "\(target.label) is world-readable",
+                    detail: "Permissions: \(String(mode, radix: 8)) — \(target.why)",
+                    path: target.path,
+                    remediation: "Tighten permissions: chmod 600 \"\(target.path)\""
+                ))
+            } else if groupReadable {
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "\(target.label) is group-readable",
+                    detail: "Permissions: \(String(mode, radix: 8)) — \(target.why)",
+                    path: target.path,
+                    remediation: "Tighten permissions: chmod 600 \"\(target.path)\""
+                ))
+            }
+        }
+
+        // SSH private keys: same idea, but the key files have varied names. List the contents of
+        // ~/.ssh and check for any private key with overly-broad permissions.
+        let sshDir = "\(home)/.ssh"
+        if let entries = try? fm.contentsOfDirectory(atPath: sshDir) {
+            for entry in entries {
+                // Recognize OpenSSH private key conventions.
+                let isLikelyPrivateKey = entry == "id_rsa" || entry == "id_ed25519" ||
+                                         entry == "id_ecdsa" || entry == "id_dsa" ||
+                                         (entry.hasPrefix("id_") && !entry.hasSuffix(".pub"))
+                guard isLikelyPrivateKey else { continue }
+
+                let keyPath = "\(sshDir)/\(entry)"
+                guard let attrs = try? fm.attributesOfItem(atPath: keyPath),
+                      let posix = attrs[.posixPermissions] as? NSNumber else { continue }
+                let mode = posix.uint16Value
+                let groupReadable = (mode & 0o040) != 0
+                let worldReadable = (mode & 0o004) != 0
+                guard groupReadable || worldReadable else { continue }
+
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "SSH private key has overly-broad permissions: \(entry)",
+                    detail: "Permissions: \(String(mode, radix: 8)) — anyone with shell access on this Mac can copy your key",
+                    path: keyPath,
+                    remediation: "Tighten permissions: chmod 600 \"\(keyPath)\""
+                ))
+            }
+        }
+
+        // Stray .env files in the user's home dir top level are unusual — projects keep them inside
+        // a project directory. A top-level one often means someone (or something) copied secrets out.
+        let topLevelEnv = "\(home)/.env"
+        if fm.fileExists(atPath: topLevelEnv) {
+            findings.append(Finding(
+                severity: .medium, category: .suspiciousFile,
+                title: "Stray .env file in home directory",
+                detail: "Found ~/.env — unusual location; this file usually belongs inside a project",
+                path: topLevelEnv,
+                remediation: "Inspect the contents — if you didn't put it there, treat the secrets as compromised and rotate them"
             ))
         }
     }

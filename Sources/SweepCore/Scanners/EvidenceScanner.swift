@@ -60,6 +60,11 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Check for ransomware artifacts — macOS ransomware (macOS.NotLockBit,
+        //    EvilQuest 2025 variants) drops ransom notes and renames files with marker extensions.
+        progress?.update("checking for ransomware artifacts")
+        scanForRansomwareArtifacts(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -549,6 +554,158 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+            }
+        }
+    }
+
+    // MARK: - Ransomware Artifact Detection
+
+    /// File extensions appended by known macOS / cross-platform ransomware families.
+    /// We deliberately keep this list short and high-confidence — generic extensions like
+    /// ".lock" or ".key" are too noisy on a dev machine.
+    private let ransomwareExtensions: Set<String> = [
+        "encrypted", "nslocked", "notlockbit", "crypted", "evilquest",
+        "thiefquest", "lockbit", "abyss", "lokis", "darkside_mac",
+        "crystalransom", "crystalrans0m", "shelbylocked", "tsunamilock",
+    ]
+
+    /// Filenames characteristic of ransom-note drops. We require the file to contain at least
+    /// one ransom-style keyword to avoid flagging a legitimate "README.txt".
+    private let ransomNoteFilenames: [String] = [
+        "READ_ME_FOR_DECRYPT", "HOW_TO_DECRYPT", "DECRYPT_INSTRUCTIONS",
+        "RESTORE_FILES", "RECOVERY", "RECOVER_FILES", "RANSOM_NOTE",
+        "YOUR_FILES_ARE_ENCRYPTED", "HOW_TO_RECOVER", "DECRYPT_NOTE",
+        "NotLockBit_README", "EvilQuest_README", "RansomNote",
+    ]
+
+    /// Phrases nearly always present in a real ransom note — used to confirm a candidate.
+    private let ransomNoteKeywords: [String] = [
+        "your files have been encrypted", "your files are encrypted",
+        "bitcoin", "monero", "decryption key", "pay the ransom",
+        "to decrypt your files", "send us", "wallet address",
+        "tor browser", ".onion", "ransomware", "encrypted with",
+    ]
+
+    private func scanForRansomwareArtifacts(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        // Where ransomware tends to drop notes — user-visible directories first, then known landing spots.
+        let noteSearchRoots = [
+            "\(home)/Desktop",
+            "\(home)/Documents",
+            "\(home)/Downloads",
+            "/tmp",
+            "/private/tmp",
+            "/var/tmp",
+            "/private/var/tmp",
+        ]
+
+        // Used to bound the work: we cap scans to top-level + one directory deep so this stays fast
+        // even on Documents folders with thousands of files.
+        for root in noteSearchRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 2 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let dirName = url.deletingLastPathComponent().lastPathComponent
+                if skipDirs.contains(dirName) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                let filename = url.lastPathComponent
+                let ext = url.pathExtension.lowercased()
+
+                // 1. Filename has a known ransomware extension.
+                if ransomwareExtensions.contains(ext) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "File with ransomware extension: .\(ext)",
+                        detail: "File: \(filename) — extension is associated with known macOS ransomware",
+                        path: url.path,
+                        remediation: "Disconnect from the network and restore from backup — do NOT pay the ransom"
+                    ))
+                    continue
+                }
+
+                // 2. Filename matches a ransom-note pattern AND the body contains ransom keywords.
+                let nameUpper = filename.uppercased()
+                let nameMatches = ransomNoteFilenames.contains { nameUpper.contains($0.uppercased()) }
+                guard nameMatches else { continue }
+
+                // Only confirm if the file body looks like a real ransom note.
+                let attrs = try? url.resourceValues(forKeys: [.fileSizeKey])
+                let size = attrs?.fileSize ?? 0
+                guard size > 50 && size < 200_000 else { continue }  // bound: real notes are 100B - 50KB
+
+                guard let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let lower = content.lowercased()
+                let hitKeyword = ransomNoteKeywords.first { lower.contains($0) }
+                guard let kw = hitKeyword else { continue }
+
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Possible ransom note found: \(filename)",
+                    detail: "Contains keyword \"\(kw)\" — strong indicator of an encryption attack in progress",
+                    path: url.path,
+                    remediation: "Disconnect from the network and restore from backup — do NOT pay the ransom. " +
+                                 "If this Mac is encrypted, contact a security professional before powering it off."
+                ))
+            }
+        }
+
+        // 3. Bulk-rename detection: look for clusters of files in Documents/Desktop where the
+        //    rename happened all within a short window. This is what mass encryption looks like
+        //    from the user's filesystem POV.
+        detectBulkEncryptionPattern(home: home, findings: &findings)
+    }
+
+    private func detectBulkEncryptionPattern(home: String, findings: inout [Finding]) {
+        let fm = FileManager.default
+        let dirsToCheck = ["\(home)/Documents", "\(home)/Desktop", "\(home)/Downloads"]
+
+        for dir in dirsToCheck {
+            guard fm.fileExists(atPath: dir),
+                  let enumerator = fm.enumerator(
+                    at: URL(fileURLWithPath: dir),
+                    includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsPackageDescendants]
+                  ) else { continue }
+
+            var ransomExtCount = 0
+            var examples: [String] = []
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 3 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let ext = url.pathExtension.lowercased()
+                guard ransomwareExtensions.contains(ext) else { continue }
+
+                ransomExtCount += 1
+                if examples.count < 3 { examples.append(url.lastPathComponent) }
+                // Bound work — if we found a lot, that's already a finding.
+                if ransomExtCount > 100 { break }
+            }
+
+            if ransomExtCount >= 5 {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Bulk file encryption pattern in \(URL(fileURLWithPath: dir).lastPathComponent)",
+                    detail: "\(ransomExtCount) files with ransomware extensions — examples: \(examples.joined(separator: ", "))",
+                    path: dir,
+                    remediation: "Disconnect from the network immediately. Do NOT power off — the encryption process may still hold the key in memory. " +
+                                 "Image the disk and contact a security professional."
+                ))
             }
         }
     }
