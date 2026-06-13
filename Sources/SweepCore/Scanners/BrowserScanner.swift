@@ -4,17 +4,36 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
+    // Recent campaigns (late 2024 / 2025-2026) have weaponized VSCode/Cursor marketplace extensions
     // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // reported malicious extension families and IOCs documented by ReversingLabs,
+    // Aikido Security, Checkmarx, and Snyk.
     private let suspiciousEditorExtKeywords: [String] = [
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 reported malicious extension/publisher families
+        "darcula-official", "ethereum-security", "solidity-jumper",
+        "prettier-rust", "solidity-vscode-plus", "vscode-rust-tools",
+        "claude-code-assistant-pro", "cursor-helper-pro", "ai-code-assistant-plus",
+        "github-copilot-helper", "code-completion-helper-ai",
+        "discord-presence-rpc", "chatgpt-vscode-plus",
+        // npm-style supply-chain look-alikes ("typosquats") seen in 2025
+        "nodemonn", "chalkk", "@npmcli-secure", "react-routerr",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Patterns seen in recent typosquat / lookalike attacks
+        "rat-loader", "wallet-drainer", "token-grabber", "credentials-harvester",
+        "clipper-helper", "cookie-extractor", "keychain-dumper",
+    ]
+
+    // Publishers / IDs reported as compromised or malicious in 2024-2026 supply-chain attacks.
+    // Listed as substrings; matched case-insensitively against extension display name and id.
+    private let knownMaliciousEditorPublishers: [String] = [
+        "blackforestlabsteam", "synced-publisher", "code-eraser",
+        "claudecode-assistant", "anthropic-fake", "openai-codex-fake",
     ]
 
     // Extensions that are well-known and safe
@@ -336,6 +355,18 @@ public final class BrowserScanner: Scanner {
                 let displayName = (pkg["displayName"] as? String) ?? (pkg["name"] as? String) ?? entry
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
+
+                // Publisher blocklist — extensions from compromised/malicious publishers
+                if let pub = knownMaliciousEditorPublishers.first(where: { combined.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension from reported malicious publisher",
+                        detail: "Extension: \(displayName) (\(extId)) — publisher pattern \"\(pub)\"",
+                        path: extPath,
+                        remediation: "Remove this extension in \(editorName) — rotate secrets and review wallet/keychain activity"
+                    ))
+                    continue
+                }
 
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {
