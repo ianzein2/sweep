@@ -37,6 +37,21 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Look for recent TCC.db mutations — direct edits are the canonical TCC bypass.
+        progress?.update("checking TCC database mutations")
+        scanRecentTCCMutations(findings: &findings, errors: &errors)
+
+        // 7. Inspect package-manager config for registry / proxy hijacks. Recent supply-chain
+        //    attacks (PyPI, npm) drop registry overrides into the user's profile to route every
+        //    `npm install` through an attacker-controlled mirror.
+        progress?.update("checking package-manager config")
+        scanPackageManagerConfig(findings: &findings, errors: &errors)
+
+        // 8. AppleScript droppers — AMOS-family infostealers commonly stage `.scpt` payloads
+        //    in /tmp before running them via osascript.
+        progress?.update("checking AppleScript drops in /tmp")
+        scanAppleScriptDrops(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +292,231 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Recent TCC.db Mutations
+
+    /// macOS protects TCC.db via SIP, but every documented TCC bypass technique (CVE-2023-32369,
+    /// CVE-2024-44131, the "Hot Spare" trick) ends in modifying it. The system TCC.db is
+    /// effectively never written by anything other than tccd itself; if it changed in the last
+    /// few days without a macOS update, something interesting happened.
+    private func scanRecentTCCMutations(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dbs = [
+            ("user TCC.db", "\(home)/Library/Application Support/com.apple.TCC/TCC.db"),
+            ("system TCC.db", "/Library/Application Support/com.apple.TCC/TCC.db"),
+        ]
+
+        let fm = FileManager.default
+        for (label, path) in dbs {
+            guard fm.fileExists(atPath: path),
+                  let attrs = try? fm.attributesOfItem(atPath: path),
+                  let modDate = attrs[.modificationDate] as? Date else { continue }
+
+            let hoursSinceMod = -modDate.timeIntervalSinceNow / 3600
+            // The user DB legitimately changes every time you toggle a permission, so a 7-day
+            // window for "recent" keeps false positives down. The system DB should almost never
+            // change outside of an OS update — flag tighter (3-day window) and higher severity.
+            let isSystem = label.hasPrefix("system")
+            let windowHours: Double = isSystem ? 72 : 168
+
+            if hoursSinceMod < windowHours {
+                // Cross-check: was there a macOS install in roughly the same window?
+                let installLog = "/var/log/install.log"
+                let logChanged = (try? fm.attributesOfItem(atPath: installLog))?[.modificationDate] as? Date
+                let recentInstall: Bool = {
+                    guard let d = logChanged else { return false }
+                    return -d.timeIntervalSinceNow / 3600 < windowHours
+                }()
+                if isSystem && recentInstall { continue }
+
+                let ageStr = hoursSinceMod < 24
+                    ? "\(Int(hoursSinceMod))h ago"
+                    : "\(Int(hoursSinceMod / 24))d ago"
+                findings.append(Finding(
+                    severity: isSystem ? .high : .low,
+                    category: .permission,
+                    title: "\(label) was modified recently (\(ageStr))",
+                    detail: isSystem
+                        ? "System TCC.db should only change during macOS updates. Recent unexplained mutation can indicate a TCC bypass exploit."
+                        : "User TCC.db changed — normal if you recently granted/revoked a permission, suspicious otherwise.",
+                    path: path,
+                    remediation: isSystem
+                        ? "Check System Settings > Privacy & Security for unexpected grants; consider a full security review."
+                        : "If you didn't grant or revoke a permission recently, review System Settings > Privacy & Security."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Package-Manager Config Hijacks
+
+    /// Supply-chain campaigns (recent `npm` 2024-2025 events, PyPI typosquatting) often plant a
+    /// registry override or pre-install hook in the user's per-tool config files. These look
+    /// boring to a developer but reroute every package install through attacker infra.
+    private func scanPackageManagerConfig(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct ConfigCheck {
+            let path: String
+            let label: String
+            let registryKey: String
+            let trustedRegistries: [String]
+        }
+
+        let checks: [ConfigCheck] = [
+            ConfigCheck(
+                path: "\(home)/.npmrc",
+                label: "npm",
+                registryKey: "registry=",
+                trustedRegistries: [
+                    "https://registry.npmjs.org",
+                    "https://registry.yarnpkg.com",
+                    "https://npm.pkg.github.com",
+                ]
+            ),
+            ConfigCheck(
+                path: "\(home)/.yarnrc",
+                label: "yarn (classic)",
+                registryKey: "registry ",
+                trustedRegistries: [
+                    "https://registry.yarnpkg.com",
+                    "https://registry.npmjs.org",
+                ]
+            ),
+            ConfigCheck(
+                path: "\(home)/.yarnrc.yml",
+                label: "yarn (berry)",
+                registryKey: "npmRegistryServer:",
+                trustedRegistries: [
+                    "https://registry.yarnpkg.com",
+                    "https://registry.npmjs.org",
+                ]
+            ),
+            ConfigCheck(
+                path: "\(home)/.config/pip/pip.conf",
+                label: "pip",
+                registryKey: "index-url",
+                trustedRegistries: ["https://pypi.org", "https://files.pythonhosted.org"]
+            ),
+            ConfigCheck(
+                path: "\(home)/.pip/pip.conf",
+                label: "pip",
+                registryKey: "index-url",
+                trustedRegistries: ["https://pypi.org", "https://files.pythonhosted.org"]
+            ),
+        ]
+
+        for check in checks {
+            guard fm.fileExists(atPath: check.path),
+                  let content = try? String(contentsOfFile: check.path, encoding: .utf8) else { continue }
+
+            for rawLine in content.split(separator: "\n") {
+                let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") { continue }
+
+                // Registry override
+                let lower = line.lowercased()
+                if lower.contains(check.registryKey.lowercased()) {
+                    let trusted = check.trustedRegistries.contains { lower.contains($0.lowercased()) }
+                    if !trusted {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "\(check.label) registry overridden to an untrusted host",
+                            detail: "Line: \(String(line.prefix(120)))",
+                            path: check.path,
+                            remediation: "Inspect \(check.path) — every `\(check.label) install` is going through this host. Remove the line if it isn't your employer's mirror."
+                        ))
+                    }
+                }
+
+                // Proxy override — same idea, lets attacker intercept all package traffic
+                if (lower.contains("proxy=") || lower.contains("proxy ")) &&
+                   !lower.contains("noproxy") && !lower.contains("no_proxy") {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "\(check.label) HTTP proxy is configured",
+                        detail: "Line: \(String(line.prefix(120))) — every package install will route through this proxy",
+                        path: check.path,
+                        remediation: "Verify the proxy is yours. Remove the line otherwise: nano \(check.path)"
+                    ))
+                }
+
+                // The "always-auth + custom registry" combo is how npm credential-stealing
+                // proxies harvest CI tokens.
+                if lower.contains("always-auth") && lower.contains("true") {
+                    findings.append(Finding(
+                        severity: .low, category: .networkActivity,
+                        title: "\(check.label) is configured to always send auth tokens",
+                        detail: "Line: \(String(line.prefix(120))) — paired with a custom registry this leaks credentials on every install",
+                        path: check.path,
+                        remediation: "Remove if not required by your registry: nano \(check.path)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - AppleScript drops in /tmp
+
+    /// Atomic macOS Stealer (AMOS) and its variants ship a stage-1 payload that writes a `.scpt`
+    /// file to /tmp, then runs it with `osascript`. The script typically prompts for the user's
+    /// password via `display dialog` and pipes the answer to `curl` for exfiltration. A `.scpt`
+    /// file sitting in /tmp is, on its own, a very strong indicator.
+    private func scanAppleScriptDrops(findings: inout [Finding], errors: inout [String]) {
+        let dirs = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries {
+                let lower = entry.lowercased()
+                guard lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript") else { continue }
+
+                let path = "\(dir)/\(entry)"
+                var detail = "AppleScript file in temp directory"
+
+                // Read first ~4KB and look for the canonical AMOS markers (display dialog asking
+                // for the user's password). Helps us distinguish "developer test script" from
+                // "active stealer payload" in the same finding.
+                if let fh = FileHandle(forReadingAtPath: path) {
+                    let head = fh.readData(ofLength: 4096)
+                    fh.closeFile()
+                    if let str = String(data: head, encoding: .utf8) {
+                        let amosMarkers = [
+                            "display dialog",
+                            "with hidden answer",
+                            "System Preferences", // typical lure
+                            "curl",
+                            "do shell script",
+                        ]
+                        let hit = amosMarkers.filter { str.localizedCaseInsensitiveContains($0) }
+                        if hit.count >= 2 {
+                            detail += " — markers: \(hit.joined(separator: ", "))"
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "AppleScript dropper in temp directory: \(entry)",
+                                detail: detail,
+                                path: path,
+                                remediation: "Inspect: cat \"\(path)\" — then delete. Likely AMOS-family stealer stage 1."
+                            ))
+                            continue
+                        }
+                    }
+                }
+
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousFile,
+                    title: "AppleScript file in temp directory: \(entry)",
+                    detail: detail,
+                    path: path,
+                    remediation: "Inspect: cat \"\(path)\""
+                ))
+            }
         }
     }
 

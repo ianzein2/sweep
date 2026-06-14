@@ -434,6 +434,201 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 DPRK-linked macOS malware (Contagious Interview campaign)
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "n2", "p2", "node_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/p2.tar.gz",
+                "~/Library/Application Support/.n2",
+                "~/.n2",
+                "~/.p2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["InvisibleFerret", "invisible_ferret", "pay", "bow", "mlip"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pay",
+                "/private/tmp/.bow",
+                "/private/tmp/.mlip",
+                "~/.config/pyp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK 2025)",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "CameraAccess",
+                           "FROSTYFERRET", "FrostyFerret_UI"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.dropper",
+                "~/Library/Application Support/com.zoom.us/.installer",
+                "~/Library/Group Containers/group.com.apple.secure-control-center-preferences/.cache",
+            ],
+            launchAgentLabels: ["com.apple.chromeupdate"]
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (DPRK 2024)",
+            processNames: ["HiddenRisk", "growth", "SaveLoadConfig", "PDF Reader"],
+            bundleIdentifiers: ["com.hiddenrisk.loader"],
+            filePaths: [
+                "~/Library/Group Containers/com.apple.systempreferences.shared/zsh_env",
+                "/private/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.apple.systempreferences.shared"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK 2024)",
+            processNames: ["TodoSwift", "todoswift", "Todoist_Bot", "TodoUpdater"],
+            bundleIdentifiers: ["com.todoswift.app"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: ["com.todoswift.agent"]
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK 2025)",
+            processNames: ["NimDoor", "nimdoor", "GoogIeHelper", "ZoomVideoExtension",
+                           "Trojan.MacOS.NimDoor", "tlsstub"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "/private/tmp/.tls",
+                "~/Library/LaunchAgents/com.google.helper.plist",
+                "~/Library/Application Support/Google/.cookies",
+            ],
+            launchAgentLabels: ["com.google.helper", "com.zoom.update.helper"]
+        ),
+        SpywareSignature(
+            name: "RustDoor (ALPHV/BlackCat 2024)",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater",
+                           "ZoomHotfix", "DO_NOT_RUN_ChromeUpdates"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.test",
+                "~/.test",
+                "/private/var/tmp/.rust",
+                "~/Library/Application Support/.rustdoor",
+            ],
+            launchAgentLabels: ["com.apple.systemupdater"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZ", "hzrat", "hz_rat", "OINK", "OinkAndStuff"],
+            bundleIdentifiers: ["com.oink.app"],
+            filePaths: [
+                "~/Library/Application Support/.HZ",
+                "/private/tmp/.hz_rat",
+            ],
+            launchAgentLabels: ["com.oink.agent"]
+        ),
+        SpywareSignature(
+            name: "NotLockBit (macOS 2024)",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macho", "lockbit_arm64"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.lockbit",
+                "~/Library/Application Support/.lockbit",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer (2024)",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aphubd",
+                           "appleprocesshubstealer"],
+            bundleIdentifiers: ["com.apple.processhub"],  // intentional Apple-mimicry
+            filePaths: [
+                "~/Library/Application Support/.aphub",
+                "/private/tmp/.aphub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "0bj3ctivityStealer (Banshee v2)",
+            processNames: ["Obj3ctivity", "0bj3ctivity", "obj3ctivity_stealer",
+                           "objectivity_helper"],
+            bundleIdentifiers: ["com.obj3ctivity.stealer"],
+            filePaths: [
+                "/private/tmp/.obj3",
+                "~/Library/Application Support/.Obj3ctivity",
+            ],
+            launchAgentLabels: ["com.obj3ctivity.service"]
+        ),
+        SpywareSignature(
+            name: "Crystal Stealer (Poseidon variant)",
+            processNames: ["Crystal", "crystal_stealer", "CrystalCalc", "CrystalHelper"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.service"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS variant)",
+            processNames: ["LightSpy", "lightspy", "lspy_agent",
+                           "LightSpyMac", "Wireless Diagnostics"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Caches/com.apple.WirelessDiagnostics/.lspy",
+            ],
+            launchAgentLabels: ["com.apple.wireless.diagnostics"]
+        ),
+        SpywareSignature(
+            name: "DarkGate (macOS port 2024)",
+            processNames: ["DarkGate", "darkgate", "darkgate_loader", "AutoIt_Helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.darkgate",
+                "~/Library/Application Support/.darkgate",
+            ],
+            launchAgentLabels: ["com.darkgate.agent"]
+        ),
+        SpywareSignature(
+            name: "macOS.Aladdin Loader (2024)",
+            processNames: ["Aladdin", "aladdin_loader", "aladdin_agent"],
+            bundleIdentifiers: ["com.aladdin.loader"],
+            filePaths: [
+                "/private/tmp/.aladdin",
+                "~/Library/Application Support/.Aladdin",
+            ],
+            launchAgentLabels: ["com.aladdin.service"]
+        ),
+        SpywareSignature(
+            name: "ThiefQuest / EvilQuest",
+            processNames: ["thiefquest", "ThiefQuest", "evilquest", "EvilQuest",
+                           "abtpd", "qnodejs", "Patch", "questd"],
+            bundleIdentifiers: ["com.apple.abtpd"],  // Apple-mimicry
+            filePaths: [
+                "~/Library/Application Support/.AppQuest",
+                "/Library/AppQuest",
+                "~/Library/abtpd.plist",
+            ],
+            launchAgentLabels: ["com.apple.abtpd", "com.apple.questd"]
+        ),
+        SpywareSignature(
+            name: "BlueNoroff RustBucket Updated (2024)",
+            processNames: ["SwiftLoader", "PDFViewer", "ZoomIntegration",
+                           "InternalPDF24Viewer", "stockmonitorapp"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.apple.swiftloader.plist",
+                "~/Library/Metadata/.metadata_never_index",
+                "/private/var/tmp/.rust2",
+            ],
+            launchAgentLabels: ["com.apple.swiftloader", "com.zoom.update"]
+        ),
+        SpywareSignature(
+            name: "macOS.GoSorry (2024)",
+            processNames: ["GoSorry", "gosorry", "go_sorry_agent"],
+            bundleIdentifiers: ["com.gosorry.agent"],
+            filePaths: ["/private/tmp/.gosorry"],
+            launchAgentLabels: ["com.gosorry.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +645,15 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 observed mimicry from BlueNoroff/RustBucket/NimDoor campaigns
+        "com.apple.swiftloader",
+        "com.apple.chromeupdate",
+        "com.apple.processhub",
+        "com.apple.systempreferences.shared",
+        "com.apple.wireless.diagnostics",
+        "com.apple.abtpd",
+        "com.apple.questd",
+        "com.apple.systemupdater",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +678,13 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 Apple-process mimicry observed in DPRK / BlueNoroff campaigns.
+        // 3rd-party app mimicry (ZoomHotfix, ChromeUpdate, etc.) lives in SpywareSignature.known.
+        "softwareupdated_agent", // Real: softwareupdated (NimDoor appends _agent)
+        "xprotect_remediator",   // Real: XProtect Remediator (no underscore)
+        "tccd_helper",           // Real: tccd (no helper)
+        "endpointsecurityd",     // Not a real Apple daemon
+        "appleeventsd_helper",   // Real: appleeventsd
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

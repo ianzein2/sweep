@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Items (SMAppService)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking /etc/synthetic.conf")
+        scanSyntheticConf(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +683,195 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Background Items (SMAppService, macOS Ventura+)
+
+    /// On macOS Ventura+ apps install background tasks via SMAppService — these show up under
+    /// System Settings > General > Login Items & Extensions rather than ~/Library/LaunchAgents.
+    /// `sfltool dumpbtm` is the canonical way to enumerate them. Many modern persistence
+    /// implants (RustBucket Updated, FlexibleFerret) prefer this surface because users rarely
+    /// audit it. The BTM database lives at:
+    ///   ~/Library/Application Support/com.apple.backgroundtaskmanagementagent/BackgroundItems-v*.btm
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // sfltool dumpbtm prints records separated by blank lines. Each record has fields like:
+        //   Name: ...
+        //   Identifier: ...
+        //   Type: ...
+        //   Disposition: ...
+        //   URL: file:///...
+        let records = result.stdout.components(separatedBy: "\n\n")
+        for record in records {
+            let lines = record.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+            var name = ""
+            var identifier = ""
+            var url = ""
+            var disposition = ""
+            for line in lines {
+                if line.hasPrefix("Name:") { name = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces) }
+                else if line.hasPrefix("Identifier:") { identifier = String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces) }
+                else if line.hasPrefix("URL:") { url = String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces) }
+                else if line.hasPrefix("Disposition:") { disposition = String(line.dropFirst(12)).trimmingCharacters(in: .whitespaces) }
+            }
+            if identifier.isEmpty && name.isEmpty { continue }
+
+            // Skip Apple-shipped items
+            if identifier.hasPrefix("com.apple.") &&
+               !SpywareSignature.isFakeAppleBundleId(identifier) { continue }
+
+            // Known spyware hiding as a background item
+            if let sig = SpywareSignature.match(bundleId: identifier) ?? SpywareSignature.match(label: identifier) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware as Background Item: \(sig.name)",
+                    detail: "Name: \(name), Identifier: \(identifier), URL: \(url)",
+                    path: extractFilePath(fromURL: url),
+                    remediation: "Remove in System Settings > General > Login Items & Extensions, then delete the app"
+                ))
+                continue
+            }
+
+            // Fake-Apple background item — the System Settings UI shows "Apple" next to these
+            if SpywareSignature.isFakeAppleBundleId(identifier) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Item using fake Apple identifier",
+                    detail: "Name: \(name), Identifier: \(identifier) — not a legitimate Apple service",
+                    path: extractFilePath(fromURL: url),
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                continue
+            }
+
+            // Items whose URL points into a hidden path are highly suspicious
+            let urlPath = extractFilePath(fromURL: url) ?? ""
+            if !urlPath.isEmpty {
+                let isHiddenPath = urlPath.split(separator: "/").contains { $0.hasPrefix(".") }
+                if isHiddenPath {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Background Item points to hidden path",
+                        detail: "Name: \(name), Identifier: \(identifier), URL: \(url)",
+                        path: urlPath,
+                        remediation: "Investigate — legitimate apps don't install background items from hidden directories"
+                    ))
+                    continue
+                }
+
+                // Background items pointing at /tmp / /private/tmp are never legitimate
+                if urlPath.hasPrefix("/tmp/") || urlPath.hasPrefix("/private/tmp/") ||
+                   urlPath.hasPrefix("/var/tmp/") {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Background Item runs binary from a temp directory",
+                        detail: "Name: \(name), URL: \(url) — temp-dir persistence is a strong malware indicator",
+                        path: urlPath,
+                        remediation: "Remove in System Settings > General > Login Items & Extensions"
+                    ))
+                    continue
+                }
+            }
+
+            // Background items whose binary is unsigned and active — worth a manual review.
+            // `Disposition` includes the word "enabled" when the item is currently running.
+            if let urlPath = extractFilePath(fromURL: url),
+               FileManager.default.fileExists(atPath: urlPath),
+               disposition.lowercased().contains("enabled") {
+                let isTrustedPath = trustedPathPrefixes.contains { urlPath.hasPrefix($0) }
+                if !isTrustedPath && !checkIsSigned(path: urlPath) {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Active Background Item is unsigned",
+                        detail: "Name: \(name), Identifier: \(identifier)",
+                        path: urlPath,
+                        remediation: "Verify this app is legitimate — remove in System Settings > General > Login Items & Extensions if not"
+                    ))
+                }
+            }
+        }
+    }
+
+    /// `sfltool dumpbtm` reports URLs like `file:///Users/x/Applications/foo.app`.
+    /// Pull the bare path so downstream code can stat / open it.
+    private func extractFilePath(fromURL url: String) -> String? {
+        guard !url.isEmpty else { return nil }
+        if url.hasPrefix("file://") {
+            return URL(string: url)?.path
+        }
+        return url.hasPrefix("/") ? url : nil
+    }
+
+    // MARK: - Folder Actions (AppleScript persistence)
+
+    /// Folder Action scripts under ~/Library/Scripts/Folder Action Scripts/ run whenever
+    /// a specific folder is modified. This is an old AppleScript persistence vector that
+    /// has been re-discovered by modern stealers (it's not flagged by most AV tools).
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let folderActionDirs = [
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+
+        for dir in folderActionDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let scriptPath = "\(dir)/\(entry)"
+                // We can't read the contents of compiled .scpt as plain text, but any file here
+                // ties script execution to folder events — surface every entry for review.
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed",
+                    detail: "Script: \(entry) — runs whenever its bound folder is modified (AppleScript persistence)",
+                    path: scriptPath,
+                    remediation: "Review with Script Editor or `osadecompile \"\(scriptPath)\"`, then remove if unexpected"
+                ))
+            }
+        }
+
+        // Folder Action bindings are stored in this plist; presence means at least one folder
+        // has a script attached even if the script lives outside the Scripts directory.
+        let bindingsPlist = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: bindingsPlist),
+           let data = fm.contents(atPath: bindingsPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let folders = plist["FolderActions"] as? [[String: Any]], !folders.isEmpty {
+            findings.append(Finding(
+                severity: .low, category: .persistence,
+                title: "Folder Actions are configured (\(folders.count) folder binding(s))",
+                detail: "AppleScript runs on file-system events — legitimate if you set it up",
+                path: bindingsPlist,
+                remediation: "Review: open ~/Library/Workflows/Applications/Folder\\ Actions or `defaults read com.apple.FolderActionsDispatcher`"
+            ))
+        }
+    }
+
+    // MARK: - /etc/synthetic.conf (firmlink persistence)
+
+    /// /etc/synthetic.conf lets you create firmlinks at the root of the read-only system volume.
+    /// Apple ships an empty file by default. An entry here can make an attacker-controlled path
+    /// appear to live at /something on the system volume, surviving reboots and hiding from
+    /// most file-system inventories. Always surface for review.
+    private func scanSyntheticConf(findings: inout [Finding], errors: inout [String]) {
+        let path = "/etc/synthetic.conf"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        let lines = content.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        let userEntries = lines.filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        if !userEntries.isEmpty {
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "/etc/synthetic.conf contains custom entries",
+                detail: "\(userEntries.count) firmlink entr\(userEntries.count == 1 ? "y" : "ies"): \(userEntries.prefix(3).joined(separator: "; "))",
+                path: path,
+                remediation: "Review and clear if unexpected — firmlinks survive reboot and can hide attacker paths under /"
             ))
         }
     }

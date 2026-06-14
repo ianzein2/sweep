@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version freshness")
+        checkMacOSVersion(findings: &findings, errors: &errors)
+
+        progress?.update("checking OpenSSH version (CVE-2024-6387)")
+        checkOpenSSHVersion(findings: &findings, errors: &errors)
+
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My")
+        checkFindMy(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessments")
+        checkGatekeeperAssessments(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +461,227 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version Freshness
+
+    /// macOS only ships security patches for the current and two previous major releases.
+    /// Running an older release means publicly-disclosed CVEs (incl. WebKit RCE chains used by
+    /// nation-state spyware) will never be fixed. We compare against a built-in floor; the floor
+    /// gets bumped every time we cut a Sweep release.
+    private func checkMacOSVersion(findings: inout [Finding], errors: inout [String]) {
+        // Floor: macOS 13 (Ventura) — anything older stopped receiving security updates in 2024.
+        // Updated 2026-06: macOS 13 Ventura goes EOL once Sequoia + 1 ships.
+        let minimumSupportedMajor = 13
+
+        let result = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        guard result.success else { return }
+        let version = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = version.split(separator: ".").compactMap { Int($0) }
+        guard let major = parts.first else { return }
+
+        if major < minimumSupportedMajor {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(version) no longer receives security updates",
+                detail: "Apple only patches the current and two previous major releases. Known CVEs on this version will not be fixed.",
+                path: nil,
+                remediation: "Upgrade: System Settings > General > Software Update"
+            ))
+            return
+        }
+
+        // Even on a supported major, very old point releases miss patches like CVE-2024-44131
+        // (WebKit) and CVE-2024-44171 (TCC bypass). Flag if the system hasn't checked for updates
+        // recently — proxy for "user is sitting on a stale install".
+        let lastCheck = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "LastSuccessfulDate"
+        ], timeout: 5)
+        if lastCheck.success {
+            let dateStr = lastCheck.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+            if let date = fmt.date(from: dateStr) {
+                let days = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+                if days > 60 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "Last successful software update check was \(days) days ago",
+                        detail: "Mac hasn't checked in with Apple's update server since \(dateStr) — recent CVE patches may be missing",
+                        path: nil,
+                        remediation: "Open System Settings > General > Software Update and let it refresh"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - OpenSSH version (CVE-2024-6387 regreSSHion)
+
+    /// CVE-2024-6387 ("regreSSHion") is a pre-auth RCE in OpenSSH server < 9.8p1. macOS shipped
+    /// OpenSSH 9.6 / 9.7 for a long stretch; users who have Remote Login enabled need the patch
+    /// that came with Sonoma 14.6.1 / Sequoia. We only fire if SSHD is actually accepting
+    /// connections — the client-side risk on macOS is minimal.
+    private func checkOpenSSHVersion(findings: inout [Finding], errors: inout [String]) {
+        let sshStatus = ShellRunner.run("/usr/sbin/systemsetup",
+                                        arguments: ["-getremotelogin"], timeout: 5)
+        guard sshStatus.success && sshStatus.stdout.lowercased().contains(": on") else { return }
+
+        let sshVersion = ShellRunner.run("/usr/bin/ssh", arguments: ["-V"], timeout: 3)
+        // ssh -V writes to stderr by convention
+        let versionStr = (sshVersion.stderr + sshVersion.stdout)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !versionStr.isEmpty else { return }
+
+        // Parse: "OpenSSH_9.7p1, LibreSSL ..." → 9 and 7
+        guard let underscore = versionStr.firstIndex(of: "_") else { return }
+        let after = versionStr[versionStr.index(after: underscore)...]
+        let numeric = after.prefix { $0.isNumber || $0 == "." }
+        let nums = numeric.split(separator: ".").compactMap { Int($0) }
+        guard nums.count >= 2 else { return }
+
+        // Upstream OpenSSH fixed CVE-2024-6387 in 9.8p1. Apple often backports security fixes
+        // without bumping the upstream version string, so an "old" version on a current macOS
+        // build may already be patched. We split the difference:
+        //   < 9.5 → definitively vulnerable (no Apple build ever ran this with a backport)
+        //   9.5–9.7 → "possibly vulnerable; update macOS"
+        let definitelyVulnerable = nums[0] < 9 || (nums[0] == 9 && nums[1] < 5)
+        let possiblyVulnerable = nums[0] == 9 && nums[1] >= 5 && nums[1] < 8
+
+        if definitelyVulnerable {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "OpenSSH \(numeric) is vulnerable to CVE-2024-6387 (regreSSHion) and Remote Login is ON",
+                detail: "Pre-auth RCE possible from the network. Sonoma 14.6.1 and Sequoia ship a patched OpenSSH.",
+                path: nil,
+                remediation: "Apply pending macOS updates (System Settings > General > Software Update) or disable Remote Login until patched"
+            ))
+        } else if possiblyVulnerable {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "OpenSSH \(numeric) may be vulnerable to CVE-2024-6387 with Remote Login ON",
+                detail: "Apple backports security fixes without bumping the OpenSSH version string. Confirm your macOS is on the build that includes the regreSSHion patch (Sonoma 14.6.1+ / Sequoia).",
+                path: nil,
+                remediation: "Apply pending macOS updates (System Settings > General > Software Update)"
+            ))
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    /// AirPlay Receiver lets nearby Apple devices stream to this Mac. It listens on TCP/UDP 5000
+    /// and 7000 and has had multiple CVEs (CVE-2025-24252 "AirBorne" was a wormable RCE). On a
+    /// general-use Mac it's an attack surface that's rarely needed.
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.RemoteManagement", "AirplayReceiverEnabled"
+        ], timeout: 5)
+
+        var enabled = false
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            enabled = (value == "1")
+        }
+        // Fallback: check ControlCenter prefs where the toggle has lived on Sonoma+.
+        if !enabled {
+            let cc = ShellRunner.run("/usr/bin/defaults", arguments: [
+                "read", "com.apple.controlcenter", "AirplayRecieverEnabledServerState"  // (typo is Apple's)
+            ], timeout: 5)
+            if cc.success && cc.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+                enabled = true
+            }
+        }
+
+        if enabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac accepts AirPlay streams (ports 5000/7000). Several CVEs in AirPlay (incl. CVE-2025-24252 \"AirBorne\") allowed RCE from nearby devices.",
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - Find My
+
+    /// Find My status. Disabled Find My means a stolen Mac can't be remotely locked or wiped,
+    /// and Activation Lock is off — anyone with physical access can wipe and resell. We surface
+    /// disabled state as informational so we don't pester users who've deliberately turned it off.
+    private func checkFindMy(findings: inout [Finding], errors: inout [String]) {
+        // Find My status is keyed off the iCloud account state in MobileMeAccounts.
+        let home = ShellRunner.realUserHome
+        let plistPath = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard FileManager.default.fileExists(atPath: plistPath) else {
+            // No iCloud account configured at all — surface as low.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "No iCloud account configured",
+                detail: "Find My, iCloud Keychain, and Activation Lock are unavailable without iCloud",
+                path: nil,
+                remediation: "Sign in: System Settings > Apple Account"
+            ))
+            return
+        }
+
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]] else { return }
+
+        var findMyEnabled = false
+        for account in accounts {
+            if let services = account["Services"] as? [[String: Any]] {
+                for service in services {
+                    let serviceName = (service["Name"] as? String) ?? ""
+                    if serviceName == "FIND_MY_MAC" {
+                        if let enabled = service["Enabled"] as? Bool {
+                            findMyEnabled = findMyEnabled || enabled
+                        }
+                    }
+                }
+            }
+        }
+
+        if !findMyEnabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "Stolen Mac can't be remotely locked, located, or wiped, and Activation Lock won't trigger",
+                path: nil,
+                remediation: "Enable: System Settings > Apple Account > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper per-app assessments
+
+    /// `spctl --status` only reports the global Gatekeeper toggle. But individual apps that the
+    /// user said "Open Anyway" on get permanent allow rules in /var/db/SystemPolicy. We surface
+    /// non-Apple developer entries so users can audit what they've previously approved.
+    private func checkGatekeeperAssessments(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--list", "--type", "execute"], timeout: 10)
+        guard result.success else { return }
+
+        var customAllowEntries = 0
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            // Lines look like: "<rule-id> allow execute anchor apple generic and certificate..."
+            // Apple-shipped entries reference "anchor apple" without further constraints.
+            if lineStr.contains("allow execute") && !lineStr.contains("anchor apple generic") &&
+               !lineStr.contains("anchor apple") {
+                customAllowEntries += 1
+            }
+        }
+
+        if customAllowEntries > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "\(customAllowEntries) custom Gatekeeper allow rule(s)",
+                detail: "These were created when you right-clicked > Open on unsigned/unnotarized apps. Each one bypasses Gatekeeper for that specific binary.",
+                path: nil,
+                remediation: "Review with `sudo spctl --list --type execute`. Remove unwanted rules: `sudo spctl --remove --type execute <rule-id>`"
+            ))
         }
     }
 

@@ -17,6 +17,29 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Chrome / Brave / Edge extension IDs that were confirmed malicious in the December 2024
+    /// Cyberhaven supply-chain campaign and follow-on takedowns through 2025. Detecting one of
+    /// these is high-confidence credential / cookie / session theft: rotate everything.
+    /// Source: Cyberhaven incident report, Secure Annex, Google CRX takedowns 2024-2025.
+    private let knownMaliciousExtensionIds: [String: String] = [
+        // Cyberhaven incident (December 2024) — confirmed compromised
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Cyberhaven Security Extension v24.10.4 (compromised Dec 2024)",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Reader Mode (compromised, Dec 2024)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Parrot Talks (compromised, Dec 2024)",
+        "kkjnodkjpcohbeokmjbpibjcofkjkbon": "Uvoice (compromised, Dec 2024)",
+        "oeiomhmbaapihbilkfkhmlajkeegnjhe": "Internxt VPN (compromised, Dec 2024)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "VPNCity (compromised, Dec 2024)",
+        "egmennebgadmncfjafcemlecimkepcle": "Castorus (compromised, Dec 2024)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Wayin AI (compromised, Dec 2024)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Search Copilot AI (compromised, Dec 2024)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "Rewards Search Automator (compromised, Dec 2024)",
+        "bibjgkidgpfbblifamdlkdlhgihmfohh": "Bookmark Favicon Changer (compromised, Dec 2024)",
+        // Additional confirmed-bad IDs from 2024 large-scale removals
+        "fpngnlpmkfkhodklbljnncdcmkiopide": "Save to Notion (typosquat, removed 2024)",
+        "ofnenbahdiljmegnemfbkhpngldajipa": "Internxt Drive (compromised variant)",
+        "miglaibdlgminlepgeifekifakochlka": "Tackker (data theft, removed 2024)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +166,20 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-malicious extension IDs short-circuit straight to a HIGH finding
+                    // before we even attempt to parse the manifest.
+                    if let description = knownMaliciousExtensionIds[extId] {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known malicious ID",
+                            detail: "\(description) — installed in profile \"\(profile)\"",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove now: chrome://extensions. Rotate any session cookies / saved passwords this extension could have read."
+                        ))
+                        // Don't dedupe-skip subsequent profiles — we want to report each instance
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
