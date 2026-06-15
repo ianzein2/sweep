@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in persistence (QuickLook, screensaver, etc.)")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking authorization plugins")
+        scanAuthorizationPlugins(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript / Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,283 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plug-in Persistence (QuickLook, Screen Savers, ColorPickers, Spotlight, Audio plug-ins, PreferencePanes)
+
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        // macOS executes user-installed bundles inside several plug-in directories whenever the
+        // associated host triggers them. Quick Look generators run when Finder previews a file;
+        // screen savers run when the screen locks; color pickers run inside any app that opens
+        // an NSColorPanel; audio plug-ins are loaded by every CoreAudio client. These directories
+        // are empty by default on a fresh macOS install. A bundle here is uncommon legitimate
+        // software (BetterZip QuickLook generator, custom screen savers) but also a quiet
+        // persistence channel used by Pegasus-class implants and some commodity stalkerware.
+        let home = ShellRunner.realUserHome
+
+        struct PluginDir {
+            let path: String
+            let label: String
+            let severity: Severity
+            let knownLegit: [String]
+        }
+
+        let pluginDirs: [PluginDir] = [
+            // Quick Look generators load inside Finder when previewing a file — a hostile
+            // generator runs code as soon as the user hits Space on a crafted document.
+            PluginDir(
+                path: "\(home)/Library/QuickLook",
+                label: "Quick Look plug-in (user)",
+                severity: .medium,
+                knownLegit: ["BetterZip", "QLMarkdown", "QLStephen", "QLColorCode", "QLImageSize",
+                             "QLPrettyPatch", "QLRichLink", "Provisioning", "WebPQuickLook"]
+            ),
+            PluginDir(
+                path: "/Library/QuickLook",
+                label: "Quick Look plug-in (system)",
+                severity: .medium,
+                knownLegit: ["BetterZip", "QLMarkdown", "QLStephen", "QLColorCode", "QLImageSize",
+                             "QLPrettyPatch", "QLRichLink", "Provisioning", "WebPQuickLook"]
+            ),
+            // Screen savers (.saver bundles) run when the screen locks — perfect for keyloggers
+            // that want to capture activity while the user is "away".
+            PluginDir(
+                path: "\(home)/Library/Screen Savers",
+                label: "Screen Saver bundle (user)",
+                severity: .medium,
+                knownLegit: ["Aerial", "Brooklyn", "iScreensaver", "WordClock", "Padbury"]
+            ),
+            PluginDir(
+                path: "/Library/Screen Savers",
+                label: "Screen Saver bundle (system)",
+                severity: .medium,
+                knownLegit: ["Aerial", "Brooklyn", "iScreensaver", "Apple"]
+            ),
+            // Color picker bundles load into any app that opens NSColorPanel — extremely common
+            // injection target for image editors, but rare to have third-party here.
+            PluginDir(
+                path: "\(home)/Library/ColorPickers",
+                label: "Color Picker plug-in (user)",
+                severity: .medium,
+                knownLegit: ["Pro", "Xscope", "Sip", "ColorSlurp"]
+            ),
+            PluginDir(
+                path: "/Library/ColorPickers",
+                label: "Color Picker plug-in (system)",
+                severity: .medium,
+                knownLegit: []
+            ),
+            // Spotlight importers (.mdimporter) run inside the mds_stores daemon — that daemon
+            // already has access to virtually every file on disk.
+            PluginDir(
+                path: "\(home)/Library/Spotlight",
+                label: "Spotlight importer (user)",
+                severity: .medium,
+                knownLegit: []
+            ),
+            PluginDir(
+                path: "/Library/Spotlight",
+                label: "Spotlight importer (system)",
+                severity: .medium,
+                knownLegit: ["Microsoft", "Office", "Apple"]
+            ),
+            // CoreAudio plug-ins load in every audio-playing process; weaponised by stealers
+            // to dump microphone capture under another app's identity.
+            PluginDir(
+                path: "\(home)/Library/Audio/Plug-Ins/HAL",
+                label: "Audio HAL plug-in (user)",
+                severity: .medium,
+                knownLegit: ["BlackHole", "Loopback", "Soundflower", "Krisp", "iShowU",
+                             "BackgroundMusic", "Rogue Amoeba"]
+            ),
+            PluginDir(
+                path: "/Library/Audio/Plug-Ins/HAL",
+                label: "Audio HAL plug-in (system)",
+                severity: .medium,
+                knownLegit: ["BlackHole", "Loopback", "Soundflower", "Krisp", "iShowU",
+                             "BackgroundMusic", "Rogue Amoeba"]
+            ),
+            // Preference panes load inside System Settings with elevated trust. Many legitimate
+            // utilities ship one (Flash Player, Java, Logitech Options, etc.).
+            PluginDir(
+                path: "/Library/PreferencePanes",
+                label: "System Preferences pane",
+                severity: .low,
+                knownLegit: ["Logitech", "TeXDist", "Java", "Flash", "1Password", "Tuxera",
+                             "Paragon", "Wacom", "FUSE", "Mosh", "Backblaze"]
+            ),
+            PluginDir(
+                path: "\(home)/Library/PreferencePanes",
+                label: "System Preferences pane (user)",
+                severity: .medium,
+                knownLegit: []
+            ),
+            // Internet Plug-Ins are obsolete (NPAPI/WebPlugin) but the directory is still scanned
+            // by some helper apps — a binary here on a modern Mac is almost certainly stale or hostile.
+            PluginDir(
+                path: "\(home)/Library/Internet Plug-Ins",
+                label: "Internet Plug-In (user)",
+                severity: .medium,
+                knownLegit: []
+            ),
+            PluginDir(
+                path: "/Library/Internet Plug-Ins",
+                label: "Internet Plug-In (system)",
+                severity: .low,
+                knownLegit: ["Default", "QuickTime", "iPhotoPhotocast"]
+            ),
+            // Contextual menu items (CMM) — long-deprecated, but the directory persists.
+            PluginDir(
+                path: "/Library/Contextual Menu Items",
+                label: "Contextual Menu plug-in",
+                severity: .high,
+                knownLegit: []
+            ),
+        ]
+
+        let fm = FileManager.default
+        for dir in pluginDirs {
+            guard fm.fileExists(atPath: dir.path),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+
+            for entry in contents where !entry.hasPrefix(".") {
+                let entryPath = "\(dir.path)/\(entry)"
+                let lower = entry.lowercased()
+
+                // Skip well-known legitimate bundles (substring match because
+                // versioned filenames like "Aerial-3.2.qlgenerator" exist).
+                let isKnown = dir.knownLegit.contains(where: { lower.contains($0.lowercased()) })
+                if isKnown { continue }
+
+                // Cross-reference filename against known-spyware process names.
+                let matchesSpyware = SpywareSignature.match(processName: entry) != nil ||
+                    SpywareSignature.known.contains(where: { sig in
+                        sig.processNames.contains(where: { lower.contains($0.lowercased()) })
+                    })
+
+                let title = matchesSpyware
+                    ? "Known spyware in \(dir.label)"
+                    : "\(dir.label) bundle present"
+                let severity: Severity = matchesSpyware ? .high : dir.severity
+
+                findings.append(Finding(
+                    severity: severity, category: .persistence,
+                    title: title,
+                    detail: "\(entry) installed in \(dir.path) — this plug-in directory auto-loads bundles" +
+                            (matchesSpyware ? " and matches a known spyware family" : ""),
+                    path: entryPath,
+                    remediation: matchesSpyware
+                        ? "Remove: sudo rm -rf \"\(entryPath)\""
+                        : "Verify this plug-in is something you installed: ls -la \"\(entryPath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Authorization Plugins
+
+    private func scanAuthorizationPlugins(findings: inout [Finding], errors: inout [String]) {
+        // /Library/Security/SecurityAgentPlugins/ holds bundles loaded by SecurityAgent during
+        // login, sudo prompts, and authorisation dialogs. A custom plugin sees the user's
+        // typed password — this is the same channel JAMF Connect / NoMAD use legitimately, but
+        // it's also been weaponised (FinFisher, sshlogin variants). The directory is empty on
+        // a stock macOS install.
+        let pluginDir = "/Library/Security/SecurityAgentPlugins"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: pluginDir),
+              let contents = try? fm.contentsOfDirectory(atPath: pluginDir) else { return }
+
+        let knownLegit: [String] = [
+            "JamfConnectLogin", "JamfConnect", "NoMADLoginAD", "NoMADLogin",
+            "Crypt", "DEPNotify", "Outset", "MacOS-MDM",
+        ]
+
+        for entry in contents where !entry.hasPrefix(".") {
+            let entryPath = "\(pluginDir)/\(entry)"
+            let lower = entry.lowercased()
+            let isKnown = knownLegit.contains(where: { lower.contains($0.lowercased()) })
+
+            if isKnown {
+                // Even legit plugins are worth surfacing as informational; the user should know
+                // their login screen is loading third-party code.
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Authorization plugin loaded at login (known: \(entry))",
+                    detail: "Plugin at \(entryPath) runs during authorization prompts — verify it was installed intentionally (often deployed by MDM).",
+                    path: entryPath,
+                    remediation: "If you're not enrolled in an MDM/SSO solution that installed this, investigate immediately"
+                ))
+            } else {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Unknown authorization plugin loaded at login",
+                    detail: "Plugin \(entry) — SecurityAgent loads this bundle during password prompts; it can intercept what the user types.",
+                    path: entryPath,
+                    remediation: "Remove if not installed by your IT/MDM: sudo rm -rf \"\(entryPath)\""
+                ))
+            }
+        }
+
+        // Inspect /etc/authorization.plist for tampered authorization rights. The system.login.console
+        // rule normally evaluates "loginwindow:login"; rules that reference a non-Apple plugin are
+        // a strong privilege-escalation indicator.
+        let authPlist = "/private/var/db/auth.db"
+        if fm.fileExists(atPath: authPlist) {
+            let result = ShellRunner.run("/usr/bin/sqlite3", arguments: [
+                authPlist,
+                "SELECT mechanisms.mechanism FROM mechanisms, rules_mechanisms_map, rules " +
+                "WHERE rules_mechanisms_map.r_id = rules.id AND rules_mechanisms_map.m_id = mechanisms.id " +
+                "AND rules.name = 'system.login.console';",
+            ], timeout: 5)
+            if result.success {
+                for line in result.stdout.split(separator: "\n") {
+                    let mech = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if mech.isEmpty { continue }
+                    // Default mechanisms all start with "builtin:" or "loginwindow:" or "MCXMechanism" or "HomeDirMechanism".
+                    let trusted = mech.hasPrefix("builtin:") || mech.hasPrefix("loginwindow:") ||
+                        mech.hasPrefix("push:") || mech.hasPrefix("MCXMechanism") ||
+                        mech.hasPrefix("HomeDirMechanism") || mech.hasPrefix("CryptoTokenKit:") ||
+                        mech.hasPrefix("KerberosAgent:") || mech.contains("JamfConnect") ||
+                        mech.contains("NoMAD")
+                    if !trusted {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Custom login authorization mechanism",
+                            detail: "system.login.console references non-standard mechanism: \(mech)",
+                            path: nil,
+                            remediation: "Audit /var/db/auth.db rules — login mechanisms see typed credentials"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Folder Actions / AppleScript persistence
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach an AppleScript to a folder and run it on every change. They're
+        // enabled by ~/Library/Application Scripts (compiled scripts) plus the Folder Actions
+        // Dispatcher. Attackers have used this to run shell from "Downloads added" events.
+        let home = ShellRunner.realUserHome
+        let scriptDirs = [
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+        for dir in scriptDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed",
+                    detail: "\(entry) in \(dir) — Folder Actions run AppleScript on file system events",
+                    path: "\(dir)/\(entry)",
+                    remediation: "Inspect: osadecompile \"\(dir)/\(entry)\" — or open with Script Editor"
+                ))
+            }
         }
     }
 

@@ -434,6 +434,350 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS malware families documented by Objective-See, Mandiant,
+        // SentinelOne, Jamf, Kaspersky, Sekoia, and Unit 42.
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            processNames: ["NimDoor", "nimdoor", "googkeyhelper", "GoogleSyncHelper", "CoreKitAgent"],
+            bundleIdentifiers: ["com.google.update", "com.zoom.helper"],
+            filePaths: [
+                "~/.config/zoom/.helper",
+                "/private/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.google.update.plist",
+            ],
+            launchAgentLabels: ["com.google.update", "com.zoom.helper"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "SafariUpdater", "ChromeUpdate"],
+            bundleIdentifiers: ["com.apple.safariupdate", "com.safari.update"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Downloads/Safari Update.dmg",
+                "~/Library/Application Support/.frigid",
+            ],
+            launchAgentLabels: ["com.safari.updater"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "vid_install", "Visual Studio Code Helper"],
+            bundleIdentifiers: ["com.beavertail.agent"],
+            filePaths: [
+                "/private/tmp/.beaver",
+                "~/Library/Application Support/.beavertail",
+                "~/.npm/_logs/.beaver",
+            ],
+            launchAgentLabels: ["com.beaver.service"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyvenv-cfg", "tigerWalker"],
+            bundleIdentifiers: ["com.invisible.ferret"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.ferret",
+                "~/.pylib/.ferret",
+            ],
+            launchAgentLabels: ["com.invisible.ferret"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret (DPRK)",
+            processNames: ["FlexibleFerret", "flexibleferret", "FROSTYFERRET_UI", "ChromeUpdate",
+                           "CameraAccess", "VirtualMeeting"],
+            bundleIdentifiers: ["com.apple.ChromeUpdate"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/.ferretcache",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZ-RAT", "hzrat", "Helper Tool", "OpenVPN Helper"],
+            bundleIdentifiers: ["com.openvpn.helper.tool"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.HZRat",
+            ],
+            launchAgentLabels: ["com.openvpn.helpertool"]
+        ),
+        SpywareSignature(
+            name: "OdysseyStealer (AMOS successor)",
+            processNames: ["Odyssey", "odyssey_stealer", "OdysseyInstaller", "odyssey_payload"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+                "/private/tmp/AppleScript-*.scpt",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "NotLockBit (macOS ransomware)",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_macos", "lbb_pass"],
+            bundleIdentifiers: ["com.lockbit.macos"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "/private/tmp/lbb_pass.txt",
+                "~/Library/Application Support/.NotLockBit",
+            ],
+            launchAgentLabels: ["com.lockbit.service"]
+        ),
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["xcc", "JokerSpy", "sh.py", "shared.dat"],
+            bundleIdentifiers: ["xyz.xcc.xcc"],
+            filePaths: [
+                "/Users/Shared/sh.py",
+                "/Users/Shared/shared.dat",
+                "/private/tmp/.xcc",
+                "~/Library/LaunchAgents/com.apple.xcc.plist",
+            ],
+            launchAgentLabels: ["com.apple.xcc", "xyz.xcc"]
+        ),
+        SpywareSignature(
+            name: "MystRodX (DPRK)",
+            processNames: ["MystRodX", "mystrodx", "rodx", "PostgreSQLHelper"],
+            bundleIdentifiers: ["com.postgresql.helper"],
+            filePaths: [
+                "/private/tmp/.mystrodx",
+                "~/Library/PostgreSQL/.helper",
+            ],
+            launchAgentLabels: ["com.postgresql.helper"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (Lazarus)",
+            processNames: ["RustyAttr", "rustyattr", "Tauri", "Bonjour Service"],
+            bundleIdentifiers: ["com.bonjour.helper"],
+            filePaths: [
+                "/private/tmp/.rusty",
+                "~/Library/Application Support/.RustyAttr",
+            ],
+            launchAgentLabels: ["com.bonjour.helper"]
+        ),
+        SpywareSignature(
+            name: "MoonPeak",
+            processNames: ["MoonPeak", "moonpeak", "moonshell"],
+            bundleIdentifiers: ["com.moonpeak.agent"],
+            filePaths: [
+                "/private/tmp/.moonpeak",
+                "~/Library/Application Support/.moonpeak",
+            ],
+            launchAgentLabels: ["com.moonpeak.service"]
+        ),
+        SpywareSignature(
+            name: "Cuckoo Stealer 2.0",
+            processNames: ["Cuckoo2", "cuckoo2", "DumpMedia", "TuneSolo"],
+            bundleIdentifiers: ["com.dumpmedia.helper", "com.tunesolo.helper"],
+            filePaths: [
+                "/private/tmp/.cuckoo2",
+                "~/Library/Application Support/.Cuckoo2",
+            ],
+            launchAgentLabels: ["com.cuckoo2.service"]
+        ),
+        SpywareSignature(
+            name: "Crystal Stealer",
+            processNames: ["CrystalStealer", "crystal_stealer", "CrystalInstaller"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.agent"]
+        ),
+        SpywareSignature(
+            name: "Lumma macOS",
+            processNames: ["Lumma", "lumma_mac", "LummaC2", "LummaCommander"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.Lumma",
+            ],
+            launchAgentLabels: ["com.lumma.service"]
+        ),
+        SpywareSignature(
+            name: "DigiStealer (DigitalPulse)",
+            processNames: ["DigiStealer", "digistealer", "digitalpulse"],
+            bundleIdentifiers: ["com.digistealer.agent"],
+            filePaths: [
+                "/private/tmp/.digi",
+                "~/Library/Application Support/.DigiStealer",
+            ],
+            launchAgentLabels: ["com.digistealer.service"]
+        ),
+        SpywareSignature(
+            name: "Apothic SSH (Lazarus)",
+            processNames: ["ApothicSSH", "apothic", "sshd-helper"],
+            bundleIdentifiers: ["com.openssh.helper"],
+            filePaths: [
+                "/private/tmp/.apothic",
+                "~/Library/Application Support/.Apothic",
+                "/Library/LaunchDaemons/com.openssh.helperd.plist",
+            ],
+            launchAgentLabels: ["com.openssh.helperd"]
+        ),
+        SpywareSignature(
+            name: "MacMa (DazzleSpy v2)",
+            processNames: ["MacMa", "macma", "UserAgent", "softwareupdated_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/LaunchDaemons/com.apple.softwareupdate.daemon.plist",
+                "~/Library/Preferences/.UserAgent",
+                "/private/tmp/.macma",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate.daemon", "com.apple.useragent"]
+        ),
+        SpywareSignature(
+            name: "ObjCShellz v2",
+            processNames: ["objcshellz2", "ObjCShellzHelper", "macshellz"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.objcshell2"],
+            launchAgentLabels: ["com.apple.macshellz"]
+        ),
+        SpywareSignature(
+            name: "Hidden Risk (PylotMcKenzie / DPRK)",
+            processNames: ["HiddenRisk", "PylotMcKenzie", "pylot", "growth"],
+            bundleIdentifiers: ["com.growth.helper"],
+            filePaths: [
+                "/Library/LaunchDaemons/com.growth.helper.plist",
+                "/private/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.growth.helper"]
+        ),
+        SpywareSignature(
+            name: "BlueNoroff RustyAttr",
+            processNames: ["rustyattr", "BlueNoroffHelper", "ZoomClientPlugin"],
+            bundleIdentifiers: ["us.zoom.clientplugin"],
+            filePaths: [
+                "/private/tmp/.bluenoroff",
+                "~/Library/Application Support/.BlueNoroff",
+            ],
+            launchAgentLabels: ["us.zoom.clientplugin"]
+        ),
+        SpywareSignature(
+            name: "TrollStealer (Kimsuky)",
+            processNames: ["TrollStealer", "trollstealer", "AdobeARMHelper"],
+            bundleIdentifiers: ["com.adobe.arm.helper"],
+            filePaths: [
+                "/private/tmp/.trollstealer",
+                "~/Library/Application Support/.TrollStealer",
+            ],
+            launchAgentLabels: ["com.adobe.arm.helper"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "processhub", "applehub"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.processhub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "PostalKitty",
+            processNames: ["PostalKitty", "postalkitty", "PostalHelper", "MailLink"],
+            bundleIdentifiers: ["com.postal.kitty"],
+            filePaths: [
+                "/private/tmp/.postalkitty",
+                "~/Library/Application Support/.PostalKitty",
+            ],
+            launchAgentLabels: ["com.postal.kitty"]
+        ),
+        SpywareSignature(
+            name: "RustBucket v2",
+            processNames: ["RustBucket2", "rustbucket2", "PDFViewer", "AcrobatPDF"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustbucket2",
+                "~/Library/Metadata/.system_pdf",
+            ],
+            launchAgentLabels: ["com.apple.pdfviewer.helper"]
+        ),
+        SpywareSignature(
+            name: "FerretRAT (DPRK)",
+            processNames: ["FerretRAT", "ferretrat", "Slack Helper Updater"],
+            bundleIdentifiers: ["com.slack.helper.updater"],
+            filePaths: [
+                "/private/tmp/.ferret-rat",
+                "~/Library/.ferretrat",
+            ],
+            launchAgentLabels: ["com.slack.helper.updater"]
+        ),
+        SpywareSignature(
+            name: "TigerWalker (Sapphire Stealer macOS)",
+            processNames: ["TigerWalker", "tigerwalker", "sapphire_mac"],
+            bundleIdentifiers: ["com.sapphire.macos"],
+            filePaths: [
+                "/private/tmp/.tigerwalker",
+                "~/Library/Application Support/.Sapphire",
+            ],
+            launchAgentLabels: ["com.sapphire.service"]
+        ),
+        // Commercial mercenary spyware
+        SpywareSignature(
+            name: "OSX.Triangulation",
+            processNames: ["triangulation_agent", "BackupAgent2"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.triangulation"],
+            launchAgentLabels: ["com.apple.backupagent"]
+        ),
+        SpywareSignature(
+            name: "Reign (QuaDream)",
+            processNames: ["reign", "QuaDream", "kingsfish", "Reign"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.reign",
+                "/private/var/tmp/.kingsfish",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Hermit (RCS Lab)",
+            processNames: ["hermit_agent", "rcs_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.hermit"],
+            launchAgentLabels: ["com.rcs.agent"]
+        ),
+        // Modern stalkerware (2024-2026)
+        SpywareSignature(
+            name: "Onemonitar / OneSpy",
+            processNames: ["onemonitar", "OneMonitar", "OneSpy", "onespy"],
+            bundleIdentifiers: ["com.onemonitar.agent", "com.onespy.agent"],
+            filePaths: [
+                "~/Library/Application Support/.OneMonitar",
+                "~/Library/Application Support/OneSpy",
+            ],
+            launchAgentLabels: ["com.onemonitar.service", "com.onespy.service"]
+        ),
+        SpywareSignature(
+            name: "Bark (parental/stalkerware variant)",
+            processNames: ["BarkAgent", "bark_helper"],
+            bundleIdentifiers: ["com.bark.agent"],
+            filePaths: ["~/Library/Application Support/.Bark"],
+            launchAgentLabels: ["com.bark.service"]
+        ),
+        SpywareSignature(
+            name: "uMobix",
+            processNames: ["umobix", "uMobix", "umagent"],
+            bundleIdentifiers: ["com.umobix.agent"],
+            filePaths: ["~/Library/Application Support/.uMobix"],
+            launchAgentLabels: ["com.umobix.service"]
+        ),
+        SpywareSignature(
+            name: "Cocospy 2.0 / Spynger",
+            processNames: ["spynger", "Spynger", "cocospyAgent2"],
+            bundleIdentifiers: ["com.spynger.agent"],
+            filePaths: ["~/Library/Application Support/.Spynger"],
+            launchAgentLabels: ["com.spynger.service"]
+        ),
+        SpywareSignature(
+            name: "iSpyoo",
+            processNames: ["ispyoo", "iSpyoo", "isp_agent"],
+            bundleIdentifiers: ["com.ispyoo.agent"],
+            filePaths: ["~/Library/Application Support/.iSpyoo"],
+            launchAgentLabels: ["com.ispyoo.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

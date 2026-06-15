@@ -1,6 +1,6 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 14 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## Download
 
@@ -64,7 +64,7 @@ sudo sweep --json
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`, `secrets`
 
 ## What it checks
 
@@ -72,17 +72,18 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, plug-in directories (QuickLook, ColorPickers, Screen Savers, Spotlight importers, Audio HAL, PreferencePanes), authorization plugins, Folder Action scripts |
+| **Evidence** | Looks for stored screenshots, keystroke logs, recording artifacts, browser credential stores, staged crypto wallet files |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
 | **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari + VSCode/Cursor/Windsurf extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks + modern macOS features — firewall, FileVault, auto-login, screen lock, SSH server config, sharing services, software updates, iPhone Mirroring auth, Apple Intelligence privacy, Time Machine encryption, iCloud Advanced Data Protection, macOS version EOL, Background Task Management impersonation |
+| **Secrets** | Surfaces credentials at risk from infostealer families (AMOS, Banshee, Poseidon, Odyssey): SSH private keys without passphrases, cleartext `.env` / cloud credential files, exposed crypto wallet seed phrases, suspicious MCP server configs in Claude Desktop / Cursor / Windsurf, secrets leaked into shell history |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 
