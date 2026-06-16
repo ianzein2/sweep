@@ -17,6 +17,29 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome extension IDs implicated in the December 2024 supply-chain compromise that
+    // started with the Cyberhaven extension. The attacker hijacked publisher accounts and
+    // pushed malicious updates that exfiltrated cookies, identity tokens, and Facebook
+    // ad-account sessions. Sources: Cyberhaven advisory, Secure Annex, Sekoia reporting.
+    private let knownMaliciousExtensionIds: Set<String> = [
+        "nnpnnpemnckcfdebeekibpiijlicmpom", // Cyberhaven (hijacked v24.10.4)
+        "kkodiihpgodmdankclfibbiphjkfdenh", // Internxt VPN (hijacked)
+        "oaikpkmjciadfpddlpjjdapglcihgdle", // VPNCity
+        "pajkjnmeojmbapicmbpliphjmcekeaac", // Uvoice
+        "ndlbedplllcgconngcnfmkadhokfaaln", // ParrotTalks
+        "epikoohpebngmakjinphfiagogjcnddm", // Stand Tracker
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji", // Bookmark Favicon Changer (related)
+        "lbneaaedflankmgmfbmaplggbmjjmbae", // Earny - Up to 20% Cash Back
+        "mnhffkhmpnefgklngfmlndmkimimbphc", // Castorus / proxy ext
+        "kjmkgkdkpedkejedfhmfcenooemhbpbo", // VidHelper
+        "egcljdkelmpcgiabmmlhnllelnllnmai", // Wayin AI
+        "befflofjcniongenjmbkgkoljhgliihe", // Search Copilot AI Assistant for Yahoo
+        "fbmlcbhdmilaggessnepbnmmebcojdab", // VPN.bizz (hijacked variant)
+        "bibjgkidgpfbblifamdlkdlhgihmfohh", // Vidnoz Flex
+        "ekjjcgpdojgakfaocgfaapnaeoekngji", // Bard AI Chat
+        "cedgndijpacnfbdggppddacngjfdkaca", // GraphQL Network Inspector (related)
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +166,20 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Hijacked publisher accounts from the December 2024 supply-chain campaign
+                    // continued pushing malicious versions even after disclosure. Flag any presence.
+                    if knownMaliciousExtensionIds.contains(extId) {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known compromised ID",
+                            detail: "Extension ID: \(extId) was hijacked in the Dec 2024 supply-chain attack and used to exfiltrate cookies and session tokens",
+                            path: extDir,
+                            remediation: "Remove this extension and rotate all logged-in session cookies / passwords: chrome://extensions"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

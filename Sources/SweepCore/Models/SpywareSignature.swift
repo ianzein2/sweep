@@ -434,6 +434,183 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 stealer/RAT families — IOCs from public threat-intel reports
+        SpywareSignature(
+            // BlueNoroff/Lazarus Nim-based macOS implant (2025).
+            name: "NimDoor (BlueNoroff)",
+            processNames: ["nimdoor", "NimDoor", "GoogIeUpdater", "CoreKitAgent", "ZoomIntegration"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.google.update.plist",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.update", "com.zoom.integration"]
+        ),
+        SpywareSignature(
+            // Public reporting: AppleProcessHub stealer dropped via shell-script lure (Dec 2024).
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_agent"],
+            bundleIdentifiers: ["com.appleprocesshub.agent"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub", "com.appleprocesshub.service"]
+        ),
+        SpywareSignature(
+            // FrigidStealer — pirate-software lure delivering AMOS-derived stealer (Feb 2025).
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigid_agent"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            // Crystal Stealer — 2024 commodity stealer targeting browser data and crypto wallets.
+            name: "Crystal Stealer",
+            processNames: ["Crystal", "crystal_stealer", "CrystalAgent"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.service"]
+        ),
+        SpywareSignature(
+            // PasivRobber — large Chinese-language macOS surveillance suite (Apr 2025).
+            name: "PasivRobber",
+            processNames: ["wsus", "PasivRobber", "passive_robber", "wsusd"],
+            bundleIdentifiers: ["com.pasivrobber.agent"],
+            filePaths: [
+                "/Library/PrivilegedHelperTools/.wsus",
+                "~/Library/Application Support/.PasivRobber",
+            ],
+            launchAgentLabels: ["com.apple.wsus", "com.pasiv.helper"]
+        ),
+        SpywareSignature(
+            // Lazarus-linked Rust binary using extended attributes for payload hiding (Nov 2024).
+            name: "RustyAttr (Lazarus)",
+            processNames: ["RustyAttr", "rustyattr", "rusty_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // BlueNoroff Swift-based downloader fronting as a TODO app (2024).
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "TodoTasks"],
+            bundleIdentifiers: ["com.todoswift.app", "com.todotasks.helper"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: ["com.todoswift.helper"]
+        ),
+        SpywareSignature(
+            // HZ Rat — Chinese-language macOS RAT abusing DingTalk/WeChat (2024).
+            // Note: don't add "OpenVPNHelper" — Tunnelblick/OpenVPN.app ships that exact name.
+            name: "HZ Rat",
+            processNames: ["HZRat", "hzrat", "hz_agent"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/var/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hzrat.service"]
+        ),
+        SpywareSignature(
+            // LightSpy macOS variant — Chinese APT modular implant ported to macOS (2024).
+            name: "LightSpy (macOS)",
+            processNames: ["LightSpy", "lightspy", "lspy_agent", "WindowServerSupport"],
+            bundleIdentifiers: ["com.lightspy.agent"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+                "/Library/Application Support/.windowserver",
+            ],
+            launchAgentLabels: ["com.apple.windowserver.support", "com.lightspy.service"]
+        ),
+        SpywareSignature(
+            // NotLockBit / OSX.NotLockBit — Go-based macOS ransomware impersonating LockBit (Oct 2024).
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "lockbit_mac"],
+            bundleIdentifiers: ["com.notlockbit.agent"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.NotLockBit",
+            ],
+            launchAgentLabels: ["com.notlockbit.service"]
+        ),
+        SpywareSignature(
+            // SparkRAT — cross-platform Go RAT seen on macOS in 2024-2025 campaigns.
+            // Note: don't add bare "Spark" — the Readdle email client is named Spark.
+            name: "SparkRAT",
+            processNames: ["SparkRAT", "sparkrat", "spark_agent"],
+            bundleIdentifiers: ["com.sparkrat.agent"],
+            filePaths: [
+                "/private/tmp/.sparkrat",
+                "~/Library/Application Support/.SparkRAT",
+            ],
+            launchAgentLabels: ["com.spark.agent", "com.sparkrat.service"]
+        ),
+        SpywareSignature(
+            // SparkKitty / SparkCat — OCR-based crypto seed-phrase stealer (June 2025).
+            name: "SparkKitty / SparkCat",
+            processNames: ["SparkKitty", "sparkkitty", "SparkCat", "sparkcat"],
+            bundleIdentifiers: ["com.sparkkitty.agent", "com.sparkcat.helper"],
+            filePaths: [
+                "~/Library/Application Support/.SparkKitty",
+                "~/Library/Application Support/.SparkCat",
+            ],
+            launchAgentLabels: ["com.sparkkitty.service", "com.sparkcat.helper"]
+        ),
+        SpywareSignature(
+            // ReaderUpdate — Crescent Core / fake PDF-reader update stealer family (2024-2025).
+            name: "ReaderUpdate",
+            processNames: ["ReaderUpdate", "readerupdate", "AdobeUpdaterHelper"],
+            bundleIdentifiers: ["com.adobe.reader.updater"],
+            filePaths: [
+                "/private/tmp/.readerupdate",
+                "~/Library/Application Support/.ReaderUpdate",
+            ],
+            launchAgentLabels: ["com.adobe.reader.updater"]
+        ),
+        SpywareSignature(
+            // ZuRu macOS — trojanized iTerm2 / Termius bundles seen in 2024 supply-chain attacks.
+            name: "ZuRu (iTerm2 trojan)",
+            processNames: ["GoogleSearchHelper", "zuru", "ZuRu", "g.ops"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ZuRu",
+                "/tmp/G.ops",
+                "/Users/Shared/.zuru",
+            ],
+            launchAgentLabels: ["com.google.search.helper"]
+        ),
+        SpywareSignature(
+            // BeaverTail JS-stage Contagious Interview campaign (DPRK 2024-2025).
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "InvisibleFerret", "invisible_ferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Cleopatra / Coyote-derived crypto-wallet stealer observed on macOS (2025).
+            name: "Cleopatra Stealer",
+            processNames: ["Cleopatra", "cleopatra_stealer", "cleo_agent"],
+            bundleIdentifiers: ["com.cleopatra.stealer"],
+            filePaths: ["/private/tmp/.cleopatra"],
+            launchAgentLabels: ["com.cleopatra.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

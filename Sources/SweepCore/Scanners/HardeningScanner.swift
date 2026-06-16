@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Apple Silicon Secure Boot")
+        checkSecureBootPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking system extension policy")
+        checkSystemExtensionPolicy(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Stolen Device Protection")
+        checkStolenDeviceProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version freshness")
+        checkMacOSVersionFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking signed system volume")
+        checkSignedSystemVolume(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +486,244 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Apple Silicon Secure Boot Policy
+
+    private func checkSecureBootPolicy(findings: inout [Finding], errors: inout [String]) {
+        // bputil reports the current boot policy on Apple Silicon Macs. "Reduced Security" or
+        // "Permissive Security" allow unsigned kernel extensions and third-party kernels, which
+        // is exactly the posture rootkits/kexts depend on. Intel Macs lack bputil — skip silently.
+        guard FileManager.default.fileExists(atPath: "/usr/bin/bputil") else { return }
+        let result = ShellRunner.run("/usr/bin/bputil", arguments: ["-d"], timeout: 5)
+        // bputil exits non-zero when not run as root or there's no policy, so accept either.
+        let output = (result.stdout + result.stderr).lowercased()
+        if output.isEmpty { return }
+
+        if output.contains("permissive security") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Apple Silicon boot policy is Permissive Security",
+                detail: "Boot policy permits unsigned kernel collections — this is the weakest secure-boot mode and is the prerequisite for kernel-level spyware",
+                path: nil,
+                remediation: "Reboot into Recovery > Startup Security Utility > set to Full Security"
+            ))
+        } else if output.contains("reduced security") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Apple Silicon boot policy is Reduced Security",
+                detail: "Boot policy allows running older macOS versions and third-party kernel extensions — restore to Full Security if you don't need kexts",
+                path: nil,
+                remediation: "Reboot into Recovery > Startup Security Utility > set to Full Security"
+            ))
+        }
+
+        // Some policy notes only appear as "Signed System Volume snapshot mounts: disabled"
+        if output.contains("3rd party kexts: enabled") ||
+           output.contains("3rd party kexts status: enabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Third-party kernel extensions are allowed",
+                detail: "Boot policy permits loading non-Apple kernel extensions — only legacy hardware drivers need this",
+                path: nil,
+                remediation: "If you don't need any third-party kexts, disable in Recovery > Startup Security Utility"
+            ))
+        }
+    }
+
+    // MARK: - System Extension Approval Policy
+
+    private func checkSystemExtensionPolicy(findings: inout [Finding], errors: inout [String]) {
+        // A blanket "allow user approval" for system extensions, combined with social engineering,
+        // is the standard install path for system-extension-based spyware (network filters, ESF).
+        // We also enumerate currently-loaded non-Apple system extensions for visibility.
+        let result = ShellRunner.run("/usr/bin/systemextensionsctl", arguments: ["list"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Lines look like: "*	*	com.<team>.<ext>	... [activated enabled]"
+        let lines = result.stdout.split(separator: "\n")
+        var nonAppleExtensions: [String] = []
+        for line in lines {
+            let lineStr = String(line)
+            // Heuristic: any line with a bundle identifier and "activated enabled" state.
+            guard lineStr.contains("activated enabled") || lineStr.contains("[activated") else { continue }
+            // Skip Apple-signed system extensions.
+            if lineStr.contains("com.apple.") { continue }
+            // Pull out the most identifier-looking token.
+            let tokens = lineStr.split(separator: "\t").map { String($0).trimmingCharacters(in: .whitespaces) }
+            let bundleId = tokens.first(where: { $0.contains(".") && !$0.contains("/") }) ?? ""
+            if !bundleId.isEmpty {
+                nonAppleExtensions.append(bundleId)
+            }
+        }
+
+        for ext in nonAppleExtensions {
+            // Cross-check against known spyware bundle IDs first.
+            if let sig = SpywareSignature.match(bundleId: ext) {
+                findings.append(Finding(
+                    severity: .high, category: .kernelExtension,
+                    title: "Known spyware system extension is active: \(sig.name)",
+                    detail: "System extension \(ext) is loaded and enabled — system extensions can filter all network traffic and read protected files",
+                    path: nil,
+                    remediation: "Uninstall the parent app and run: systemextensionsctl uninstall <teamid> \(ext)"
+                ))
+            } else {
+                findings.append(Finding(
+                    severity: .low, category: .kernelExtension,
+                    title: "Third-party system extension is active",
+                    detail: "Extension: \(ext) — system extensions have deep system access; verify the parent app is one you installed",
+                    path: nil,
+                    remediation: "Review: systemextensionsctl list"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac lets a stolen Mac be remote-locked / wiped — but only if it was on before
+        // the loss. We read MobileMeAccounts.plist (the canonical iCloud-service ledger) and
+        // look for an enabled FIND_MY_MAC service. If we can't read the plist (no iCloud account
+        // signed in at all, or running without FDA in user mode) we stay silent — false positives
+        // on this check are more annoying than the LOW finding is useful.
+        let home = ShellRunner.realUserHome
+        let accountsPlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard let data = FileManager.default.contents(atPath: accountsPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]],
+              !accounts.isEmpty else { return }
+
+        for account in accounts {
+            guard let services = account["Services"] as? [[String: Any]] else { continue }
+            let findMyEnabled = services.contains { svc in
+                let name = (svc["Name"] as? String) ?? ""
+                let enabled = (svc["Enabled"] as? Int ?? 0) == 1
+                return name == "FIND_MY_MAC" && enabled
+            }
+            if findMyEnabled { return }
+        }
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Find My Mac does not appear to be enabled",
+            detail: "An iCloud account is configured but Find My Mac is off — if this Mac is lost or stolen, you won't be able to locate, lock, or wipe it remotely",
+            path: nil,
+            remediation: "Enable: System Settings > Apple Account > iCloud > Find My Mac"
+        ))
+    }
+
+    // MARK: - Stolen Device Protection (macOS 15.2+)
+
+    private func checkStolenDeviceProtection(findings: inout [Finding], errors: inout [String]) {
+        // Stolen Device Protection adds a biometrics-required + 1h delay layer to sensitive
+        // account changes when the Mac is away from familiar locations. macOS 15.2 (Sequoia)+.
+        // The setting is recorded in com.apple.security.theft-protection. Older macOS = skip.
+        guard isMacOSVersionAtLeast(major: 15, minor: 2) else { return }
+
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.security.theft-protection", "TheftProtectionEnabled"
+        ], timeout: 5)
+
+        // Key absent OR set to 0 means SDP is off.
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !result.success || value == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Stolen Device Protection is off",
+                detail: "Without SDP, anyone who knows your passcode can change your Apple Account or disable Find My — even from an unfamiliar location",
+                path: nil,
+                remediation: "Enable: System Settings > Privacy & Security > Stolen Device Protection"
+            ))
+        }
+    }
+
+    // MARK: - macOS Version Freshness
+
+    private func checkMacOSVersionFreshness(findings: inout [Finding], errors: inout [String]) {
+        // Two thresholds:
+        //  1) Running a macOS major version that Apple no longer supports with security updates.
+        //     Apple's de-facto policy supports the current + 2 previous major versions.
+        //  2) Running a system whose ProductBuildVersion / SystemVersion is more than 90 days
+        //     behind Apple's latest published build for this major (we approximate with the
+        //     SoftwareUpdate plist's LastSuccessfulDate, which is what local SU last did).
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Latest macOS major as of late 2025 is 26 (Sequoia bump). Anything <13 is firmly EOL.
+        let latestSupportedMajor = 26
+        let oldestSecure = latestSupportedMajor - 2
+
+        if major < oldestSecure {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS major version is no longer receiving security updates",
+                detail: "Running macOS \(major).\(version.minorVersion).\(version.patchVersion). Apple supports the current + 2 previous major versions; older versions stop getting CVE patches.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS major version: System Settings > General > Software Update"
+            ))
+        } else if major < latestSupportedMajor - 1 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS major version is older than current - 1",
+                detail: "Running macOS \(major).\(version.minorVersion).\(version.patchVersion). You may be missing security mitigations and Rapid Security Responses available on newer majors.",
+                path: nil,
+                remediation: "Consider upgrading: System Settings > General > Software Update"
+            ))
+        }
+
+        // How long since this Mac last successfully ran softwareupdate?
+        let lastSU = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "LastSuccessfulDate"
+        ], timeout: 5)
+        if lastSU.success {
+            // `defaults` returns the timestamp as: 2025-05-12 11:22:33 +0000
+            let stripped = lastSU.stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\"", with: "")
+            let df = DateFormatter()
+            df.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+            if let date = df.date(from: stripped) {
+                let days = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+                if days > 90 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "No successful software update in \(days) days",
+                        detail: "Last successful softwareupdate run was \(stripped). Long gaps suggest auto-update isn't working — security patches may be missing.",
+                        path: nil,
+                        remediation: "Run: softwareupdate -ia, or check System Settings > General > Software Update"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func isMacOSVersionAtLeast(major: Int, minor: Int) -> Bool {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        if v.majorVersion > major { return true }
+        if v.majorVersion < major { return false }
+        return v.minorVersion >= minor
+    }
+
+    // MARK: - Signed System Volume
+
+    private func checkSignedSystemVolume(findings: inout [Finding], errors: inout [String]) {
+        // The Signed System Volume (SSV) is the cryptographically-sealed read-only system
+        // partition macOS Big Sur+ boots from. If a user has booted with SSV disabled
+        // (csrutil authenticated-root disable) the system partition can be modified — a
+        // standard prerequisite for kernel-level rootkits or persistent system-binary backdoors.
+        let result = ShellRunner.run("/usr/bin/csrutil", arguments: ["authenticated-root", "status"], timeout: 5)
+        let output = (result.stdout + result.stderr).lowercased()
+        // Output looks like "Authenticated Root status: enabled" / "disabled".
+        if output.contains("disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Signed System Volume protection is DISABLED",
+                detail: "Authenticated Root is off — the system partition is writable, allowing kernel- or system-binary-level persistence",
+                path: nil,
+                remediation: "Reboot into Recovery and run: csrutil authenticated-root enable"
+            ))
         }
     }
 }

@@ -105,6 +105,49 @@ public final class PersistenceScanner: Scanner {
             executablePath = first
         }
 
+        // C2-beaconing tells: a tiny StartInterval (re-runs every N seconds) on a non-Apple
+        // unsigned binary is the classic launchd-as-heartbeat pattern. We flag <=60s intervals
+        // because Apple's own daemons that need fast intervals all live under com.apple.*.
+        if !label.hasPrefix("com.apple."),
+           let startInterval = plist["StartInterval"] as? Int, startInterval > 0, startInterval <= 60 {
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "LaunchAgent fires every \(startInterval)s (possible C2 beacon)",
+                detail: "Label: \(label) — sub-minute StartInterval is unusual for legitimate apps and matches malware heartbeat patterns",
+                path: path,
+                remediation: "Inspect: plutil -p \"\(path)\" and verify the program is one you installed"
+            ))
+        }
+
+        // WatchPaths is a launchd feature that triggers the agent when files at the listed paths
+        // change. Stalkerware uses it to wake on activity (e.g. ~/.zsh_history, login.keychain-db,
+        // browser cookie files) so a sleeping spy can react to typing or logins without polling.
+        let sensitiveWatchTargets: [(needle: String, why: String)] = [
+            ("login.keychain", "watches the login keychain — used to react to password changes"),
+            ("Cookies.binarycookies", "watches Safari cookies — used by cookie stealers"),
+            ("Cookies/Cookies", "watches Chrome/Brave cookie store"),
+            ("/Library/Cookies", "watches a browser cookie directory"),
+            ("zsh_history", "watches your shell history — used to capture typed commands"),
+            ("bash_history", "watches your shell history — used to capture typed commands"),
+            (".ssh/", "watches your SSH directory — used to react to key/credential changes"),
+            ("/Wallets", "watches a crypto-wallet directory"),
+            ("Mail/V", "watches the local Mail store"),
+        ]
+        if !label.hasPrefix("com.apple."),
+           let watchPaths = plist["WatchPaths"] as? [String], !watchPaths.isEmpty {
+            for wp in watchPaths {
+                if let hit = sensitiveWatchTargets.first(where: { wp.contains($0.needle) }) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent watches a sensitive path",
+                        detail: "Label: \(label), WatchPath: \(wp) — \(hit.why)",
+                        path: path,
+                        remediation: "Inspect the program in this plist; remove if not expected: sudo rm \"\(path)\""
+                    ))
+                }
+            }
+        }
+
         // Check against known spyware labels
         if let sig = SpywareSignature.match(label: label) {
             findings.append(Finding(
