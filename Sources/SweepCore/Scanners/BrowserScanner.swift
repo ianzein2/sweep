@@ -17,6 +17,20 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Publisher.name identifiers reported as malicious or compromised on the VSCode / Cursor /
+    /// OpenVSX marketplaces during 2024-2025. VSCode keeps the extension dir on disk even after
+    /// the marketplace removes the listing, so name-match is still worth doing post-pull.
+    /// Kept short — false positives are impossible (extension IDs are unique on the marketplace)
+    /// but stale entries waste scan budget. Add new entries as advisories come out.
+    private let knownMaliciousEditorExtIds: Set<String> = [
+        // 2024 — Aikido "Material Theme" related compromises
+        "equinusocio.moxer-theme",
+        "shalldie.background",
+        // 2025 — Solidity / crypto-developer-targeted stealers (Lasso/ReversingLabs)
+        "juancampos.solidity-extension",
+        "juancampos.solidity-vulnerability-detector",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -337,6 +351,18 @@ public final class BrowserScanner: Scanner {
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
 
+                // Hard match against known malicious / compromised extension IDs.
+                if knownMaliciousEditorExtIds.contains(extId.lowercased()) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension matches a known malicious / compromised ID",
+                        detail: "Extension: \(displayName) (\(extId)) — listed as malicious in published advisories",
+                        path: extPath,
+                        remediation: "Remove this extension immediately, audit keychain / browser-saved credentials, and rotate any tokens it could see"
+                    ))
+                    continue
+                }
+
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {
                     findings.append(Finding(
@@ -374,6 +400,25 @@ public final class BrowserScanner: Scanner {
                         path: extPath,
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
+                }
+
+                // Check for npm-style lifecycle scripts (postinstall / preinstall) that fetch + run
+                // remote code on first activation — the canonical supply-chain attack vector.
+                let scripts = (pkg["scripts"] as? [String: String]) ?? [:]
+                for (hook, body) in scripts where hook == "postinstall" || hook == "preinstall" || hook == "install" {
+                    let lower = body.lowercased()
+                    let usesNetwork = lower.contains("curl") || lower.contains("wget") ||
+                                      lower.contains("fetch") || lower.contains("https://") ||
+                                      lower.contains("http://")
+                    if usesNetwork {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(editorName) extension has network-fetching \(hook) script",
+                            detail: "Extension: \(displayName) (\(extId)), \(hook): \(String(body.prefix(160)))",
+                            path: extPath,
+                            remediation: "Marketplace extensions don't need install hooks. Remove this extension and audit any credentials accessible to \(editorName)."
+                        ))
+                    }
                 }
             }
         }

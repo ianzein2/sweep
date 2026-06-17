@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Keychain")
+        checkICloudKeychain(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Items integrity")
+        checkBackgroundItemsIntegrity(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID for sudo")
+        checkTouchIDForSudo(findings: &findings, errors: &errors)
+
+        progress?.update("checking quarantine enforcement")
+        checkQuarantineEnforcement(findings: &findings, errors: &errors)
+
+        progress?.update("checking secure boot / startup security")
+        checkSecureBoot(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,181 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac is the recovery / remote-wipe lifeline if the Mac is lost or stolen.
+        // Apple stores its enablement state in a per-user MobileMeAccounts.plist.
+        let home = ShellRunner.realUserHome
+        let accountsPlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard let data = FileManager.default.contents(atPath: accountsPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]],
+              !accounts.isEmpty else {
+            // No iCloud account configured. Not Find My's fault — this finding is informational only at low severity.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "No iCloud account configured for Find My Mac",
+                detail: "Without iCloud sign-in, Find My Mac, Activation Lock, and remote wipe are unavailable",
+                path: nil,
+                remediation: "Sign in: System Settings > [your name] > Sign In, then enable Find My Mac"
+            ))
+            return
+        }
+
+        // Walk each account and inspect its Services array for FIND_MY_MAC enablement.
+        for account in accounts {
+            let services = account["Services"] as? [[String: Any]] ?? []
+            let findMyService = services.first { ($0["Name"] as? String) == "FIND_MY_MAC" }
+            let enabled = (findMyService?["Enabled"] as? Bool ?? false) ||
+                          ((findMyService?["Enabled"] as? Int) ?? 0) == 1
+            if !enabled {
+                let email = account["AccountID"] as? String ?? "(account)"
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "Account: \(email) — remote lock, remote wipe, and Activation Lock are unavailable",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Keychain
+
+    private func checkICloudKeychain(findings: inout [Finding], errors: inout [String]) {
+        // iCloud Keychain syncs passwords with end-to-end encryption. Without it, the user
+        // is more likely to rely on browser-stored credentials, which infostealers (AMOS, Banshee,
+        // FrigidStealer, Tahoe Stealer) target first.
+        let home = ShellRunner.realUserHome
+        let accountsPlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard let data = FileManager.default.contents(atPath: accountsPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]],
+              !accounts.isEmpty else { return }  // No iCloud, already noted by Find My check
+
+        for account in accounts {
+            let services = account["Services"] as? [[String: Any]] ?? []
+            let keychainService = services.first { ($0["Name"] as? String) == "KEYCHAIN" }
+            let enabled = (keychainService?["Enabled"] as? Bool ?? false) ||
+                          ((keychainService?["Enabled"] as? Int) ?? 0) == 1
+            if !enabled {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Keychain is disabled",
+                    detail: "Without iCloud Keychain, passwords typically live in browser credential stores — exactly what macOS infostealers target",
+                    path: nil,
+                    remediation: "Enable: System Settings > [your name] > iCloud > Passwords & Keychain"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Items integrity (BTM)
+
+    private func checkBackgroundItemsIntegrity(findings: inout [Finding], errors: inout [String]) {
+        // Ventura+ tracks login items / background helpers in Background Task Management.
+        // sfltool dumpbtm shows the live database. A 0-byte / unreadable database has been
+        // associated with malware that clears its own BTM entries.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success else {
+            // Non-root invocations frequently fail — only error if we're root and still got nothing
+            if getuid() == 0 {
+                errors.append("sfltool dumpbtm failed: \(result.stderr.prefix(120))")
+            }
+            return
+        }
+
+        let trimmed = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Background Task Management database is empty",
+                detail: "Modern macOS tracks login items via BTM. An empty database is unusual and may indicate tampering",
+                path: nil,
+                remediation: "Reset BTM: sudo sfltool resetbtm — then sign in again so legitimate items re-register"
+            ))
+            return
+        }
+
+        // If we can see entries with "no name" or hidden flags, surface a low-severity hint.
+        let suspiciousLineCount = result.stdout.split(separator: "\n").filter { line in
+            let s = String(line).lowercased()
+            return s.contains("disposition: [hidden") || s.contains("name: (null)")
+        }.count
+        if suspiciousLineCount > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Hidden background items present (\(suspiciousLineCount))",
+                detail: "Some Login/Background items are registered as hidden — verify each one is expected",
+                path: nil,
+                remediation: "Review: System Settings > General > Login Items & Extensions"
+            ))
+        }
+    }
+
+    // MARK: - Touch ID for sudo
+
+    private func checkTouchIDForSudo(findings: inout [Finding], errors: inout [String]) {
+        // Sonoma+ supports persistent Touch ID for sudo via /etc/pam.d/sudo_local
+        // (the only PAM file Apple won't overwrite on system updates). Persistence-scanner
+        // already reports the legacy /etc/pam.d/sudo case, so we only surface presence of
+        // the persistent location here.
+        let sudoLocal = "/etc/pam.d/sudo_local"
+        guard let content = try? String(contentsOfFile: sudoLocal, encoding: .utf8),
+              content.contains("pam_tid.so") else { return }
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Touch ID enabled for sudo (positive)",
+            detail: "pam_tid.so configured in /etc/pam.d/sudo_local — Touch ID prompts replace password for sudo and survive system updates",
+            path: sudoLocal,
+            remediation: "No action needed — this is a recommended hardening configuration"
+        ))
+    }
+
+    // MARK: - Quarantine enforcement
+
+    private func checkQuarantineEnforcement(findings: inout [Finding], errors: inout [String]) {
+        // Launch Services' quarantine flag is what causes Gatekeeper to inspect downloaded apps.
+        // Several malware families and "developer convenience" tweaks disable it globally.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 0 (or NO) means quarantine attribute is NOT set on downloaded files — Gatekeeper is bypassed.
+            if value == "0" || value.lowercased() == "no" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Launch Services quarantine attribute is disabled",
+                    detail: "Downloaded files won't be tagged with com.apple.quarantine, meaning Gatekeeper won't inspect them",
+                    path: nil,
+                    remediation: "Re-enable: defaults delete com.apple.LaunchServices LSQuarantine"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Secure Boot / Startup Security
+
+    private func checkSecureBoot(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon: secure boot is part of the Local Policy. We can read it indirectly
+        // via `bputil --display-all-policies` (Apple Silicon only) or `nvram 94B73556-2197-4702-82A8-3E1337DAFBF` (Intel T2).
+        // The user-friendly check is `csrutil authenticated-root status` for Sealed System Volume health.
+        let sealed = ShellRunner.run("/usr/bin/csrutil", arguments: ["authenticated-root", "status"], timeout: 5)
+        let output = sealed.stdout + sealed.stderr
+        if output.lowercased().contains("disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Authenticated Root / Sealed System Volume is disabled",
+                detail: "macOS' read-only system volume seal is off — kernel-level integrity guarantees are weakened",
+                path: nil,
+                remediation: "Reboot into Recovery and run: csrutil authenticated-root enable"
+            ))
         }
     }
 

@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plug-in style persistence")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking MCP / AI tool configurations")
+        scanMCPConfigs(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Actions scripts")
+        scanFolderActions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,202 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Plug-in / loadable bundle persistence
+
+    /// Several macOS extension points load third-party code into trusted host processes the
+    /// first time a relevant file is touched: Spotlight importers run inside mdworker, Quick Look
+    /// generators run inside quicklookd, color pickers/screensavers load into any app that
+    /// opens the corresponding UI. Malware abuses these because the loader process is signed
+    /// by Apple and inherits its TCC grants. We enumerate the standard bundle directories and
+    /// flag anything unsigned or in a user-writable path.
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let pluginDirs: [(path: String, kind: String, ext: String)] = [
+            ("\(home)/Library/Spotlight",        "Spotlight importer", ".mdimporter"),
+            ("/Library/Spotlight",               "Spotlight importer", ".mdimporter"),
+            ("\(home)/Library/QuickLook",        "Quick Look generator", ".qlgenerator"),
+            ("/Library/QuickLook",               "Quick Look generator", ".qlgenerator"),
+            ("\(home)/Library/ColorPickers",     "Color Picker",       ".colorPicker"),
+            ("/Library/ColorPickers",            "Color Picker",       ".colorPicker"),
+            ("\(home)/Library/Screen Savers",    "Screen Saver",       ".saver"),
+            ("/Library/Screen Savers",           "Screen Saver",       ".saver"),
+            ("\(home)/Library/Services",         "Service Menu item",  ".workflow"),
+            ("/Library/Services",                "Service Menu item",  ".workflow"),
+            ("\(home)/Library/Audio/Plug-Ins/HAL", "Audio HAL plug-in", ".driver"),
+            ("/Library/Audio/Plug-Ins/HAL",      "Audio HAL plug-in",  ".driver"),
+        ]
+
+        let fm = FileManager.default
+        for (dir, kind, ext) in pluginDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(ext) && !entry.hasPrefix(".") {
+                let bundlePath = "\(dir)/\(entry)"
+                let executablePath = findBundleExecutable(at: bundlePath)
+
+                // Code signature check on the bundle as a whole — same SecStaticCode API
+                let isSigned = checkIsSigned(path: bundlePath)
+
+                // Match against known spyware names (covers ones that name their bundle after a known family)
+                let lowerName = entry.lowercased()
+                let spywareMatch = SpywareSignature.known.first(where: { sig in
+                    sig.processNames.contains(where: { lowerName.contains($0.lowercased()) })
+                })
+
+                if let sig = spywareMatch {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware as \(kind): \(sig.name)",
+                        detail: "Bundle: \(entry) at \(dir) — loads into \(loaderHost(for: kind))",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned \(kind) bundle",
+                        detail: "Bundle: \(entry) at \(dir)" +
+                            (executablePath.map { " — exec: \($0)" } ?? "") +
+                            " — loads into \(loaderHost(for: kind))",
+                        path: bundlePath,
+                        remediation: "Verify this plug-in is expected. Unsigned plug-ins running inside Apple-signed hosts inherit those processes' TCC grants."
+                    ))
+                }
+            }
+        }
+    }
+
+    private func loaderHost(for kind: String) -> String {
+        switch kind {
+        case "Spotlight importer": return "mdworker"
+        case "Quick Look generator": return "quicklookd"
+        case "Color Picker": return "any app that opens the color picker"
+        case "Screen Saver": return "ScreenSaverEngine"
+        case "Service Menu item": return "any app that invokes its Services menu"
+        case "Audio HAL plug-in": return "coreaudiod"
+        default: return "a host process"
+        }
+    }
+
+    private func findBundleExecutable(at bundlePath: String) -> String? {
+        let infoPlist = "\(bundlePath)/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: infoPlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let execName = plist["CFBundleExecutable"] as? String else { return nil }
+        return "\(bundlePath)/Contents/MacOS/\(execName)"
+    }
+
+    // MARK: - MCP server / AI tool configurations
+
+    /// Claude Desktop, Claude Code, Cursor, Windsurf, and Zed all read JSON config files
+    /// that auto-launch "MCP servers" — long-running tool processes with file-system, shell,
+    /// and network access. A malicious config can register a stage-2 loader that runs every
+    /// time the host app starts. We look for: configs that invoke `curl|bash`-style network
+    /// loaders, configs pointing at HTTPS URLs (remote MCP servers), and configs invoking
+    /// binaries from /tmp or hidden paths.
+    private func scanMCPConfigs(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let configs: [(path: String, host: String)] = [
+            ("\(home)/Library/Application Support/Claude/claude_desktop_config.json", "Claude Desktop"),
+            ("\(home)/.claude/settings.json", "Claude Code"),
+            ("\(home)/.claude/settings.local.json", "Claude Code"),
+            ("\(home)/.cursor/mcp.json", "Cursor"),
+            ("\(home)/.codeium/windsurf/mcp_config.json", "Windsurf"),
+            ("\(home)/.config/zed/settings.json", "Zed"),
+            ("\(home)/.config/Cline/mcp_settings.json", "Cline"),
+        ]
+
+        for (path, host) in configs {
+            guard let data = FileManager.default.contents(atPath: path),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            // MCP server entries live under "mcpServers" in Claude/Cursor, "mcp_servers" in some forks.
+            let serverDicts: [String: Any] = (json["mcpServers"] as? [String: Any]) ??
+                                             (json["mcp_servers"] as? [String: Any]) ?? [:]
+
+            for (serverName, raw) in serverDicts {
+                guard let entry = raw as? [String: Any] else { continue }
+                let command = (entry["command"] as? String) ?? ""
+                let args = (entry["args"] as? [String]) ?? []
+                let url = (entry["url"] as? String) ?? (entry["sseUrl"] as? String) ?? ""
+                let joined = ([command] + args).joined(separator: " ")
+                let lower = joined.lowercased()
+
+                // Pattern A: shell pipe loader (curl ... | sh) directly inside the args
+                let isPipeLoader = (lower.contains("curl") || lower.contains("wget") || lower.contains("fetch")) &&
+                                   (lower.contains(" sh") || lower.contains(" bash") || lower.contains(" zsh") ||
+                                    lower.contains("|sh") || lower.contains("|bash"))
+                if isPipeLoader {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(host) MCP server runs a shell pipe loader",
+                        detail: "Server \"\(serverName)\" command: \(String(joined.prefix(160)))",
+                        path: path,
+                        remediation: "Remove this MCP server entry from \(path) — it executes remote code every time \(host) starts"
+                    ))
+                    continue
+                }
+
+                // Pattern B: command/path from /tmp or a hidden dir
+                let suspiciousPathPrefixes = ["/tmp/", "/private/tmp/", "/var/tmp/"]
+                let commandFromTemp = suspiciousPathPrefixes.contains(where: { command.hasPrefix($0) }) ||
+                                      command.contains("/.")
+                if commandFromTemp && !command.isEmpty {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(host) MCP server points to temp / hidden binary",
+                        detail: "Server \"\(serverName)\" command: \(command)",
+                        path: path,
+                        remediation: "Remove this MCP server entry from \(path)"
+                    ))
+                    continue
+                }
+
+                // Pattern C: remote MCP server over HTTP (no TLS) — trivially man-in-the-middle-able
+                let lowerURL = url.lowercased()
+                if lowerURL.hasPrefix("http://") && !lowerURL.contains("localhost") && !lowerURL.contains("127.0.0.1") {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "\(host) MCP server uses unencrypted HTTP",
+                        detail: "Server \"\(serverName)\" URL: \(url) — tool requests/responses are exposed to anyone on the network path",
+                        path: path,
+                        remediation: "Switch the MCP server to HTTPS or remove the entry from \(path)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Folder Actions
+
+    /// Folder Actions attach AppleScripts that run automatically when files appear in a folder.
+    /// `Folder Action Setup.app` writes them under ~/Library/Workflows/Applications/Folder Actions.
+    /// Common attacker target: ~/Downloads gets a script that exfiltrates anything dropped into it.
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let folderActionDirs = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+        for dir in folderActionDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script registered",
+                    detail: "\(entry) — runs automatically when files are added to / removed from / opened in the attached folder",
+                    path: entryPath,
+                    remediation: "Review attached folders: System Settings > Privacy & Security > Automation, and open \"Folder Actions Setup.app\""
+                ))
+            }
         }
     }
 

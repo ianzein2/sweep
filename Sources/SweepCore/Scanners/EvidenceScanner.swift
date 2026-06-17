@@ -445,13 +445,44 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2025 additions — drainer / stealer campaigns explicitly target these
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet",   "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Rabby Wallet", "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Solflare",     "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("MyEtherWallet", "nlbmnnijcnlegkjjpcfjclmcfggfefdm"),
+        ("Wasabi Wallet", "WalletWasabi"),
+        ("Sparrow Wallet", "Sparrow"),
+        ("Hardware-wallet seed phrase", "seed.txt"),
+        ("Hardware-wallet seed phrase", "mnemonic.txt"),
+        ("Hardware-wallet seed phrase", "recovery.txt"),
     ]
 
-    /// Browser credential stores AMOS-family stealers copy.
+    /// Browser credential stores AMOS-family stealers copy. Kept tight — generic names like
+    /// "tokens.json" / "Local Storage" appear in every Electron app and would false-positive.
     private let browserCredStoreNames: Set<String> = [
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        // 2024-2025 additions — modern stealer kits target these too
+        "Login Data For Account",                     // Chromium per-account passwords (rare elsewhere)
+        "Affiliation Database",                       // Chromium password fill cache
+        "places.sqlite", "formhistory.sqlite",        // Firefox history / autofill
+        "key_datas", "D877F783D5D3EF8C",              // Telegram Desktop session data
+    ]
+
+    /// macOS Notes, Messages, Mail, and Reminders databases — accessed legitimately only by
+    /// Apple processes (with full-disk access) or by the user opening the app. A copy of any of
+    /// these in /tmp or a hidden directory is strong evidence of bulk personal-data exfiltration.
+    /// Filenames kept tight — generic "History.db" appears in many apps and would false-positive.
+    private let personalDataFingerprints: [String] = [
+        "NoteStore.sqlite",      // Notes
+        "chat.db",               // Messages
+        "Envelope Index",        // Mail
+        "Calendar.sqlitedb",     // Calendar
+        "Reminders.sqlite",      // Reminders
+        "AddressBook-v22.abcddb", // Contacts
+        "knowledgeC.db",         // System usage knowledge graph
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
@@ -549,6 +580,72 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+                // 2024-2025 stealers commonly use osascript to coerce the user into typing their
+                // login password into a fake dialog. Watch for "display dialog ... with hidden answer".
+                if lineStr.contains("osascript") &&
+                   lineStr.contains("display dialog") &&
+                   (lineStr.contains("hidden answer") || lineStr.contains("password")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "AppleScript prompting for password",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "AMOS-family stealers use this pattern to capture the login password — kill the process and investigate its parent"
+                    ))
+                }
+            }
+        }
+
+        // Personal-data DB copies in /tmp or hidden dirs — strong stealer signal.
+        scanForPersonalDataExfil(home: home, findings: &findings)
+    }
+
+    /// Detect copies of macOS personal-data databases (Notes, Messages, Mail, Contacts, etc.)
+    /// staged in /tmp, hidden dirs, or user-writable locations outside the app's real data dir.
+    /// Stealers like AMOS 2.0, Banshee, and PasivRobber explicitly target these.
+    private func scanForPersonalDataExfil(home: String, findings: inout [Finding]) {
+        let fm = FileManager.default
+        let searchRoots = [
+            "/tmp", "/private/tmp", "/var/tmp",
+            "\(home)/.local", "\(home)/.config",
+        ]
+        // Legitimate roots (where each DB lives on a healthy system).
+        let legitRoots: [String] = [
+            "\(home)/Library/",
+            "/private/var/db/",
+            "/var/db/",
+            "/System/", "/Library/",
+        ]
+
+        for root in searchRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.fileSizeKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+            for case let url as URL in enumerator {
+                if enumerator.level > 4 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let filename = url.lastPathComponent
+                guard personalDataFingerprints.contains(where: { fp in
+                    filename == fp || url.path.hasSuffix(fp)
+                }) else { continue }
+
+                if legitRoots.contains(where: { url.path.hasPrefix($0) }) { continue }
+
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                if size < 1024 { continue }  // Skip near-empty decoys
+
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Personal-data database copied to non-app location",
+                    detail: "File \"\(filename)\" at \(url.path) (\(size / 1024)KB) — Apple personal-data stores only live under ~/Library",
+                    path: url.path,
+                    remediation: "Identify the process that placed this copy and treat the data inside as compromised (rotate credentials referenced in it)"
+                ))
             }
         }
     }
