@@ -434,6 +434,190 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 macOS malware families
+        SpywareSignature(
+            // Fake browser-update lure that drops AMOS-family stealer payloads (Proofpoint, 2024-2025).
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "FrigidMac"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            // BlueNoroff (DPRK) Nim-based macOS implant first reported by SentinelOne in late 2024.
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "GoogleVPN", "ZoomVideo", "CoreKitAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.google.update.agent.plist",
+                "~/Library/Application Support/.GoogleVPN",
+            ],
+            launchAgentLabels: ["com.google.update.agent", "us.zoom.video.helper"]
+        ),
+        SpywareSignature(
+            // First-stage JS infostealer in the DPRK "Contagious Interview" campaign — droppers come
+            // disguised as coding-challenge npm packages handed to fake job candidates.
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "node_helper", "n2helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.BeaverTail",
+                "~/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Second stage Python backdoor used together with BeaverTail (2024-2025).
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "pyp_helper", "pay_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pyp",
+                "/private/tmp/.pay",
+                "~/.pyp", "~/.pay",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Chinese-language macOS RAT reported by Kaspersky/Objective-See in 2024.
+            name: "HZ RAT",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect.app", "VPNHelper"],
+            bundleIdentifiers: ["com.openvpn.client", "com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/OpenVPNConnect",
+                "~/Library/Application Support/.HZRat",
+            ],
+            launchAgentLabels: ["com.openvpn.client.plist", "com.hzrat.agent"]
+        ),
+        SpywareSignature(
+            // Lazarus implant that hides payloads in extended file attributes (ESET, late 2024).
+            name: "RustyAttr",
+            processNames: ["rustyattr", "RustyAttr", "tauri_helper", "PreviewApp"],
+            bundleIdentifiers: ["com.tauri.helper"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Caches/.rustyattr",
+            ],
+            launchAgentLabels: ["com.tauri.preview.helper"]
+        ),
+        SpywareSignature(
+            // Go-language reimplementation of the AMOS stealer (AT&T Alien Labs, 2023-2024).
+            name: "JaskaGo",
+            processNames: ["jaskago", "JaskaGo", "go_helper", "goinstaller"],
+            bundleIdentifiers: ["com.jaskago.stealer"],
+            filePaths: [
+                "/private/tmp/.jaskago",
+                "~/Library/Application Support/.JaskaGo",
+            ],
+            launchAgentLabels: ["com.jaskago.agent"]
+        ),
+        SpywareSignature(
+            // AMOS rebrand sold on underground markets in 2024 — Russian-speaking actor.
+            name: "Odyssey Stealer",
+            processNames: ["odyssey", "Odyssey", "odystealer", "odsy"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            // Earth Hundun (TOXIC PANDA) macOS variant tracked by Trend Micro in 2024.
+            name: "Toxic Panda (macOS)",
+            processNames: ["toxicpanda", "ToxicPanda", "ehundun", "macos_helper"],
+            bundleIdentifiers: ["com.toxicpanda.agent"],
+            filePaths: [
+                "/private/tmp/.toxicpanda",
+                "~/Library/Application Support/.ToxicPanda",
+            ],
+            launchAgentLabels: ["com.toxicpanda.agent"]
+        ),
+        SpywareSignature(
+            // First broadly distributed macOS ransomware family, observed in 2024.
+            name: "NotLockBit",
+            processNames: ["notlockbit", "NotLockBit", "lockbit_macos", "lockit"],
+            bundleIdentifiers: ["com.lockbit.macos"],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "/private/var/tmp/.lockbit",
+                "~/Library/Application Support/.NotLockBit",
+            ],
+            launchAgentLabels: ["com.lockbit.macos"]
+        ),
+        SpywareSignature(
+            // Stealer first documented by Objective-See in 2025 — masquerades as system processes.
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "AppleSystemHub", "applesystemupdater"],
+            bundleIdentifiers: ["com.apple.processhub", "com.apple.systemupdater"],
+            filePaths: [
+                "/private/tmp/.appleprocesshub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub", "com.apple.systemupdater"]
+        ),
+        SpywareSignature(
+            // Lazarus subgroup payload that wraps a Telegram-based C2 (Jamf, 2024).
+            name: "FullHouse.Doored",
+            processNames: ["fullhouse", "Doored", "tlg_helper", "tlhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.fullhouse",
+                "~/Library/Application Support/.Doored",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Famous Chollima Python implant tracked by Cisco Talos in 2024.
+            name: "PylangGhost",
+            processNames: ["pylangghost", "PylangGhost", "py_lang", "pylghost"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pylangghost",
+                "~/Library/Application Support/.PylangGhost",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Crimson family stealer reported in late 2024.
+            name: "Crimson Stealer",
+            processNames: ["crimson", "CrimsonStealer", "crmsn", "crimsonmac"],
+            bundleIdentifiers: ["com.crimson.stealer"],
+            filePaths: [
+                "/private/tmp/.crimson",
+                "~/Library/Application Support/.Crimson",
+            ],
+            launchAgentLabels: ["com.crimson.agent"]
+        ),
+        SpywareSignature(
+            // Lumma macOS port (sold to multiple actors, 2024-2025).
+            name: "Lumma Stealer (macOS)",
+            processNames: ["lumma", "Lumma", "lummamac", "lummaC"],
+            bundleIdentifiers: ["com.lumma.stealer"],
+            filePaths: [
+                "/private/tmp/.lumma",
+                "~/Library/Application Support/.Lumma",
+            ],
+            launchAgentLabels: ["com.lumma.agent"]
+        ),
+        SpywareSignature(
+            // Commercial spyware family alleged to be a Pegasus successor (Citizen Lab).
+            name: "Reign / QuaDream",
+            processNames: ["quadream", "QuaDream", "rdkill", "reignhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.quadream",
+                "/private/var/tmp/.reign",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
