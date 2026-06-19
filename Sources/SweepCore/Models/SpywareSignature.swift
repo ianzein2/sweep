@@ -434,6 +434,156 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" campaign (2024) — fake recruiter installs
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "p.js", "fccall"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Caches/.npm-cache-helper",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "pay", "fav"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisible",
+                "~/Library/Application Support/.iferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FerretApp"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: ["/private/tmp/.flexferret"],
+            launchAgentLabels: ["com.flexible.ferret.service"]
+        ),
+        // RustDoor / GateDoor (Feb 2024, ALPHV/BlackCat affiliate-linked)
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater"],
+            bundleIdentifiers: ["com.visualstudio.updater"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.VSCode-Updater",
+            ],
+            launchAgentLabels: ["com.visualstudio.updater"]
+        ),
+        SpywareSignature(
+            name: "GateDoor",
+            processNames: ["GateDoor", "gatedoor", "go_updater"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.gatedoor"],
+            launchAgentLabels: []
+        ),
+        // LightSpy macOS variant (2024) — multi-platform spyware
+        SpywareSignature(
+            name: "LightSpy",
+            processNames: ["lightspy", "LightSpy", "ircbin", "Iboot", "macsvc"],
+            bundleIdentifiers: ["com.lightspy.macsvc"],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Application Support/.LightSpy",
+            ],
+            launchAgentLabels: ["com.lightspy.service"]
+        ),
+        // FrigidStealer (Feb 2025) — distributed via fake browser updates
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "Frigid", "BotShell"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        // HZ-RAT macOS variant (mid-2024)
+        SpywareSignature(
+            name: "HZ-RAT",
+            processNames: ["hzrat", "HZ-RAT", "hz_rat", "hzagent"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hzrat.service"]
+        ),
+        // JokerSpy (2023-2024) — Python-based backdoor
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["jokerspy", "JokerSpy", "xcc", "shared.dat"],
+            bundleIdentifiers: ["com.apple.suhelperd"],
+            filePaths: [
+                "/Users/Shared/.xcc",
+                "/private/tmp/.jokerspy",
+            ],
+            launchAgentLabels: ["com.apple.suhelperd"]
+        ),
+        // DigitStealer (2025)
+        SpywareSignature(
+            name: "DigitStealer",
+            processNames: ["DigitStealer", "digitstealer", "DigitAgent"],
+            bundleIdentifiers: ["com.digit.stealer"],
+            filePaths: [
+                "/private/tmp/.digit",
+                "~/Library/Application Support/.DigitStealer",
+            ],
+            launchAgentLabels: ["com.digit.agent"]
+        ),
+        // Embargo Stealer (2024-2025)
+        SpywareSignature(
+            name: "Embargo Stealer",
+            processNames: ["Embargo", "embargo_stealer", "embgo"],
+            bundleIdentifiers: ["com.embargo.stealer"],
+            filePaths: [
+                "/private/tmp/.embargo",
+                "~/Library/Application Support/.Embargo",
+            ],
+            launchAgentLabels: ["com.embargo.service"]
+        ),
+        // PoorBear / Tiny FUD stealer (2025)
+        SpywareSignature(
+            name: "Tiny FUD",
+            processNames: ["TinyFUD", "tinyfud", "tfud_agent"],
+            bundleIdentifiers: ["com.tinyfud.agent"],
+            filePaths: ["/private/tmp/.tinyfud"],
+            launchAgentLabels: ["com.tinyfud.service"]
+        ),
+        // ObjCShellz follow-up: ContagiousDrop / SwiftLoader (DPRK 2025)
+        SpywareSignature(
+            name: "SwiftLoader (DPRK)",
+            processNames: ["SwiftLoader", "swiftloader", "swift_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.swiftloader",
+                "~/Library/Caches/com.apple.swiftcache",
+            ],
+            launchAgentLabels: []
+        ),
+        // CloudChat / SugarLocker (2024)
+        SpywareSignature(
+            name: "Crimson Palette",
+            processNames: ["CrimsonPalette", "crimson_palette", "cp_agent"],
+            bundleIdentifiers: ["com.crimsonpalette.stealer"],
+            filePaths: ["/private/tmp/.crimson"],
+            launchAgentLabels: ["com.crimsonpalette.service"]
+        ),
+        // NimDoor (Aug 2024 - DPRK-linked, written in Nim)
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "nim_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.nimcache",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

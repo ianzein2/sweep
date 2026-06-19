@@ -78,6 +78,66 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking system shell config files")
+        scanSystemShellConfigs(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook generators")
+        scanPluginBundleDir(
+            paths: ["/Library/QuickLook", ShellRunner.realUserHome + "/Library/QuickLook"],
+            ext: "qlgenerator",
+            mechanism: "QuickLook generator",
+            description: "QuickLook generators run whenever Finder previews a file — a known persistence channel for stealthy spyware",
+            findings: &findings
+        )
+
+        progress?.update("checking Spotlight importers")
+        scanPluginBundleDir(
+            paths: ["/Library/Spotlight", ShellRunner.realUserHome + "/Library/Spotlight"],
+            ext: "mdimporter",
+            mechanism: "Spotlight importer",
+            description: "Spotlight importers are loaded by Apple's mds process whenever matching files are indexed — abused for stealth code execution",
+            findings: &findings
+        )
+
+        progress?.update("checking CoreAudio HAL plugins")
+        scanPluginBundleDir(
+            paths: ["/Library/Audio/Plug-Ins/HAL"],
+            ext: "driver",
+            mechanism: "CoreAudio HAL plug-in",
+            description: "HAL plug-ins load into every audio-using process; a malicious plug-in inherits microphone access from any app",
+            findings: &findings
+        )
+
+        progress?.update("checking screen savers")
+        scanPluginBundleDir(
+            paths: ["/Library/Screen Savers", ShellRunner.realUserHome + "/Library/Screen Savers"],
+            ext: "saver",
+            mechanism: "Screen saver bundle",
+            description: "Screen savers execute arbitrary code when activated and have been used as persistence by APT groups",
+            findings: &findings
+        )
+
+        progress?.update("checking authorization plug-ins")
+        scanPluginBundleDir(
+            paths: ["/Library/Security/SecurityAgentPlugins"],
+            ext: "bundle",
+            mechanism: "Authorization plug-in",
+            description: "AuthorizationPlugins run during login, sudo, and screensaver unlock — a single rogue plug-in can capture every credential entered",
+            findings: &findings
+        )
+
+        progress?.update("checking Directory Services plug-ins")
+        scanPluginBundleDir(
+            paths: ["/Library/DirectoryServices/PlugIns"],
+            ext: "dsplug",
+            mechanism: "Directory Services plug-in",
+            description: "DirectoryService plug-ins load into opendirectoryd and can intercept every account lookup or authentication",
+            findings: &findings
+        )
+
+        progress?.update("checking synthetic.conf")
+        scanSyntheticConf(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +736,140 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - System-wide shell configs
+
+    private func scanSystemShellConfigs(findings: inout [Finding], errors: inout [String]) {
+        // /etc/zshenv runs for EVERY zsh invocation including non-interactive ones — the most
+        // powerful persistence channel and a known XCSSET / shell-config attack target.
+        // /etc/zprofile, /etc/profile, /etc/bashrc are system-wide login/interactive equivalents.
+        // None of these exist by default on a clean macOS install; their presence warrants review.
+        let systemConfigs = [
+            "/etc/zshenv", "/etc/zprofile", "/etc/zshrc",
+            "/etc/profile", "/etc/bashrc", "/etc/bash.bashrc",
+            "/etc/csh.cshrc", "/etc/csh.login",
+        ]
+
+        for configPath in systemConfigs {
+            guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { continue }
+            let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            // Skip Apple's stock /etc/zshrc which ships on modern macOS (contains the Apple copyright header).
+            let isAppleStock = configPath == "/etc/zshrc" &&
+                content.contains("Default zsh") && content.contains("Apple")
+            if isAppleStock { continue }
+
+            // Match against spyware names first
+            let contentLC = content.lowercased()
+            var matchedSpyware: String?
+            for sig in SpywareSignature.known {
+                for name in sig.processNames where contentLC.contains(name.lowercased()) {
+                    matchedSpyware = sig.name
+                    break
+                }
+                if matchedSpyware != nil { break }
+            }
+
+            let fileName = URL(fileURLWithPath: configPath).lastPathComponent
+            let severity: Severity = matchedSpyware != nil ? .high : .medium
+            let title = matchedSpyware != nil
+                ? "Known spyware reference in system shell config (\(fileName)): \(matchedSpyware!)"
+                : "Custom system-wide shell config present (\(fileName))"
+
+            findings.append(Finding(
+                severity: severity, category: .persistence,
+                title: title,
+                detail: configPath == "/etc/zshenv"
+                    ? "/etc/zshenv runs for every zsh invocation including non-interactive shells — strong persistence vector"
+                    : "Runs for every shell session of every user on this Mac (\(content.split(separator: "\n").count) lines)",
+                path: configPath,
+                remediation: "Inspect contents: cat \(configPath) — remove if not installed deliberately"
+            ))
+        }
+    }
+
+    // MARK: - Plug-in bundle directories (QuickLook, Spotlight, HAL, ScreenSavers, AuthPlugins, DSPlugins)
+
+    private func scanPluginBundleDir(
+        paths: [String],
+        ext: String,
+        mechanism: String,
+        description: String,
+        findings: inout [Finding]
+    ) {
+        // Apple ships a handful of stock plug-ins in each of these directories. Anything else
+        // is third-party — usually legitimate (Suspicious Package, etc.) but worth surfacing.
+        let fm = FileManager.default
+        for dir in paths {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries {
+                guard entry.lowercased().hasSuffix(".\(ext)") else { continue }
+                let bundlePath = "\(dir)/\(entry)"
+
+                // Check the bundle's Info.plist for an Apple-signed bundle identifier (skip Apple's own).
+                let infoPlist = "\(bundlePath)/Contents/Info.plist"
+                if let data = fm.contents(atPath: infoPlist),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                   let bundleId = plist["CFBundleIdentifier"] as? String,
+                   bundleId.hasPrefix("com.apple.") {
+                    continue
+                }
+
+                // Match against known spyware bundle IDs/names if possible
+                let nameNoExt = (entry as NSString).deletingPathExtension
+                if let sig = SpywareSignature.match(processName: nameNoExt) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware \(mechanism) installed: \(sig.name)",
+                        detail: "\(mechanism) at \(bundlePath)",
+                        path: bundlePath,
+                        remediation: "Remove this plug-in: sudo rm -rf \"\(bundlePath)\""
+                    ))
+                    continue
+                }
+
+                // Verify code signature of the bundle's main executable, if any.
+                let isSigned = checkIsSigned(path: bundlePath)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .medium,
+                    category: .persistence,
+                    title: "Third-party \(mechanism) installed\(isSigned ? "" : " (unsigned)")",
+                    detail: "\(mechanism): \(entry) — \(description)",
+                    path: bundlePath,
+                    remediation: isSigned
+                        ? "Verify this plug-in is from a vendor you recognize"
+                        : "Unsigned \(mechanism)s are unusual — investigate, then remove if not expected: sudo rm -rf \"\(bundlePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - synthetic.conf
+
+    private func scanSyntheticConf(findings: inout [Finding], errors: inout [String]) {
+        // /etc/synthetic.conf creates firmlinks/synthetic directories at boot under the read-only
+        // system root. Malware can use it to plant attacker-controlled mount points at well-known
+        // paths (e.g. /private, /bin/X) that survive reboot and run before user login.
+        let path = "/etc/synthetic.conf"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        let nonComment = content.split(separator: "\n").filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.isEmpty && !trimmed.hasPrefix("#")
+        }
+        guard !nonComment.isEmpty else { return }
+
+        findings.append(Finding(
+            severity: .medium, category: .persistence,
+            title: "Custom entries in /etc/synthetic.conf (\(nonComment.count))",
+            detail: "First entry: \(String(nonComment[0].prefix(120))) — synthetic.conf can plant firmlinks at boot that bypass SIP-protected paths",
+            path: path,
+            remediation: "Inspect contents: cat \(path) — remove unrecognized entries: sudo nano \(path) (requires reboot)"
+        ))
     }
 
     private func checkIsSigned(path: String) -> Bool {

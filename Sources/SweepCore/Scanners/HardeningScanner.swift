@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID for sudo")
+        checkTouchIDForSudo(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version")
+        checkMacOSVersion(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +455,83 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac lets you remote-lock or wipe a stolen Mac. The activation state is
+        // surfaced via fmm-mobileme-token-registered in the macOS configuration domain.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.FindMyMac", "FMMEnabled"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Find My Mac is disabled",
+                    detail: "Without Find My Mac, a stolen Mac can't be remotely locked, located, or wiped",
+                    path: nil,
+                    remediation: "Enable: System Settings > Apple Account > iCloud > Find My Mac"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Touch ID for sudo
+
+    private func checkTouchIDForSudo(findings: inout [Finding], errors: inout [String]) {
+        // macOS Sonoma 14+ supports Touch ID for sudo via /etc/pam.d/sudo_local — a drop-in
+        // that survives system upgrades. We flag this as informational (low) since password sudo
+        // is the safe default, but having Touch ID enabled hardens against keyloggers capturing
+        // the sudo password.
+        let sudoLocal = "/etc/pam.d/sudo_local"
+        guard let content = try? String(contentsOfFile: sudoLocal, encoding: .utf8) else { return }
+
+        let hasTouchID = content.split(separator: "\n").contains { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return !trimmed.hasPrefix("#") && trimmed.contains("pam_tid.so")
+        }
+        if hasTouchID {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Touch ID for sudo is enabled",
+                detail: "Configured via /etc/pam.d/sudo_local — sudo accepts Touch ID, reducing keylogger risk",
+                path: sudoLocal,
+                remediation: "No action needed if you set this intentionally"
+            ))
+        }
+    }
+
+    // MARK: - macOS version currency
+
+    private func checkMacOSVersion(findings: inout [Finding], errors: inout [String]) {
+        // Running an unsupported macOS version means no more security patches. Apple typically
+        // supports the current release plus two previous majors. As of mid-2026 the supported
+        // releases are macOS 14 Sonoma, 15 Sequoia, and 16+. Anything older than 14 no longer
+        // receives security updates.
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        let major = v.majorVersion
+
+        if major < 14 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major).\(v.minorVersion) is no longer receiving security updates",
+                detail: "Apple has stopped issuing security patches for this macOS major release. New CVEs will not be fixed.",
+                path: nil,
+                remediation: "Upgrade to a currently supported macOS release via System Settings > General > Software Update"
+            ))
+        } else if major == 14 {
+            // macOS 14 Sonoma is on the way out of support — surface as medium reminder.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS 14 Sonoma is nearing end of security support",
+                detail: "Apple typically drops the oldest major release once a new one ships. Plan an upgrade soon.",
+                path: nil,
+                remediation: "Consider upgrading: System Settings > General > Software Update"
+            ))
         }
     }
 

@@ -17,6 +17,31 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Extensions confirmed malicious in public incident reports. Compromised legitimate
+    // extensions are listed too — users who installed them before the breach are still at risk
+    // if Chrome hasn't auto-uninstalled the bad version. Sources: Cyberhaven incident report
+    // (Dec 2024), Secure Annex / Sansec disclosures, and Google's Chrome Web Store takedowns.
+    private let maliciousExtensionIds: [String: String] = [
+        // Cyberhaven supply-chain attack (Dec 25 2024)
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (compromised v24.10.4 — Dec 2024 supply-chain attack)",
+        // Other extensions hit in the same Dec 2024 OAuth phishing campaign
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Internxt VPN (compromised in Dec 2024 OAuth phishing campaign)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "VPNCity (compromised in Dec 2024 OAuth phishing campaign)",
+        "oeiomhmbaapihbilkfkhmlajkeegnjhe": "Uvoice (compromised in Dec 2024 OAuth phishing campaign)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "ParrotTalks (compromised in Dec 2024 OAuth phishing campaign)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Reader Mode (compromised in Dec 2024 OAuth phishing campaign)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Bookmark Favicon Changer (compromised in Dec 2024 OAuth phishing campaign)",
+        "miglaibdlgminlepgeifekifakochlka": "Search Copilot (compromised in Dec 2024 OAuth phishing campaign)",
+        "egmennebgadmncfjafcemlecimkepcle": "VidHelper Video Downloader (compromised in Dec 2024 OAuth phishing campaign)",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "Castorus (compromised in Dec 2024 OAuth phishing campaign)",
+        // Additional caught from Secure Annex's Dec 2024 / Jan 2025 hunt
+        "lbgfmmkjkjclpiapebciecdndaeiaifk": "Wayin AI (caught hijacked Dec 2024)",
+        "kelchmifjkbkpejjkamlciknkflbeiff": "AI Assistant - ChatGPT (caught hijacked Dec 2024)",
+        "agglogahkndinjofkckdpfclnonkojjf": "Bard AI Chat (caught hijacked Dec 2024)",
+        // Known ChromeLoader hijacker families (rotated IDs, but these have been observed)
+        "ndlnaggfafekgkgblblmlmldebdamlal": "ChromeLoader family — observed Sept 2024",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +168,19 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Hard fail on extension IDs that match published IoCs from known incidents.
+                    if let label = maliciousExtensionIds[extId] {
+                        let installPath = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches a known malicious or compromised ID",
+                            detail: "\(label) — installed in profile \"\(profile)\", extension ID \(extId)",
+                            path: installPath,
+                            remediation: "Remove immediately: \(browserName) > Extensions (chrome://extensions). Rotate any credentials you've used in the browser since the install date."
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
