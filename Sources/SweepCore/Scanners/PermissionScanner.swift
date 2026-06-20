@@ -12,6 +12,37 @@ public final class PermissionScanner: Scanner {
         ("kTCCServicePostEvent", "Synthetic Input"),
         ("kTCCServiceMicrophone", "Microphone"),
         ("kTCCServiceCamera", "Camera"),
+        // Newer macOS TCC services worth auditing — these were added in macOS 12-15
+        // and are heavily abused by modern spyware:
+        ("kTCCServiceAppleEvents", "Automation (AppleEvents)"),
+        ("kTCCServiceDeveloperTool", "Developer Tool (arbitrary code execution)"),
+        ("kTCCServiceSystemPolicyDesktopFolder", "Desktop folder access"),
+        ("kTCCServiceSystemPolicyDocumentsFolder", "Documents folder access"),
+        ("kTCCServiceSystemPolicyDownloadsFolder", "Downloads folder access"),
+        ("kTCCServiceSystemPolicyAppBundles", "App Management"),
+        ("kTCCServiceFileProviderDomain", "FileProvider extensions"),
+        ("kTCCServiceEndpointSecurityClient", "Endpoint Security client"),
+        ("kTCCServiceContactsFull", "Full Contacts"),
+        ("kTCCServiceCalendar", "Calendar"),
+        ("kTCCServiceReminders", "Reminders"),
+        ("kTCCServicePhotos", "Photos"),
+        ("kTCCServiceUbiquity", "iCloud Drive"),
+        ("kTCCServiceLocation", "Location"),
+        ("kTCCServiceMediaLibrary", "Apple Music library"),
+        ("kTCCServiceSpeechRecognition", "Speech recognition"),
+        ("kTCCServiceSystemPolicyRemovableVolumes", "Removable volumes"),
+        ("kTCCServiceSystemPolicyNetworkVolumes", "Network volumes"),
+    ]
+
+    /// Services where ANY non-Apple, non-whitelisted grant should be flagged.
+    /// These confer the ability to read sensitive data, run arbitrary code,
+    /// drive other apps via Apple Events, or bypass other TCC controls.
+    private let highRiskTCCServices: Set<String> = [
+        "kTCCServiceAppleEvents",
+        "kTCCServiceDeveloperTool",
+        "kTCCServiceEndpointSecurityClient",
+        "kTCCServiceFileProviderDomain",
+        "kTCCServiceSystemPolicyAppBundles",
     ]
 
     private let whitelistedClients: Set<String> = [
@@ -119,10 +150,12 @@ public final class PermissionScanner: Scanner {
 
         for (client, permissions) in clientPermissions {
             if whitelistedClients.contains(client) { continue }
-            if client.hasPrefix("com.apple.") { continue }
 
             let permLabels = permissions.map { $0.label }
 
+            // Check known spyware BEFORE the com.apple.* skip — recent campaigns (JOKERSPY,
+            // macma, HZ RAT, etc.) ship with fake Apple-prefixed bundle IDs to evade
+            // naïve prefix-based filters. The spyware DB knows about these specific IDs.
             if let sig = SpywareSignature.match(bundleId: client) {
                 findings.append(Finding(
                     severity: .high, category: .permission,
@@ -134,10 +167,83 @@ public final class PermissionScanner: Scanner {
                 continue
             }
 
+            // Catch heuristic fake-Apple patterns (e.g., com.apple.*.helper / com.apple.*.agent)
+            // before the legitimate-Apple skip. Real Apple TCC clients don't use those suffixes.
+            if SpywareSignature.isFakeAppleBundleId(client) {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "Fake Apple bundle ID has TCC permissions",
+                    detail: "Client: \(client), Permissions: \(permLabels.joined(separator: ", ")) — this is not a legitimate Apple service",
+                    path: nil,
+                    remediation: "Revoke all permissions and uninstall the underlying app"
+                ))
+                continue
+            }
+
+            if client.hasPrefix("com.apple.") { continue }
+
             let hasScreenCapture = permLabels.contains("Screen Capture")
             let hasInputMonitoring = permLabels.contains("Input Monitoring")
             let hasMic = permLabels.contains("Microphone")
             let hasCamera = permLabels.contains("Camera")
+
+            // High-risk modern TCC services. We surface each one separately so the user
+            // sees exactly which capability is granted; one finding per (client, service)
+            // is more actionable than a single rolled-up alert.
+            for permission in permissions {
+                guard highRiskTCCServices.contains(permission.service) else { continue }
+                switch permission.service {
+                case "kTCCServiceAppleEvents":
+                    // Apple Events lets the app drive other apps via AppleScript / scripting
+                    // bridges. Combined with Accessibility this is essentially "remote
+                    // control" of the Mac.
+                    findings.append(Finding(
+                        severity: .high, category: .permission,
+                        title: "Non-standard app can control other apps (Apple Events)",
+                        detail: "Client: \(client) — can send AppleEvents to drive other apps, exfiltrate Mail, Notes, Messages, etc.",
+                        path: nil,
+                        remediation: "Revoke: System Settings > Privacy & Security > Automation"
+                    ))
+                case "kTCCServiceDeveloperTool":
+                    // Developer Tool permission lets the app run code that would otherwise
+                    // be blocked by Gatekeeper / hardened runtime checks — it's a full TCC bypass.
+                    findings.append(Finding(
+                        severity: .high, category: .permission,
+                        title: "Non-standard app has Developer Tool permission",
+                        detail: "Client: \(client) — can execute arbitrary code under hardened runtime, bypassing Gatekeeper checks",
+                        path: nil,
+                        remediation: "Revoke: System Settings > Privacy & Security > Developer Tools"
+                    ))
+                case "kTCCServiceEndpointSecurityClient":
+                    findings.append(Finding(
+                        severity: .high, category: .permission,
+                        title: "Non-standard app has Endpoint Security entitlement",
+                        detail: "Client: \(client) — can observe every process exec / file open / network event on the Mac",
+                        path: nil,
+                        remediation: "Only EDR/security tools should have this. Revoke if not expected."
+                    ))
+                case "kTCCServiceFileProviderDomain":
+                    findings.append(Finding(
+                        severity: .medium, category: .permission,
+                        title: "Non-standard app registered as a FileProvider",
+                        detail: "Client: \(client) — can interpose on file I/O for synced folders",
+                        path: nil,
+                        remediation: "Verify this is a legitimate cloud-sync client (Dropbox, OneDrive, etc.)"
+                    ))
+                case "kTCCServiceSystemPolicyAppBundles":
+                    // App Management (macOS 13+) lets the app modify the contents of other apps —
+                    // a perfect malware-implantation primitive.
+                    findings.append(Finding(
+                        severity: .high, category: .permission,
+                        title: "Non-standard app has App Management permission",
+                        detail: "Client: \(client) — can modify the contents of other apps, defeating signature checks",
+                        path: nil,
+                        remediation: "Revoke: System Settings > Privacy & Security > App Management"
+                    ))
+                default:
+                    break
+                }
+            }
 
             if hasScreenCapture && hasInputMonitoring {
                 findings.append(Finding(

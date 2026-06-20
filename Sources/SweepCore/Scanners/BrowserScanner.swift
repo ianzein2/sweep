@@ -17,6 +17,40 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome extensions known to have been compromised, weaponized, or distributed by
+    // attackers. Includes the December 2024 "Cyberhaven" supply-chain incident
+    // (a phishing campaign that pushed malicious updates to ~36 extensions, exfiltrating
+    // Facebook/Google session cookies and Chrome Web Store credentials) plus other
+    // publicly-reported malicious extension IDs.
+    private let knownMaliciousExtensionIds: [String: String] = [
+        // December 2024 Cyberhaven supply-chain wave
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (compromised v24.10.4)",
+        "dpggmcodlahmljkhlmpgpdcffdaoccni": "Internxt VPN (compromised)",
+        "nnpljppamoaalgkieeciijbcccohlpoh": "VPNCity (compromised)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice (compromised)",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "ParrotTalks (compromised)",
+        "llimhhconnjiflfimocjggfjdlmlhblm": "Reader Mode (compromised)",
+        "oeoookbgkmlpojkjmcfmaiboapbdlcnp": "ChatGPT App for Google (compromised)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Bookmark Favicon Changer (compromised)",
+        "bibjgkidgpfbblifamdlkdlhgihmfohh": "AI Assistant (compromised)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Castorus (compromised)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "Search Copilot AI Assistant (compromised)",
+        "egmennebgadmncfjafcemlecimkepcle": "VidHelper Video Downloader (compromised)",
+        "epikoohpebngmakjinphfiagogjcnddm": "AI Shop Buddy (compromised)",
+        "miglaibdlgminlepgeifekifakochlka": "Sort by Oldest (compromised)",
+        "jiofmdifioeejeilfkpegipdjiopiekl": "Earny - Up to 20% Cash Back (compromised)",
+        "hodiladlefdpcbemnbbcpclbmknkiaem": "Visual Effects for Google Meet (compromised)",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "Email Hunter (compromised)",
+        "cphdlfffmjkgkijejhfgnaboahmdjqhg": "GraphQL Network Inspector (compromised)",
+        "hihblcmlaaademjlakdpicchbjnnnkbo": "Visibility Recorder (compromised)",
+        "fbjfihoienmhbjflbobnmimfijpngkpa": "Wayin AI (compromised)",
+        "jiefnihfkebmhabajfjkdgppglblifjb": "Bard AI Chat (compromised)",
+        "cedgndijpacnfbdggppddacngjogdds": "Tackker - online keylogger tool (compromised)",
+        "dlnejlppicbjfcfcedcflplfjajinajd": "AI Assistant by GPT-4 (compromised)",
+        "pdnenlnelpdomajfejgapbdpmjkfpjkp": "Vidnoz Flex (compromised)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Email Hunter alt (compromised)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -142,6 +176,19 @@ public final class BrowserScanner: Scanner {
                       let extensions = try? fm.contentsOfDirectory(atPath: extPath) else { continue }
 
                 for extId in extensions {
+                    // Known-bad extensions are flagged immediately, even before parsing the manifest —
+                    // attackers sometimes wipe / tamper with manifest.json on detection.
+                    if let badName = knownMaliciousExtensionIds[extId] {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known-malicious ID",
+                            detail: "Extension ID \(extId) (\(badName)) was compromised or known to be malicious. Profile: \(profile)",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately in \(browserName) > Extensions, then rotate passwords/sessions used in this browser"
+                        ))
+                        continue
+                    }
+
                     if trustedExtensionIds.contains(extId) { continue }
 
                     let dedupeKey = "\(browserName):\(extId)"

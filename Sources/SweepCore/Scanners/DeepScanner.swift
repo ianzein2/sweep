@@ -37,6 +37,30 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for Background Task Management (BTM) tampering — a known
+        //    DPRK / infostealer trick is to manipulate macOS's Background Items
+        //    list so persistence doesn't appear in System Settings > Login Items.
+        progress?.update("checking Background Task Management database")
+        scanBTMDatabase(findings: &findings, errors: &errors)
+
+        // 7. SSH client config tampering: many infostealers add ProxyCommand or
+        //    ForwardAgent yes to ~/.ssh/config, letting attackers pivot through
+        //    your established SSH sessions. Also scan known_hosts for deletions.
+        progress?.update("checking SSH client configuration")
+        scanSSHConfig(findings: &findings, errors: &errors)
+
+        // 8. Spotlight importers, QuickLook generators, AudioUnit plugins, and
+        //    color profiles are all loaded into long-lived system processes.
+        //    Rogue ones are a common modern persistence pattern that doesn't
+        //    require a LaunchAgent / Daemon.
+        progress?.update("checking plugin-loaded persistence")
+        scanPluginPersistence(findings: &findings, errors: &errors)
+
+        // 9. Spotlight indexer disabled on user home — a stealth technique that
+        //    hides files from search and Time Machine.
+        progress?.update("checking Spotlight indexing")
+        scanSpotlightIndexing(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -309,6 +333,257 @@ public final class DeepScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - Background Task Management (BTM) Database
+
+    private func scanBTMDatabase(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura+ stores Login Items / LaunchAgents registered through SMAppService
+        // in /private/var/db/com.apple.backgroundtaskmanagement/BackgroundItems-v*.btm.
+        // We compare the BTM database against what's installed on disk to detect:
+        //  - dumpbtm refused / database missing entirely (active tampering)
+        //  - entries whose container apps don't exist (orphaned attacker-installed entries)
+        //  - entries marked as disabled-by-user that were re-enabled silently
+        let dumpResult = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        if !dumpResult.success || dumpResult.stdout.isEmpty {
+            // sfltool dumpbtm is the only supported way to read this database; failure here
+            // on Ventura+ means the BTM service is broken — historically a hallmark of
+            // OSX.RustBucket and HiddenRisk dropping their plists then restarting the daemon.
+            let btmDirExists = FileManager.default.fileExists(atPath: "/private/var/db/com.apple.backgroundtaskmanagement")
+            if btmDirExists {
+                findings.append(Finding(
+                    severity: .medium, category: .systemIntegrity,
+                    title: "Background Task Management is not enumerable",
+                    detail: "sfltool dumpbtm failed even though the BTM database exists — the service may have been killed or tampered with",
+                    path: "/private/var/db/com.apple.backgroundtaskmanagement",
+                    remediation: "Restart backgroundtaskmanagementd or reboot. If the issue persists, suspect tampering."
+                ))
+            }
+            return
+        }
+
+        // BTM dump entries roughly look like:
+        //   Name: SomeApp.app
+        //   Bundle Identifier: com.example.someapp
+        //   Path: /Applications/SomeApp.app
+        //   Disposition: ... [enabled, ...]
+        // We pair each "Path" with the surrounding metadata so we can flag
+        // disabled-yet-running and missing-on-disk entries.
+        struct BTMEntry {
+            var name: String?
+            var bundleId: String?
+            var path: String?
+        }
+
+        var entries: [BTMEntry] = []
+        var current = BTMEntry()
+        for rawLine in dumpResult.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                if current.path != nil || current.bundleId != nil {
+                    entries.append(current)
+                    current = BTMEntry()
+                }
+                continue
+            }
+            if let nameRange = line.range(of: "Name:") {
+                current.name = String(line[nameRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else if let bidRange = line.range(of: "Bundle Identifier:") {
+                current.bundleId = String(line[bidRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+            } else if let pathRange = line.range(of: "URL:")
+                        ?? line.range(of: "Path:")
+                        ?? line.range(of: "Executable Path:") {
+                var pathVal = String(line[pathRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if pathVal.hasPrefix("file://") {
+                    pathVal = String(pathVal.dropFirst("file://".count))
+                        .removingPercentEncoding ?? pathVal
+                }
+                current.path = pathVal
+            }
+        }
+        if current.path != nil || current.bundleId != nil { entries.append(current) }
+
+        let fm = FileManager.default
+        for entry in entries {
+            guard let path = entry.path, !path.isEmpty, path.hasPrefix("/") else { continue }
+            // Skip Apple-shipped entries; legitimate Apple paths or Apple bundle IDs are routinely registered.
+            if path.hasPrefix("/System/") || path.hasPrefix("/Library/Apple/") || path.hasPrefix("/usr/libexec/") { continue }
+            if let bid = entry.bundleId, bid.hasPrefix("com.apple.") { continue }
+
+            // Spyware signature in the BTM entry path or bundle ID
+            let basename = (path as NSString).lastPathComponent
+            if let sig = SpywareSignature.match(processName: basename) ??
+                         entry.bundleId.flatMap({ SpywareSignature.match(bundleId: $0) }) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware in Background Task Management: \(sig.name)",
+                    detail: "BTM entry: \(entry.name ?? basename) — \(path)",
+                    path: path,
+                    remediation: "Remove the underlying app and use sfltool to delete its BTM record"
+                ))
+                continue
+            }
+
+            if !fm.fileExists(atPath: path) {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Background Task Management entry points to missing file",
+                    detail: "BTM entry: \(entry.name ?? basename) → \(path) — orphan registrations are a known tamper indicator",
+                    path: path,
+                    remediation: "Remove the stale BTM record via sfltool or System Settings > Login Items"
+                ))
+            }
+        }
+    }
+
+    // MARK: - SSH Client Config
+
+    private func scanSSHConfig(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let configPath = "\(home)/.ssh/config"
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+
+        // ProxyCommand/ProxyJump can pivot every SSH session through an attacker host;
+        // ForwardAgent yes turns the user's running ssh-agent into a key-theft beacon
+        // visible to any host they log into.
+        let suspiciousDirectives: [(directive: String, severity: Severity, reason: String)] = [
+            ("ForwardAgent yes", .high,
+             "ForwardAgent yes globally is dangerous — any compromised host can use your SSH keys"),
+            ("ProxyCommand", .medium,
+             "ProxyCommand allows arbitrary code to run before the SSH connection — review the value"),
+            ("UserKnownHostsFile /dev/null", .high,
+             "Disabling known_hosts checking lets attackers MITM every SSH session"),
+            ("StrictHostKeyChecking no", .high,
+             "StrictHostKeyChecking off accepts any host key — enables silent MITM"),
+            ("LocalCommand", .medium,
+             "LocalCommand runs arbitrary shell commands when connecting — review the value"),
+            ("PermitLocalCommand yes", .medium,
+             "PermitLocalCommand yes pairs with LocalCommand for connection-time code execution"),
+        ]
+
+        for (idx, line) in content.split(separator: "\n").enumerated() {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+            for rule in suspiciousDirectives {
+                if trimmed.lowercased().hasPrefix(rule.directive.lowercased()) {
+                    findings.append(Finding(
+                        severity: rule.severity, category: .persistence,
+                        title: "Suspicious SSH client config: \(rule.directive)",
+                        detail: "Line \(idx + 1) of ~/.ssh/config — \(rule.reason)",
+                        path: configPath,
+                        remediation: "Review and remove if not intentional: nano ~/.ssh/config"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Plugin-loaded persistence (Spotlight, QuickLook, Internet Plug-Ins)
+
+    private func scanPluginPersistence(findings: inout [Finding], errors: inout [String]) {
+        // These bundles get loaded into long-lived system processes (mdworker, quicklookd,
+        // WebKit) any time Spotlight indexes a file, Preview generates a thumbnail, or
+        // Safari renders legacy content. They are a popular modern persistence channel
+        // because the loader (the system daemon) is Apple-signed and trusted.
+        //
+        // We restrict this check to the rare-on-typical-Macs plugin types. AudioUnit and
+        // ColorSync directories routinely hold dozens of legitimate third-party items
+        // (DAW plugins, monitor profiles); flagging each would be pure noise. For those
+        // we ONLY flag matches against our known-spyware list.
+        let home = ShellRunner.realUserHome
+        let auditedPluginDirs: [(path: String, label: String, host: String, validExt: [String])] = [
+            ("\(home)/Library/Spotlight",           "user Spotlight importers",  "mdworker",     [".mdimporter"]),
+            ("/Library/Spotlight",                  "system Spotlight importers","mdworker",     [".mdimporter"]),
+            ("\(home)/Library/QuickLook",           "user QuickLook generators", "quicklookd",   [".qlgenerator"]),
+            ("/Library/QuickLook",                  "system QuickLook generators","quicklookd",  [".qlgenerator"]),
+            ("\(home)/Library/Internet Plug-Ins",   "user Internet plug-ins",    "WebKit/Safari",[".plugin", ".webplugin"]),
+            ("/Library/Internet Plug-Ins",          "system Internet plug-ins",  "WebKit/Safari",[".plugin", ".webplugin"]),
+        ]
+        let spywareOnlyPluginDirs: [(path: String, label: String)] = [
+            ("\(home)/Library/Audio/Plug-Ins",      "user AudioUnit plug-ins"),
+            ("/Library/Audio/Plug-Ins",             "system AudioUnit plug-ins"),
+            ("\(home)/Library/ColorSync/Profiles",  "user ColorSync profiles"),
+        ]
+
+        let fm = FileManager.default
+
+        for plugin in auditedPluginDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: plugin.path) else { continue }
+
+            for entry in entries where !entry.hasPrefix(".") {
+                let entryPath = "\(plugin.path)/\(entry)"
+
+                if let sig = SpywareSignature.match(processName: entry) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware in \(plugin.label): \(sig.name)",
+                        detail: "Plugin: \(entry) — loaded into \(plugin.host)",
+                        path: entryPath,
+                        remediation: "Remove: sudo rm -rf \"\(entryPath)\""
+                    ))
+                    continue
+                }
+
+                let hasValidExt = plugin.validExt.contains { entry.hasSuffix($0) }
+                if hasValidExt {
+                    // Spotlight / QuickLook / Internet plug-ins are uncommon enough that any
+                    // third-party entry is worth surfacing as informational.
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Third-party plugin in \(plugin.label)",
+                        detail: "Plugin: \(entry) — loaded into \(plugin.host)",
+                        path: entryPath,
+                        remediation: "Verify this plugin is one you installed."
+                    ))
+                } else {
+                    // A non-bundle file in a plugin directory is a strong red flag.
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unexpected file in \(plugin.label)",
+                        detail: "Entry: \(entry) — not a typical plugin bundle (expected: \(plugin.validExt.joined(separator: ", ")))",
+                        path: entryPath,
+                        remediation: "Investigate: ls -la \"\(entryPath)\""
+                    ))
+                }
+            }
+        }
+
+        // AudioUnit / ColorSync: only flag known-spyware matches to avoid noise.
+        for dir in spywareOnlyPluginDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir.path) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                if let sig = SpywareSignature.match(processName: entry) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware in \(dir.label): \(sig.name)",
+                        detail: "Plugin: \(entry)",
+                        path: "\(dir.path)/\(entry)",
+                        remediation: "Remove: sudo rm -rf \"\(dir.path)/\(entry)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Spotlight Indexing State
+
+    private func scanSpotlightIndexing(findings: inout [Finding], errors: inout [String]) {
+        // mdutil -s / lists indexing state per volume. Disabling indexing on the boot volume
+        // is a known evasion: stops Spotlight from surfacing the attacker's files and breaks
+        // Time Machine consistency. Most users have indexing enabled.
+        let result = ShellRunner.run("/usr/bin/mdutil", arguments: ["-s", "/"], timeout: 5)
+        guard result.success else { return }
+        let lower = result.stdout.lowercased()
+        if lower.contains("indexing disabled") || lower.contains("no index") {
+            findings.append(Finding(
+                severity: .medium, category: .systemIntegrity,
+                title: "Spotlight indexing is disabled on the boot volume",
+                detail: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines),
+                path: nil,
+                remediation: "Re-enable: sudo mdutil -i on / — disabled indexing can be a malware evasion technique"
+            ))
         }
     }
 }

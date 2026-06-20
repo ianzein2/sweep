@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper anywhere")
+        checkGatekeeperAnywhere(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth")
+        checkBluetoothExposure(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join")
+        checkWiFiAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking Allow USB Accessories")
+        checkAllowAccessoriesLocked(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +481,140 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac protects against device theft: an offline Mac becomes part of the
+        // Find My network so it can still be located, and Activation Lock prevents wiping
+        // and reusing it. We don't penalize users who deliberately opt out, but we surface
+        // the state because most users want it on.
+        let fm = FileManager.default
+        let findMyPlist = "/Library/Preferences/com.apple.FindMyMac.plist"
+
+        if fm.fileExists(atPath: findMyPlist) {
+            // We can't reliably read the binary plist content without root in all cases;
+            // its existence + the FindMy daemon process is what matters here.
+            let ps = ShellRunner.run("/bin/ps", arguments: ["-ax", "-o", "comm"], timeout: 5)
+            let runs = ps.success && (ps.stdout.contains("findmydeviced") || ps.stdout.contains("searchpartyd"))
+            if !runs {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Find My Mac may not be active",
+                    detail: "The Find My configuration exists but its daemon is not running. If this Mac is stolen, you may not be able to locate or wipe it.",
+                    path: findMyPlist,
+                    remediation: "Verify: System Settings > Apple ID > iCloud > Find My Mac"
+                ))
+            }
+        } else {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My Mac is not configured",
+                detail: "If this Mac is lost or stolen, you won't be able to locate, lock, or remotely wipe it.",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper "Allow apps from anywhere"
+
+    private func checkGatekeeperAnywhere(findings: inout [Finding], errors: inout [String]) {
+        // `spctl --status` covers the main switch, but a separate signal worth watching is
+        // whether the user has individually approved unsigned apps via xattr deletion or
+        // via the GUI "Open Anyway" workflow. A high count of such approvals is unusual.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status", "--verbose"], timeout: 5)
+        let combined = (result.stdout + result.stderr).lowercased()
+        // Older "anywhere" Gatekeeper option (developer-mode bypass) — present on some sysadmin Macs
+        if combined.contains("anywhere enabled") || combined.contains("developer mode enabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper is in 'Allow apps from anywhere' / developer mode",
+                detail: "Unsigned and unnotarized apps run without Gatekeeper prompts",
+                path: nil,
+                remediation: "Restore default protection: sudo spctl --master-enable && sudo spctl developer-mode disable-runtime"
+            ))
+        }
+    }
+
+    // MARK: - Bluetooth state
+
+    private func checkBluetoothExposure(findings: inout [Finding], errors: inout [String]) {
+        // Bluetooth left on with discoverable devices increases the attack surface for
+        // recent vulns (BlueBorne-class, KNOB, BLURtooth, and AirDrop fuzzing). For most
+        // users it stays on; we only surface a low-severity informational alert when the
+        // controller is powered + the host accepts unauthenticated connections.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "ControllerPowerState"
+        ], timeout: 5)
+        guard result.success else { return }
+        let powered = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        guard powered else { return }
+
+        // Look for the host setting that auto-pairs without confirmation.
+        let pairResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "AllowBluetoothDevicesToWake"
+        ], timeout: 5)
+        if pairResult.success &&
+           pairResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bluetooth devices can wake this Mac",
+                detail: "Any paired Bluetooth device — including ones an attacker physically reaches — can wake the Mac and bring up the lock screen",
+                path: nil,
+                remediation: "Disable in System Settings > Bluetooth if not needed (e.g., for a Magic Keyboard)"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi auto-join open networks
+
+    private func checkWiFiAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // Auto-joining open Wi-Fi (no password) lets karma-style attackers impersonate any
+        // network you've previously connected to. CIS recommends disabling.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.airport.preferences",
+            "JoinModeFallback"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // JoinModeFallback "Prompt" means prompt before joining; "DoNothing" means never.
+            // Anything else (e.g., "JoinOpen") auto-joins open networks.
+            if value.lowercased() == "joinopen" || value.lowercased() == "join" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Wi-Fi auto-joins open networks",
+                    detail: "JoinModeFallback = \(value) — this Mac will silently connect to any unencrypted Wi-Fi nearby",
+                    path: nil,
+                    remediation: "Set to Ask in System Settings > Wi-Fi > Ask to join networks > Ask"
+                ))
+            }
+        }
+    }
+
+    // MARK: - "Allow accessories to connect"
+
+    private func checkAllowAccessoriesLocked(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon Macs let the user restrict USB / Thunderbolt accessories so the
+        // Mac doesn't enumerate unknown devices when locked. This blocks rubber-ducky and
+        // PCILeech-style attacks on stolen / unattended machines.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security.libraryvalidation",
+            "AllowAccessoryAlways"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "USB / Thunderbolt accessories auto-connect even when locked",
+                    detail: "AllowAccessoryAlways = 1 — peripherals are enumerated without confirmation, exposing the Mac to rubber-ducky and PCILeech-style attacks",
+                    path: nil,
+                    remediation: "Set: System Settings > Privacy & Security > Allow accessories to connect > Ask Every Time / Ask for New Accessories"
                 ))
             }
         }
