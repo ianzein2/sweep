@@ -17,6 +17,32 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome/Chromium extension IDs publicly reported as compromised in supply-chain
+    // attacks (notably the December 2024 Cyberhaven phishing wave that pushed malicious
+    // updates to 35+ legitimate extensions, exfiltrating Facebook session cookies, ChatGPT
+    // tokens, and other credentials). If the malicious version was ever installed, leftover
+    // storage and the cached old version directory often persist even after the publisher
+    // ships a clean update — so the user should still rotate any sessions used at the time.
+    // Source IDs are from public advisories (Cyberhaven, Secure Annex, GitGuardian, 2024–25).
+    private let compromisedExtensionIds: [String: String] = [
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven Security",
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Internxt VPN",
+        "cphhlgmgameodnhkjdmkpanlelnlohao": "VPNCity",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice",
+        "fbjfihoienmhbjflbobnmimfijpngkpa": "ParrotTalks",
+        "gbdjcgalliefpinpmggefbloehmmknca": "Reader Mode",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Bookmark Favicon Changer",
+        "egmennebgadmncfjafcemlecimkepcle": "Castorus",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "Wayin AI",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Search Copilot AI Assistant",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "AI Assistant — ChatGPT and Gemini",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Bard AI Chat Extension",
+        "hihblcmlaaademjlakdpicchbjnnnkbo": "GraphQL Network Inspector",
+        "kjmkgbnpfeegfppnpenokfldjpfhckaj": "GPT 4 Summary with OpenAI",
+        "oeiomhmbaapihbilkfkhmlajkeegnjhe": "Vidnoz Flex – Video recorder & Video share",
+        "lddmajdojhjpdfkfmaiplgaoofnefimg": "Tackker — online keylogger tool",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -123,14 +149,22 @@ public final class BrowserScanner: Scanner {
             "\(home)/Library/Application Support/Google/Chrome",
             "\(home)/Library/Application Support/Brave Software/Brave-Browser",
             "\(home)/Library/Application Support/Microsoft Edge",
+            "\(home)/Library/Application Support/Arc/User Data",
+            "\(home)/Library/Application Support/Vivaldi",
+            "\(home)/Library/Application Support/Chromium",
         ]
 
         // Collect extensions across all profiles, deduplicate by (browser, extId)
         var seenExtensions: [String: ChromeExtensionInfo] = [:] // key: "browserName:extId"
 
         for browserPath in chromePaths {
-            let browserName = browserPath.contains("Chrome") ? "Chrome" :
-                              browserPath.contains("Brave") ? "Brave" : "Edge"
+            let browserName: String
+            if browserPath.contains("Brave") { browserName = "Brave" }
+            else if browserPath.contains("Edge") { browserName = "Edge" }
+            else if browserPath.contains("Arc/") { browserName = "Arc" }
+            else if browserPath.contains("Vivaldi") { browserName = "Vivaldi" }
+            else if browserPath.contains("Chromium") { browserName = "Chromium" }
+            else { browserName = "Chrome" }
 
             let fm = FileManager.default
             guard fm.fileExists(atPath: browserPath),
@@ -197,6 +231,18 @@ public final class BrowserScanner: Scanner {
             let profileNote = ext.profiles.count > 1
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
+
+            // Known supply-chain-compromised extension — highest priority finding.
+            if let publisherName = compromisedExtensionIds[ext.extId] {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Compromised \(ext.browserName) extension installed: \(publisherName)",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — this extension was hijacked in a supply-chain attack and pushed a malicious update that exfiltrates browser sessions and tokens",
+                    path: ext.extDir,
+                    remediation: "Remove in \(ext.browserName) > Extensions (chrome://extensions), then rotate passwords and any session cookies (Facebook, ChatGPT, OAuth tokens) for accounts used while this was installed"
+                ))
+                continue
+            }
 
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(

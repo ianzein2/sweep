@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Find My Mac")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking 3rd-party kernel extension consent")
+        checkKextConsent(findings: &findings, errors: &errors)
+
+        progress?.update("checking Authenticated Root (Apple Silicon)")
+        checkAuthenticatedRoot(findings: &findings, errors: &errors)
+
+        progress?.update("checking SMB signing")
+        checkSMBSigning(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +459,121 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Find My Mac
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac stores its enrollment token in NVRAM as `fmm-mobileme-token-FMM`.
+        // If the variable is absent, the Mac can't be remotely located, locked, or wiped after theft.
+        let result = ShellRunner.run("/usr/sbin/nvram",
+                                     arguments: ["-p"], timeout: 5)
+        guard result.success else {
+            errors.append("nvram unavailable — cannot check Find My Mac status")
+            return
+        }
+
+        if !result.stdout.contains("fmm-mobileme-token-FMM") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is not enabled",
+                detail: "No Find My Mac enrollment found — if this Mac is lost or stolen you cannot locate, lock, or remotely wipe it",
+                path: nil,
+                remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - 3rd-party Kernel Extension Consent
+
+    private func checkKextConsent(findings: inout [Finding], errors: inout [String]) {
+        // `spctl kext-consent status` returns whether User-Approved Kernel Extension Loading (UAKEL)
+        // is enabled. When disabled, any pre-approved KEXT — or a malicious one bundled by an attacker
+        // with admin — can load without an interactive approval prompt.
+        let result = ShellRunner.run("/usr/sbin/spctl",
+                                     arguments: ["kext-consent", "status"], timeout: 5)
+        guard result.success else { return }
+
+        let out = result.stdout.lowercased()
+        if out.contains("kernel extension user consent: disabled") ||
+           out.contains("user consent: disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "User consent for kernel extensions is disabled",
+                detail: "User-Approved Kernel Extension Loading (UAKEL) is off — third-party kexts can load without the macOS approval prompt",
+                path: nil,
+                remediation: "Re-enable in Recovery Mode: csrutil enable (and reboot). Disabling UAKEL is typically only done for MDM-managed devices."
+            ))
+        }
+    }
+
+    // MARK: - Authenticated Root (Apple Silicon / macOS 11+)
+
+    private func checkAuthenticatedRoot(findings: inout [Finding], errors: inout [String]) {
+        // The system volume on macOS 11+ ships as a signed, sealed snapshot. If the seal
+        // has been broken (authenticated-root disabled), arbitrary code can be added to the
+        // system volume — a deep persistence vector used by sophisticated implants.
+        let result = ShellRunner.run("/usr/bin/csrutil",
+                                     arguments: ["authenticated-root", "status"], timeout: 5)
+        guard result.success else { return }
+
+        let out = result.stdout.lowercased()
+        if out.contains("disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Authenticated Root protection is disabled",
+                detail: "The signed system volume seal is broken — the OS no longer verifies system files at boot. Anything injected into the system volume will run.",
+                path: nil,
+                remediation: "Re-enable in Recovery Mode: csrutil authenticated-root enable, then reboot"
+            ))
+        }
+    }
+
+    // MARK: - SMB Signing
+
+    private func checkSMBSigning(findings: inout [Finding], errors: inout [String]) {
+        // SMB signing prevents NTLM relay and on-path tampering. If disabled (or "not required"),
+        // attackers on the same network can intercept and modify SMB file traffic.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.smb.client", "SigningRequired"
+        ], timeout: 5)
+
+        // SMB signing is on by default — only flag if it has been explicitly turned off.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SMB signing requirement is disabled",
+                    detail: "SigningRequired is set to 0 — SMB file transfers can be tampered with by on-path attackers",
+                    path: nil,
+                    remediation: "Re-enable: sudo defaults write /Library/Preferences/com.apple.smb.client SigningRequired -bool YES"
+                ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay anonymizes Safari traffic and DNS. If an MDM profile or attacker has
+        // turned it off when it was enabled, surface that — though most users don't have it on,
+        // so we only flag the actively-blocked case (RestrictedDomains in a config profile).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.networkserviceproxy", "NSPCloudConfigurationFailureReason"
+        ], timeout: 5)
+        if result.success {
+            let reason = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !reason.isEmpty && reason != "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is failing",
+                    detail: "Private Relay reports a failure (\(reason)) — this often means a network or MDM profile is blocking it",
+                    path: nil,
+                    remediation: "Check System Settings > [your name] > iCloud > Private Relay for the reported reason"
                 ))
             }
         }

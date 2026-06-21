@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking input methods")
+        scanInputMethods(findings: &findings, errors: &errors)
+
+        progress?.update("checking system plug-in directories")
+        scanPluginDirectories(findings: &findings, errors: &errors)
+
+        progress?.update("checking background login items (BTM)")
+        scanBackgroundTaskManager(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +685,276 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - Input Methods
+
+    private func scanInputMethods(findings: inout [Finding], errors: inout [String]) {
+        // Input Methods are bundles loaded by every text-input-capable process and receive
+        // every keystroke the user types — a perfect keylogger vector. Apple's own input
+        // methods live under /System/Library/Input Methods; anything in /Library/Input Methods
+        // or ~/Library/Input Methods was installed by a third party.
+        let home = ShellRunner.realUserHome
+        let inputMethodDirs = [
+            ("/Library/Input Methods", "system input method"),
+            ("\(home)/Library/Input Methods", "user input method"),
+        ]
+
+        // Common legitimate third-party input methods — keep this list short and accurate
+        // so unfamiliar ones surface as findings the user can review.
+        let trustedInputBundles: Set<String> = [
+            "com.google.inputmethod.Japanese",
+            "com.google.inputmethod.Japanese.base",
+            "com.sogou.inputmethod.sogou",
+            "com.baidu.inputmethod.BaiduIM",
+            "im.rime.inputmethod.Squirrel",
+            "com.openvanilla.OVCannedMessages",
+            "org.openvanilla.inputmethod.OVMandarin",
+            "tw.openvanilla.inputmethod.McBopomofo",
+            "tw.com.ime.OVIMOpenVanilla",
+            "com.atok.inputmethod.Atok",
+        ]
+
+        let fm = FileManager.default
+        for (dir, label) in inputMethodDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".app") || entry.hasSuffix(".bundle") {
+                let bundlePath = "\(dir)/\(entry)"
+                let infoPath = "\(bundlePath)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: infoPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    bundleId = (plist["CFBundleIdentifier"] as? String) ?? ""
+                }
+
+                if !bundleId.isEmpty && trustedInputBundles.contains(bundleId) { continue }
+
+                // Known spyware bundle ID or process name match
+                if !bundleId.isEmpty, let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .keylogging,
+                        title: "Known spyware installed as input method: \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(bundlePath) — input methods see every keystroke",
+                        path: bundlePath,
+                        remediation: "Remove immediately: sudo rm -rf \"\(bundlePath)\" — then reboot"
+                    ))
+                    continue
+                }
+
+                let isSigned = checkIsSigned(path: bundlePath)
+                findings.append(Finding(
+                    severity: isSigned ? .medium : .high,
+                    category: .keylogging,
+                    title: "Third-party \(label) installed",
+                    detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId)\(isSigned ? "" : " — unsigned"). Input methods receive every keystroke.",
+                    path: bundlePath,
+                    remediation: "Verify this input method is one you installed: System Settings > Keyboard > Input Sources"
+                ))
+            }
+        }
+    }
+
+    // MARK: - System Plug-in Directories
+
+    private func scanPluginDirectories(findings: inout [Finding], errors: inout [String]) {
+        // Several macOS plug-in folders auto-load bundles into trusted host processes:
+        //   - Spotlight importers run inside the indexer (mdworker / mdimporter)
+        //   - QuickLook plug-ins run inside the QuickLook host (qlmanage)
+        //   - Screen Savers run arbitrary code when the screen saver starts
+        //   - Color Pickers load into any app that opens a color panel
+        //   - Internet Plug-Ins are legacy NPAPI hosts (mostly dead, but still scanned)
+        //   - Audio HAL plug-ins load into coreaudiod with high privileges
+        // Apple's own plug-ins live under /System/Library, which we don't scan.
+        let home = ShellRunner.realUserHome
+        let pluginDirs: [(path: String, kind: String, severity: Severity)] = [
+            ("/Library/Spotlight", "Spotlight importer", .medium),
+            ("\(home)/Library/Spotlight", "Spotlight importer", .medium),
+            ("/Library/QuickLook", "QuickLook plug-in", .medium),
+            ("\(home)/Library/QuickLook", "QuickLook plug-in", .medium),
+            ("/Library/Screen Savers", "Screen Saver", .medium),
+            ("\(home)/Library/Screen Savers", "Screen Saver", .medium),
+            ("/Library/ColorPickers", "Color Picker", .low),
+            ("\(home)/Library/ColorPickers", "Color Picker", .low),
+            ("/Library/Internet Plug-Ins", "Internet Plug-In", .medium),
+            ("\(home)/Library/Internet Plug-Ins", "Internet Plug-In", .medium),
+            ("/Library/Audio/Plug-Ins/HAL", "Audio HAL plug-in", .high),
+        ]
+
+        let fm = FileManager.default
+        for (dir, kind, baseSeverity) in pluginDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries {
+                if entry.hasPrefix(".") { continue }
+                // Skip README-style plain files — only bundles (.app/.bundle/.qlgenerator/.saver/...) matter here
+                if !entry.contains(".") { continue }
+
+                let pluginPath = "\(dir)/\(entry)"
+
+                // Resolve bundle identifier when possible
+                let infoPath = "\(pluginPath)/Contents/Info.plist"
+                var bundleId = ""
+                if let data = fm.contents(atPath: infoPath),
+                   let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                    bundleId = (plist["CFBundleIdentifier"] as? String) ?? ""
+                }
+
+                // Known spyware bundle ID — always HIGH
+                if !bundleId.isEmpty, let sig = SpywareSignature.match(bundleId: bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware installed as \(kind): \(sig.name)",
+                        detail: "Bundle: \(bundleId), Path: \(pluginPath)",
+                        path: pluginPath,
+                        remediation: "Remove immediately: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                    continue
+                }
+
+                // Fake Apple bundle ID
+                if !bundleId.isEmpty && SpywareSignature.isFakeAppleBundleId(bundleId) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Fake Apple bundle ID as \(kind)",
+                        detail: "Bundle: \(bundleId), Path: \(pluginPath) — Apple doesn't publish plug-ins with this identifier",
+                        path: pluginPath,
+                        remediation: "Remove: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                    continue
+                }
+
+                // Unsigned plug-in — strong signal: macOS refuses to load unsigned bundles into
+                // most plug-in hosts, so anything unsigned here is either broken or hostile.
+                let isSigned = checkIsSigned(path: pluginPath)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Unsigned \(kind) installed",
+                        detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId), Path: \(pluginPath)",
+                        path: pluginPath,
+                        remediation: "Verify origin and remove if unexpected: sudo rm -rf \"\(pluginPath)\""
+                    ))
+                    continue
+                }
+
+                // Audio HAL plug-ins load into coreaudiod with high privileges — always surface
+                // signed third-party HAL plug-ins so the user can sanity check.
+                if kind == "Audio HAL plug-in" {
+                    findings.append(Finding(
+                        severity: baseSeverity, category: .persistence,
+                        title: "Third-party Audio HAL plug-in installed",
+                        detail: "Bundle: \(bundleId.isEmpty ? entry : bundleId) — loaded into coreaudiod (high privileges, hears all audio)",
+                        path: pluginPath,
+                        remediation: "Verify this is a known tool (BlackHole, SoundSource, Loopback, etc.) — otherwise remove"
+                    ))
+                }
+                // Other signed plug-ins (QuickLook, Spotlight, screen savers, color pickers, etc.)
+                // are common and benign — skip them to keep the report focused.
+            }
+        }
+    }
+
+    // MARK: - Background Task Management (SMAppService / BTM)
+
+    private func scanBackgroundTaskManager(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura+ tracks every background login item / agent registered via
+        // SMAppService in the Background Task Management database. `sfltool dumpbtm` prints
+        // the live registrations; non-Apple, disabled-but-still-installed items are worth
+        // surfacing because they're invisible to the legacy LaunchAgents/login-items checks.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // Parse the dump — each item is a multi-line block; the lines we care about are
+        // "Name: ...", "Bundle ID: ...", "URL: ...", and "Disposition: ...".
+        var name = ""
+        var bundleId = ""
+        var url = ""
+        var disposition = ""
+        var seen = Set<String>()  // dedupe on bundle ID
+
+        func emitCurrent() {
+            defer {
+                name = ""; bundleId = ""; url = ""; disposition = ""
+            }
+            guard !bundleId.isEmpty else { return }
+            if seen.contains(bundleId) { return }
+            seen.insert(bundleId)
+
+            // Skip Apple and obvious system items
+            if bundleId.hasPrefix("com.apple.") { return }
+
+            // Known spyware bundle ID
+            if let sig = SpywareSignature.match(bundleId: bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as background login item: \(sig.name)",
+                    detail: "Bundle: \(bundleId)\(name.isEmpty ? "" : ", Name: \(name)")\(disposition.isEmpty ? "" : ", Disposition: \(disposition)")",
+                    path: url.isEmpty ? nil : url,
+                    remediation: "Disable: System Settings > General > Login Items & Extensions"
+                ))
+                return
+            }
+
+            // Fake Apple bundle ID
+            if SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID in background login items",
+                    detail: "Bundle: \(bundleId)\(name.isEmpty ? "" : ", Name: \(name)")",
+                    path: url.isEmpty ? nil : url,
+                    remediation: "Remove the offending app and disable in System Settings > General > Login Items & Extensions"
+                ))
+                return
+            }
+
+            // Background items running from a hidden directory are a strong spyware indicator.
+            let hiddenInUrl = url.contains("/.") || url.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            if !url.isEmpty && hiddenInUrl {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background login item running from hidden path",
+                    detail: "Bundle: \(bundleId), URL: \(url) — hidden install paths are a spyware hallmark",
+                    path: url,
+                    remediation: "Remove this background item: System Settings > General > Login Items & Extensions"
+                ))
+                return
+            }
+
+            // Otherwise, no finding — the user can see legitimate background items in System Settings.
+        }
+
+        // `sfltool dumpbtm` separates records with blank lines and uses "Field: value"
+        // formatting. Field names have varied across macOS releases ("Bundle Identifier:"
+        // on Sonoma, "Bundle ID:" historically) so we accept both spellings.
+        func valueAfter(_ line: String, prefixes: [String]) -> String? {
+            for p in prefixes where line.hasPrefix(p) {
+                return String(line.dropFirst(p.count)).trimmingCharacters(in: .whitespaces)
+            }
+            return nil
+        }
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                emitCurrent()
+                continue
+            }
+            // A record header line ("Item #...") also marks the start of a new entry.
+            if line.hasPrefix("Item ") || line.hasPrefix("Item #") {
+                emitCurrent()
+                continue
+            }
+            if let v = valueAfter(line, prefixes: ["Bundle Identifier:", "Bundle ID:", "Identifier:"]) {
+                bundleId = v
+            } else if let v = valueAfter(line, prefixes: ["Name:"]) {
+                name = v
+            } else if let v = valueAfter(line, prefixes: ["URL:", "Executable Path:"]) {
+                if url.isEmpty { url = v }
+            } else if let v = valueAfter(line, prefixes: ["Disposition:"]) {
+                disposition = v
+            }
+        }
+        emitCurrent()  // flush the last record
     }
 
     private func checkIsSigned(path: String) -> Bool {
