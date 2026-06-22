@@ -434,6 +434,223 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS infostealers
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigidstealer", "WindowsServer"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "~/Downloads/Update.dmg.frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "OdysseyAgent", "ody"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service", "com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault", "shadow_vault"],
+            bundleIdentifiers: ["com.shadowvault.stealer"],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.ShadowVault",
+            ],
+            launchAgentLabels: ["com.shadowvault.agent"]
+        ),
+        SpywareSignature(
+            name: "JaskaGO",
+            processNames: ["jaskago", "JaskaGO", "jaska"],
+            bundleIdentifiers: ["com.jaskago.stealer"],
+            filePaths: ["/private/tmp/.jaskago"],
+            launchAgentLabels: ["com.jaskago.service"]
+        ),
+        SpywareSignature(
+            name: "MacStealer V2",
+            processNames: ["weshareit", "WeShareIt", "macstealer2"],
+            bundleIdentifiers: ["com.weshareit.app"],
+            filePaths: ["/private/tmp/.weshareit"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Trojan-Proxy",
+            processNames: ["macos_trojan_proxy", "WindowServer_helper", "TrojanProxy"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.proxy_helper",
+                "/private/var/tmp/.proxyd",
+            ],
+            launchAgentLabels: ["com.apple.wsproxy.plist"]
+        ),
+        SpywareSignature(
+            name: "PSAUX",
+            processNames: ["psaux", "PSAUX", "psaux_stealer"],
+            bundleIdentifiers: ["com.psaux.stealer"],
+            filePaths: ["/private/tmp/.psaux"],
+            launchAgentLabels: ["com.psaux.service"]
+        ),
+        SpywareSignature(
+            name: "Spaceship Stealer",
+            processNames: ["Spaceship", "spaceship_stealer", "ship_agent"],
+            bundleIdentifiers: ["com.spaceship.stealer"],
+            filePaths: ["/private/tmp/.spaceship"],
+            launchAgentLabels: ["com.spaceship.agent"]
+        ),
+        // 2024-2025 DPRK / Lazarus / BlueNoroff macOS implants
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node_helper", "FCCCall"],
+            bundleIdentifiers: ["com.beavertail.agent"],
+            filePaths: [
+                "/private/var/tmp/.beavertail",
+                "~/Library/Application Support/.beaver",
+            ],
+            launchAgentLabels: ["com.fcccall.service"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pay_agent", "ssh_agent_helper"],
+            bundleIdentifiers: ["com.invisibleferret.agent"],
+            filePaths: [
+                "/private/var/tmp/.ferret",
+                "~/Library/Application Support/.invisibleferret",
+            ],
+            launchAgentLabels: ["com.invisibleferret.service"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "tabby_helper", "xpc_relay"],
+            bundleIdentifiers: ["com.rustyattr.agent"],
+            filePaths: [
+                "/private/var/tmp/.rustyattr",
+                "~/Library/Caches/.rustyattr",
+            ],
+            launchAgentLabels: ["com.apple.xpc.relay"]
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["HiddenRisk", "hiddenrisk", "growth_factor", "macos_helper"],
+            bundleIdentifiers: ["com.bluenoroff.hiddenrisk"],
+            filePaths: [
+                "~/Library/LaunchAgents/com.apple.helper.plist",
+                "/private/var/tmp/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.apple.helper", "com.apple.growth"]
+        ),
+        SpywareSignature(
+            name: "CookbitDP",
+            processNames: ["cookbit", "Cookbit", "cookbitdp"],
+            bundleIdentifiers: ["com.cookbit.agent"],
+            filePaths: ["/private/var/tmp/.cookbit"],
+            launchAgentLabels: ["com.cookbit.service"]
+        ),
+        SpywareSignature(
+            name: "FullHouse.Doored",
+            processNames: ["FullHouse", "fullhouse_helper", "doored"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/var/tmp/.fullhouse"],
+            launchAgentLabels: []
+        ),
+        // 2023-2025 APT / espionage tooling
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["JokerSpy", "jokerspy", "xcc", "shared_helper"],
+            bundleIdentifiers: ["bar.tender.shared", "com.apple.xcc"],
+            filePaths: [
+                "/Users/Shared/AppleAccount.tgz",
+                "/Users/Shared/TempUser",
+                "/private/var/tmp/.joker",
+            ],
+            launchAgentLabels: ["com.apple.shared.helper"]
+        ),
+        SpywareSignature(
+            name: "ZuRu",
+            processNames: ["ZuRu", "macos.zuru", "zuru_helper", "g.ops"],
+            bundleIdentifiers: ["com.iterm2.zuru"],
+            filePaths: [
+                "/private/tmp/g.ops",
+                "/private/tmp/.zuru",
+                "/Applications/iTerm.app/Contents/Frameworks/libcrypto.2.dylib",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MacMa (OSX.CDDS)",
+            processNames: ["MacMa", "macma", "UserAgent", "smd"],
+            bundleIdentifiers: ["com.UserAgent.va"],
+            filePaths: [
+                "~/Library/.local/.local",
+                "/Library/PrivilegedHelperTools/com.UserAgent.va",
+                "~/Library/LaunchAgents/com.UserAgent.va.plist",
+            ],
+            launchAgentLabels: ["com.UserAgent.va"]
+        ),
+        SpywareSignature(
+            name: "GIMMICK",
+            processNames: ["gimmick", "GIMMICK", "PLISTBuddy_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.gimmick",
+                "/Library/Application Support/.gimmick",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Geacon Pro / Geacon Plus (Cobalt Strike port)",
+            processNames: ["Geacon", "geacon", "Geacon Pro", "geacon_pro", "geacon_plus"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.geacon",
+                "/private/var/tmp/.geacon",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Sliver C2 implant",
+            processNames: ["sliver", "Sliver", "sliver-client", "sliver_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.sliver",
+                "/private/var/tmp/.sliver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MythicC2 agent",
+            processNames: ["poseidon_agent", "apfell", "leviathan_agent", "Mythic"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.mythic"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "DubRobber / XCSSET 2024",
+            processNames: ["xcssset2", "DubRobber", "dubrobber", "xcode_helper"],
+            bundleIdentifiers: ["io.iterm2.xcssset"],
+            filePaths: [
+                "~/Library/Caches/com.apple.dt.Xcode/.xcssset",
+                "~/Library/Application Scripts/.xcssset2",
+            ],
+            launchAgentLabels: ["com.apple.xcode.session"]
+        ),
+        SpywareSignature(
+            name: "Crypto Mining (XMRig variant)",
+            processNames: ["xmrig", "XMRig", "minergate", "kdevtmpfsi", "kinsing_macos"],
+            bundleIdentifiers: ["com.xmrig.miner"],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "~/Library/Application Support/.xmrig",
+                "/usr/local/bin/.xmrig",
+            ],
+            launchAgentLabels: ["com.xmrig.miner", "com.minergate.daemon"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

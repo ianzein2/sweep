@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH configuration")
+        checkSSHConfiguration(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo Touch ID")
+        checkSudoTouchID(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My Mac / activation lock")
+        checkFindMyMac(findings: &findings, errors: &errors)
+
+        progress?.update("checking quarantine for downloaded apps")
+        checkQuarantineEnabled(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth state")
+        checkBluetoothExposure(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +483,193 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - SSH Configuration
+
+    private func checkSSHConfiguration(findings: inout [Finding], errors: inout [String]) {
+        // Only meaningful if Remote Login is enabled — otherwise sshd never runs and the daemon
+        // config is irrelevant. We still parse it because partial configs are sometimes shipped
+        // by management profiles and become live as soon as SSH gets turned on.
+        let configPath = "/etc/ssh/sshd_config"
+        guard let raw = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+
+        // Collect effective directives. macOS ships almost everything commented-out so the
+        // OpenSSH built-in defaults apply (PasswordAuth=yes, PermitRootLogin=prohibit-password).
+        var passwordAuthExplicit: String?
+        var permitRootLogin: String?
+        var challengeResponseAuth: String?
+
+        for rawLine in raw.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let tokens = line.split(separator: " ", omittingEmptySubsequences: true).map { String($0) }
+            guard tokens.count >= 2 else { continue }
+            switch tokens[0].lowercased() {
+            case "passwordauthentication":           passwordAuthExplicit = tokens[1].lowercased()
+            case "permitrootlogin":                  permitRootLogin = tokens[1].lowercased()
+            case "challengeresponseauthentication",
+                 "kbdinteractiveauthentication":     challengeResponseAuth = tokens[1].lowercased()
+            default: break
+            }
+        }
+
+        // Whether Remote Login is actually on shapes the severity.
+        let sshOn: Bool = {
+            let r = ShellRunner.run("/usr/sbin/systemsetup", arguments: ["-getremotelogin"], timeout: 5)
+            return r.success && r.stdout.lowercased().contains(": on")
+        }()
+
+        // Password auth: default ON in OpenSSH. Only safe state is an explicit "no".
+        if passwordAuthExplicit != "no" {
+            findings.append(Finding(
+                severity: sshOn ? .medium : .low, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "sshd_config does not set 'PasswordAuthentication no'" +
+                    (sshOn ? " and Remote Login is enabled — exposed to network brute-force" :
+                             " (Remote Login is currently off, but config takes effect if it's enabled)"),
+                path: configPath,
+                remediation: "Edit \(configPath): set 'PasswordAuthentication no' and use SSH keys only"
+            ))
+        }
+
+        if let v = permitRootLogin, v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH permits direct root login",
+                detail: "PermitRootLogin yes — attackers can target the root account directly",
+                path: configPath,
+                remediation: "Edit \(configPath): set 'PermitRootLogin no' (or 'prohibit-password' for key-only)"
+            ))
+        }
+
+        if let v = challengeResponseAuth, v == "yes", passwordAuthExplicit != "no" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH challenge-response (keyboard-interactive) auth is enabled",
+                detail: "Keyboard-interactive auth provides another password-style entry vector",
+                path: configPath,
+                remediation: "Edit \(configPath): set 'ChallengeResponseAuthentication no'"
+            ))
+        }
+    }
+
+    // MARK: - sudo Touch ID
+
+    private func checkSudoTouchID(findings: inout [Finding], errors: inout [String]) {
+        // Touch ID for sudo is opt-in. We surface this purely as a hardening tip — a missing
+        // pam_tid module in /etc/pam.d/sudo (or sudo_local on Sonoma+) is a low-severity heads-up
+        // rather than a problem to fix, so this is informational only.
+        let sudoLocal = "/etc/pam.d/sudo_local"
+        let sudo = "/etc/pam.d/sudo"
+
+        // Sonoma+: /etc/pam.d/sudo_local is the persistent drop-in (survives OS updates).
+        if FileManager.default.fileExists(atPath: sudoLocal),
+           let content = try? String(contentsOfFile: sudoLocal, encoding: .utf8),
+           content.contains("pam_tid.so") {
+            return  // Already configured — nothing to suggest
+        }
+
+        if let content = try? String(contentsOfFile: sudo, encoding: .utf8),
+           content.contains("pam_tid.so") {
+            return  // Configured directly in /etc/pam.d/sudo (older macOS)
+        }
+
+        // Only suggest Touch ID on Macs that actually have it.
+        let bioCheck = ShellRunner.run("/usr/sbin/system_profiler", arguments: ["SPiBridgeDataType"], timeout: 5)
+        let hasTouchID = bioCheck.success && bioCheck.stdout.lowercased().contains("touch id")
+        guard hasTouchID else { return }
+
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Touch ID is not enabled for sudo",
+            detail: "Enabling Touch ID for sudo means a fingerprint is required for privileged terminal commands, mitigating shoulder-surfing and unattended-keyboard attacks",
+            path: nil,
+            remediation: "Create /etc/pam.d/sudo_local with: 'auth       sufficient     pam_tid.so' (one line) — see `man pam_tid` for details"
+        ))
+    }
+
+    // MARK: - Find My Mac / Activation Lock
+
+    private func checkFindMyMac(findings: inout [Finding], errors: inout [String]) {
+        // Find My Mac protects against device theft via Activation Lock — without it, a stolen
+        // Mac can be wiped and reused. The state lives in MobileMeAccounts.plist under the user.
+        let home = ShellRunner.realUserHome
+        let plistPath = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = root["Accounts"] as? [[String: Any]] else {
+            return  // No iCloud account configured — covered elsewhere, skip silently
+        }
+
+        // Walk each iCloud account's service list looking for FIND_MY_MAC=enabled.
+        var anyEnabled = false
+        var anyAccount = false
+        for account in accounts {
+            anyAccount = true
+            guard let services = account["Services"] as? [[String: Any]] else { continue }
+            for service in services {
+                let name = (service["Name"] as? String) ?? ""
+                if name == "FIND_MY_MAC" {
+                    let enabled = (service["Enabled"] as? Bool) ?? false
+                    if enabled { anyEnabled = true }
+                }
+            }
+        }
+
+        if anyAccount && !anyEnabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Find My Mac is disabled",
+                detail: "Without Find My Mac, a stolen or lost Mac can be wiped and reused — Activation Lock won't prevent reuse",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Find My Mac"
+            ))
+        }
+    }
+
+    // MARK: - Quarantine
+
+    private func checkQuarantineEnabled(findings: inout [Finding], errors: inout [String]) {
+        // LSQuarantine causes Safari / Mail / Messages to attach com.apple.quarantine to downloads,
+        // which is what triggers the "first-launch" Gatekeeper prompt. Disabling it lets downloaded
+        // apps run silently.
+        let r = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        if r.success {
+            let v = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Download quarantine is disabled",
+                    detail: "LSQuarantine is 0 — downloaded apps won't get the com.apple.quarantine xattr, so they won't trigger Gatekeeper's first-launch prompt",
+                    path: nil,
+                    remediation: "Re-enable: defaults delete com.apple.LaunchServices LSQuarantine (or set to 1)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Bluetooth exposure
+
+    private func checkBluetoothExposure(findings: inout [Finding], errors: inout [String]) {
+        // Bluetooth being on is normal. What matters is whether the Mac is discoverable to any
+        // device, which is a precondition for BlueBorne-class attacks and AirDrop spoofing.
+        let r = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "DiscoverableState"
+        ], timeout: 5)
+        guard r.success else { return }
+        let v = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if v == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bluetooth is in discoverable mode",
+                detail: "Mac is broadcasting itself to any nearby Bluetooth device — usually only needed temporarily during pairing",
+                path: nil,
+                remediation: "Close System Settings > Bluetooth (discoverable mode auto-disables when the pane is closed)"
+            ))
         }
     }
 }

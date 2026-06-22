@@ -17,6 +17,39 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome / Chromium extension IDs that have been weaponized in real-world supply-chain
+    // attacks (late 2024 / 2025). The Cyberhaven incident exposed a cluster of legitimate
+    // extensions whose maintainers had OAuth tokens phished, leading to malicious updates that
+    // exfiltrated cookies and session data. Even if the user has since uninstalled the
+    // extension, residue in the profile directory is still worth flagging because it confirms
+    // exposure during the bad-version window.
+    private let knownMaliciousExtensionIds: [String: String] = [
+        // Cyberhaven incident (Dec 24 2024) — the original compromised publisher
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (compromised update Dec 2024)",
+        // Related extensions confirmed by Secure Annex / multiple researchers
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Internxt VPN (compromised cluster Dec 2024)",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "VPNCity (compromised cluster Dec 2024)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice (compromised cluster Dec 2024)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "ParrotTalks (compromised cluster Dec 2024)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Reader Mode (compromised cluster Dec 2024)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "Bookmark Favicon Changer (compromised cluster Dec 2024)",
+        "bibjcjfmgapbfoljiojpipaooddpkpai": "Castorus (compromised cluster Dec 2024)",
+        "dpggmcodlahmljkhlmpgpdcffdaoccni": "Wayin AI (compromised cluster Dec 2024)",
+        "kbdomgnfekbnhcpbjjjeonejjeokbjgi": "Search Copilot AI Assistant (compromised cluster Dec 2024)",
+        "egmennebgadmncfjafcemlecimkepcle": "VidHelper (compromised cluster Dec 2024)",
+        "fnnegphlobjdpkhecapkijjdkgcjhkib": "Vidnoz Flex (compromised cluster Dec 2024)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "TinaMind (compromised cluster Dec 2024)",
+        "hihblcmlaaademjlakdpicchbjnnnkbo": "AI Assistant - ChatGPT and Gemini (compromised cluster Dec 2024)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Email Hunter (compromised cluster Dec 2024)",
+        "klmkenajkgneonmaccdhgaeknpjbpdjm": "Visual Effects for Google Meet (compromised cluster Dec 2024)",
+        "miglaibdlgminlepgeifekifakochlka": "Earny - Up to 20% Cash Back (compromised cluster Dec 2024)",
+        "jiofmdifioeejeilfkpegipdjiopiekl": "Rewards Search Automator (compromised cluster Dec 2024)",
+        "oeiomhmbaapihbilkfkhmlajkeegnjhe": "GraphQL Network Inspector (compromised cluster Dec 2024)",
+        "dikiaagifclmhppbkkjjbmolppmkclhc": "GPT 4 Summary with OpenAI (compromised cluster Dec 2024)",
+        // RA WORLD / "Honey" affiliate scams flagged in 2024 — coupon extensions that hijack referral cookies
+        "bmnlcjabgnpnenekpadlanbbkooimhnj": "Honey (referral hijacking — 2024 disclosure)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +176,30 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known supply-chain-compromised extensions: report once per (browser, extId)
+                    // and skip further heuristic analysis since the verdict is already definitive.
+                    if let label = knownMaliciousExtensionIds[extId] {
+                        let dedupeKey = "\(browserName):\(extId)"
+                        if seenExtensions[dedupeKey] == nil {
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "\(browserName) extension from known supply-chain compromise",
+                                detail: "Extension ID: \(extId) — \(label). Sessions / cookies / credentials used while this extension was installed should be considered exposed.",
+                                path: "\(extPath)/\(extId)",
+                                remediation: "Remove in \(browserName) > Extensions, rotate passwords and sign out of all sessions for any sensitive accounts you used while it was installed."
+                            ))
+                            // Mark as seen so we don't double-report from another profile
+                            seenExtensions[dedupeKey] = ChromeExtensionInfo(
+                                extId: extId, name: label, permStrings: [],
+                                hasDangerousPerms: false, hasAllUrls: false,
+                                hasKeyboardInput: false, isSpyLike: false,
+                                profiles: [profile], browserName: browserName,
+                                extDir: "\(extPath)/\(extId)"
+                            )
+                        }
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
