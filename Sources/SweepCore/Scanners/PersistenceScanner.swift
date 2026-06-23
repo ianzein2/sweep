@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking QuickLook generators")
+        scanQuickLookGenerators(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking Application Scripts")
+        scanApplicationScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen savers")
+        scanScreenSavers(findings: &findings, errors: &errors)
+
+        progress?.update("checking audio plug-ins")
+        scanAudioPlugins(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +690,200 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - QuickLook Generators
+    //
+    // QuickLook generators (`.qlgenerator` bundles) are loaded by quicklookd whenever a file is
+    // previewed in Finder or with Spacebar. A malicious generator runs code on preview without
+    // any user prompt, making this an attractive persistence + execution vector. The system
+    // directory is `/System/Library/QuickLook`; user/admin slots are `/Library/QuickLook` and
+    // `~/Library/QuickLook`.
+
+    private func scanQuickLookGenerators(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/QuickLook",
+            "\(home)/Library/QuickLook",
+        ]
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let bundlePath = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: bundlePath)
+                let matchesSpyware = SpywareSignature.match(processName: entry) != nil
+                if matchesSpyware {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware QuickLook generator",
+                        detail: "Bundle: \(entry) in \(dir) — runs on file preview without user prompt",
+                        path: bundlePath,
+                        remediation: "Remove: sudo rm -rf \"\(bundlePath)\" — then run: qlmanage -r"
+                    ))
+                } else {
+                    findings.append(Finding(
+                        severity: isSigned ? .low : .medium,
+                        category: .persistence,
+                        title: isSigned
+                            ? "Third-party QuickLook generator present"
+                            : "Unsigned QuickLook generator present",
+                        detail: "Bundle: \(entry) — quicklookd loads this code when files are previewed",
+                        path: bundlePath,
+                        remediation: "Verify this generator is one you installed (e.g. QLMarkdown, Suspicious Package). Remove if unknown."
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Spotlight Importers
+    //
+    // Spotlight metadata importers (`.mdimporter` bundles) are loaded by mds_stores when indexing
+    // files of registered UTIs. Most legitimate importers live inside `.app` bundles or under
+    // `/System/Library/Spotlight`. A standalone bundle in `/Library/Spotlight` or
+    // `~/Library/Spotlight` runs code as part of the indexer with no user interaction.
+
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/Spotlight",
+            "\(home)/Library/Spotlight",
+        ]
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let bundlePath = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: bundlePath)
+                let matchesSpyware = SpywareSignature.match(processName: entry) != nil
+                findings.append(Finding(
+                    severity: matchesSpyware ? .high : (isSigned ? .low : .medium),
+                    category: .persistence,
+                    title: matchesSpyware
+                        ? "Known spyware Spotlight importer"
+                        : (isSigned ? "Third-party Spotlight importer" : "Unsigned Spotlight importer"),
+                    detail: "Bundle: \(entry) — mds_stores loads this code while indexing files",
+                    path: bundlePath,
+                    remediation: "Verify this importer or remove it: sudo rm -rf \"\(bundlePath)\" && mdutil -E /"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Application Scripts (XCSSET / sandboxed app script handlers)
+    //
+    // `~/Library/Application Scripts/<bundle-id>/` holds AppleScript and JXA handlers that
+    // sandboxed apps can call. XCSSET famously dropped scripts under
+    // `~/Library/Application Scripts/com.apple.systempreferences/` to run on every launch of
+    // System Settings. Any handler under a bundle ID the user has not installed, or under an
+    // Apple bundle ID, is highly suspicious.
+
+    private func scanApplicationScripts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let baseDir = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: baseDir),
+              let bundleDirs = try? fm.contentsOfDirectory(atPath: baseDir) else { return }
+
+        for bundleId in bundleDirs where !bundleId.hasPrefix(".") {
+            let bundleScriptsDir = "\(baseDir)/\(bundleId)"
+
+            // Apple's own apps don't drop scripts here; XCSSET does, abusing the directory name.
+            if bundleId.hasPrefix("com.apple.") {
+                guard let scripts = try? fm.contentsOfDirectory(atPath: bundleScriptsDir) else { continue }
+                let realScripts = scripts.filter { !$0.hasPrefix(".") }
+                if !realScripts.isEmpty {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "AppleScript handler under Apple bundle ID (XCSSET pattern)",
+                        detail: "Bundle: \(bundleId), files: \(realScripts.prefix(3).joined(separator: ", "))",
+                        path: bundleScriptsDir,
+                        remediation: "Inspect contents, then remove: rm -rf \"\(bundleScriptsDir)\" — Apple's own apps don't install scripts here"
+                    ))
+                }
+                continue
+            }
+
+            // Match against known spyware bundle IDs
+            if let sig = SpywareSignature.match(bundleId: bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Application Scripts handler for known spyware: \(sig.name)",
+                    detail: "Bundle: \(bundleId) has script handlers installed under Application Scripts",
+                    path: bundleScriptsDir,
+                    remediation: "Remove: rm -rf \"\(bundleScriptsDir)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Screen Savers
+    //
+    // `.saver` bundles in `~/Library/Screen Savers` or `/Library/Screen Savers` are loaded by
+    // legacyScreenSaver and run code when the screen saver activates. Most users have no
+    // third-party screen savers installed; an unsigned one is a textbook persistence trick.
+
+    private func scanScreenSavers(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/Screen Savers",
+            "\(home)/Library/Screen Savers",
+        ]
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".saver") {
+                let bundlePath = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: bundlePath)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned screen saver bundle",
+                        detail: "Bundle: \(entry) — runs code when screen saver activates",
+                        path: bundlePath,
+                        remediation: "Verify this screen saver is one you installed; otherwise remove: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Audio Plug-Ins
+    //
+    // Audio Unit components (`.component`) in `~/Library/Audio/Plug-Ins/Components` and
+    // `/Library/Audio/Plug-Ins/Components` are loaded into every Core Audio host (GarageBand,
+    // Logic, Ableton, Safari WebAudio, etc.). A malicious component runs in the address space
+    // of every audio app. We only flag unsigned components — signed third-party plug-ins are
+    // legitimate and ubiquitous for musicians.
+
+    private func scanAudioPlugins(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            "/Library/Audio/Plug-Ins/Components",
+            "\(home)/Library/Audio/Plug-Ins/Components",
+        ]
+        let fm = FileManager.default
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".component") {
+                let bundlePath = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: bundlePath)
+                if !isSigned {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned Audio Unit component",
+                        detail: "Bundle: \(entry) — loaded into every Core Audio host on this Mac",
+                        path: bundlePath,
+                        remediation: "Verify this plug-in is one you installed; otherwise remove: rm -rf \"\(bundlePath)\""
+                    ))
+                }
+            }
         }
     }
 

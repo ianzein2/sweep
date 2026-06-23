@@ -49,6 +49,21 @@ public final class NetworkScanner: Scanner {
         "gsa.apple.com", "gspe1-ssl.ls.apple.com",
     ]
 
+    // Known stalkerware/spyware command-and-control and dashboard domains. Hits in /etc/hosts
+    // (whether redirecting or blocking) are strong signals the operator interacts with these
+    // services — either malware reaches them, or the user added a block list because of an
+    // incident. Either way, the user wants to know.
+    private let knownStalkerwareDomains: Set<String> = [
+        "mspy.com", "flexispy.com", "spyera.com", "hoverwatch.com",
+        "kidlogger.net", "spyrix.com", "spybubble.com", "xnspy.com",
+        "ikeymonitor.com", "eyezy.com", "thetruthspy.com", "clevguard.com",
+        "kidsguard.com", "mobistealth.com", "spyzie.com", "spyic.com",
+        "cocospy.com", "pctattletale.com", "refog.com", "webwatcher.com",
+        "realtime-spy.com", "spytech-web.com", "elitekeyloggers.com",
+        // Known APT/stealer dashboards and exfil hosts (publicly reported IOCs)
+        "amos-mac.com", "macstealer.io", "banshee-stealer.shop",
+    ]
+
     public func scan(progress: ScanProgress? = nil) -> ScanResult {
         let start = Date()
         var findings: [Finding] = []
@@ -266,6 +281,20 @@ public final class NetworkScanner: Scanner {
                         detail: "Domain: \(domain) → \(ip) — blocks macOS security checks",
                         path: "/etc/hosts",
                         remediation: "Remove this line from /etc/hosts: sudo nano /etc/hosts"
+                    ))
+                }
+            }
+
+            // Stalkerware/spyware service domains in /etc/hosts — either malware references them
+            // or someone block-listed them after an incident; both warrant the user's attention.
+            for domain in knownStalkerwareDomains {
+                if lineStr.lowercased().contains(domain) {
+                    findings.append(Finding(
+                        severity: .high, category: .networkActivity,
+                        title: "Stalkerware/spyware domain referenced in /etc/hosts",
+                        detail: "Domain: \(domain) → \(ip) — this is a known commercial-spyware host",
+                        path: "/etc/hosts",
+                        remediation: "Inspect /etc/hosts and search the Mac for the related spyware: sudo nano /etc/hosts"
                     ))
                 }
             }

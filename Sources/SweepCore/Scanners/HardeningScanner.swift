@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking sudo timeout")
+        checkSudoTimeout(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS support status")
+        checkMacOSSupportStatus(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wake on Network")
+        checkWakeOnNetwork(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH configuration")
+        checkSSHConfig(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,198 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Sudo Timeout
+    //
+    // Sudo caches the entered password for `timestamp_timeout` minutes (default 5). A long timeout
+    // means anyone with a few seconds of physical access after the user ran `sudo` can run further
+    // privileged commands without entering the password. `timestamp_timeout=-1` disables the cache
+    // expiration entirely — an attacker-friendly setting often planted by malware.
+
+    private func checkSudoTimeout(findings: inout [Finding], errors: inout [String]) {
+        var configFiles = ["/etc/sudoers"]
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                configFiles.append("/etc/sudoers.d/\(entry)")
+            }
+        }
+
+        for path in configFiles {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                guard let range = trimmed.range(of: "timestamp_timeout") else { continue }
+
+                // Parse the value after `=` (sudoers allows `=`, optional whitespace)
+                let after = trimmed[range.upperBound...]
+                guard let eq = after.firstIndex(of: "=") else { continue }
+                let valStr = after[after.index(after: eq)...]
+                    .trimmingCharacters(in: .whitespaces)
+                guard let token = valStr.split(whereSeparator: { ",) \t".contains($0) }).first,
+                      let minutes = Int(token) else { continue }
+
+                if minutes < 0 {
+                    findings.append(Finding(
+                        severity: .high, category: .hardening,
+                        title: "Sudo password cache never expires",
+                        detail: "\(path) sets timestamp_timeout=\(minutes) — once a user runs sudo, the password cache never times out for that terminal",
+                        path: path,
+                        remediation: "Remove the line or set a positive value: sudo visudo -f \(path)"
+                    ))
+                } else if minutes > 15 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "Sudo password cache is long (\(minutes) minutes)",
+                        detail: "\(path) sets timestamp_timeout=\(minutes) — extends the window where stolen terminals can run sudo without a password",
+                        path: path,
+                        remediation: "Reduce to 5 (default) or lower: sudo visudo -f \(path)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - macOS Support Status
+    //
+    // Apple typically supports the latest three macOS major versions with security updates. Macs
+    // running older versions stop receiving patches for actively exploited vulnerabilities (e.g.
+    // Big Sur stopped receiving updates in late 2023). This is one of the highest-impact and
+    // most-overlooked security risks on consumer Macs.
+
+    private func checkMacOSSupportStatus(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Bands updated for the Sequoia (15) / Sonoma (14) / Ventura (13) era.
+        // Catalina (10.15) and earlier: long out of support.
+        // Big Sur (11), Monterey (12): out of support as of late 2024.
+        // Ventura (13): receives critical updates only at this point.
+        let nameFor: (Int) -> String = { n in
+            switch n {
+            case 10: return "Catalina or earlier"
+            case 11: return "Big Sur"
+            case 12: return "Monterey"
+            case 13: return "Ventura"
+            case 14: return "Sonoma"
+            case 15: return "Sequoia"
+            default: return "macOS \(n)"
+            }
+        }
+
+        if major <= 12 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(nameFor(major)) no longer receives security updates",
+                detail: "Running macOS \(major).\(version.minorVersion).\(version.patchVersion). Apple has stopped shipping security fixes for this version — known exploitable bugs will not be patched.",
+                path: nil,
+                remediation: "Upgrade to a supported macOS version: System Settings > General > Software Update. If hardware can't run a newer macOS, treat this Mac as high-risk and limit its use for sensitive work."
+            ))
+        } else if major == 13 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS Ventura receives security-only updates",
+                detail: "Running macOS 13.\(version.minorVersion).\(version.patchVersion). Ventura is in security-only maintenance — new mitigations land on Sonoma/Sequoia first.",
+                path: nil,
+                remediation: "Plan an upgrade to Sonoma (14) or Sequoia (15): System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Wake on Network Access
+    //
+    // Wake on Network Access (a.k.a. Wake-on-LAN) lets remote machines power-on a sleeping Mac.
+    // Combined with Remote Login, Remote Management, or Screen Sharing, an attacker on the local
+    // network can resume the Mac and connect without the user's knowledge.
+
+    private func checkWakeOnNetwork(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/pmset", arguments: ["-g"], timeout: 5)
+        guard result.success else { return }
+
+        // pmset prints "womp  1" when Wake on Network Access is enabled
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("womp") else { continue }
+            let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
+            guard parts.count >= 2, parts[1] == "1" else { continue }
+
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Wake on Network Access is enabled",
+                detail: "A device on the local network can wake this Mac. Combined with SSH/ARD/Screen Sharing, this provides a stealthy remote-access path.",
+                path: nil,
+                remediation: "Disable: sudo pmset -a womp 0 (or System Settings > Energy Saver > Wake for network access)"
+            ))
+            break
+        }
+    }
+
+    // MARK: - SSH Server Configuration
+    //
+    // When Remote Login is on, the sshd daemon reads `/etc/ssh/sshd_config` and any `*.conf` in
+    // `/etc/ssh/sshd_config.d`. PermitRootLogin, PasswordAuthentication, and PermitEmptyPasswords
+    // are the classic foot-guns: each weakens the login surface in a way attackers actively exploit
+    // against macOS hosts via brute-force / credential stuffing.
+
+    private func checkSSHConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only meaningful if SSH (Remote Login) is on. Suppress noise when it's off.
+        let sshOn = ShellRunner.run("/usr/sbin/systemsetup", arguments: ["-getremotelogin"], timeout: 5)
+        guard sshOn.success && sshOn.stdout.lowercased().contains(": on") else { return }
+
+        var configFiles = ["/etc/ssh/sshd_config"]
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/ssh/sshd_config.d") {
+            for entry in dropIns where entry.hasSuffix(".conf") {
+                configFiles.append("/etc/ssh/sshd_config.d/\(entry)")
+            }
+        }
+
+        // Aggregate the effective directive value — last setting wins in sshd_config semantics.
+        var effective: [String: String] = [:]
+        for path in configFiles {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for raw in content.split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+                let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                guard parts.count >= 2 else { continue }
+                let value = parts[1...].map(String.init).joined(separator: " ")
+                effective[String(parts[0]).lowercased()] = value.lowercased()
+            }
+        }
+
+        if effective["permitrootlogin"] == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login",
+                detail: "sshd_config sets PermitRootLogin=yes — attackers don't need to know a username, only the root password.",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set PermitRootLogin=no (or prohibit-password) and reload sshd"
+            ))
+        }
+
+        if effective["permitemptypasswords"] == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords",
+                detail: "sshd_config sets PermitEmptyPasswords=yes — any account with no password can log in remotely.",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set PermitEmptyPasswords=no and reload sshd"
+            ))
+        }
+
+        // PasswordAuthentication is "yes" by default on macOS — flag it because key-based auth is
+        // strictly better and disables an entire class of brute-force attacks.
+        let passAuth = effective["passwordauthentication"] ?? "yes"
+        if passAuth == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH accepts password authentication",
+                detail: "Remote Login is on and sshd accepts passwords — exposes the Mac to credential stuffing and brute force from the LAN/Internet.",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Switch to key-based auth, then set PasswordAuthentication=no in sshd_config"
+            ))
         }
     }
 

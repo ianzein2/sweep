@@ -434,6 +434,204 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" — fake job-interview campaigns drop Node.js + Python
+        // backdoors during the recruiter's "coding challenge". Active 2023 through 2025.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "FCCCall", "MiroTalk", "ChessClub"],
+            bundleIdentifiers: ["com.beavertail.agent"],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.cache_beaver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "pay", "tsnode", "node_app"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.p",
+                "/private/tmp/.npl",
+                "~/Library/.n2/payload",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "FlexibleFerret", "FerretUI", "ferretagent"],
+            bundleIdentifiers: ["com.flexibleferret.agent"],
+            filePaths: ["/private/tmp/.ferret"],
+            launchAgentLabels: ["com.flexibleferret.service"]
+        ),
+        // 2025 mass-distribution campaigns
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "ChromeUpdate", "DMGLoader"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_agent"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        SpywareSignature(
+            name: "OdysseyStealer",
+            processNames: ["Odyssey", "odyssey_stealer", "OdysseyAgent"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        // Lazarus / APT38 — late-2024 macOS samples
+        SpywareSignature(
+            name: "RustyAttr (Lazarus)",
+            processNames: ["RustyAttr", "rustyattr", "TestPDFViewer"],
+            bundleIdentifiers: ["com.rustyattr.agent"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "tweb"],
+            bundleIdentifiers: ["com.todoswift.agent"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect_Helper"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.HZRat",
+            ],
+            launchAgentLabels: ["com.openvpn.helper.agent"]
+        ),
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "DOORS", "VisualStudioUpdater"],
+            bundleIdentifiers: ["com.rustdoor.agent", "com.visualstudio.updater"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "~/public/.test",
+            ],
+            launchAgentLabels: ["com.visualstudio.updater.agent"]
+        ),
+        SpywareSignature(
+            name: "ZuRu (macOS)",
+            processNames: ["ZuRu", "zuru", "iTermZuRu", "g.ovpn"],
+            bundleIdentifiers: ["com.zuru.agent"],
+            filePaths: [
+                "/private/tmp/.test",
+                "/Library/.fseventsd/fseventsd-uuid",
+                "~/Library/Application Support/.ZuRu",
+            ],
+            launchAgentLabels: ["com.zuru.service"]
+        ),
+        SpywareSignature(
+            name: "MacMa (Daggerfly / CDDS)",
+            processNames: ["macma", "MacMa", "UserAgent", "dscl_agent", "CDDS"],
+            bundleIdentifiers: ["com.daggerfly.macma"],
+            filePaths: [
+                "/private/tmp/.macma",
+                "~/Library/Preferences/.userpref",
+            ],
+            launchAgentLabels: ["com.UserAgent.helper"]
+        ),
+        // Cryptominers
+        SpywareSignature(
+            name: "OSAMiner",
+            processNames: ["osaminer", "OSAMiner", "Photo Library Helper", "Mac Auto Fixer"],
+            bundleIdentifiers: ["com.osaminer.agent"],
+            filePaths: [
+                "~/Library/k.plist",
+                "~/Library/com.apple.helper.plist",
+                "/Library/Application Support/.osa",
+            ],
+            launchAgentLabels: ["com.osaminer.helper"]
+        ),
+        SpywareSignature(
+            name: "BirdMiner",
+            processNames: ["birdminer", "BirdMiner", "Endlessfile"],
+            bundleIdentifiers: ["com.birdminer.agent"],
+            filePaths: ["/Library/Application Support/.bird"],
+            launchAgentLabels: ["com.bird.miner"]
+        ),
+        // Modern infostealers (continued)
+        SpywareSignature(
+            name: "CrystalRay / Crystal Stealer",
+            processNames: ["crystalray", "CrystalRay", "Crystal_Stealer", "cstealer"],
+            bundleIdentifiers: ["com.crystal.stealer"],
+            filePaths: [
+                "/private/tmp/.crystal",
+                "~/Library/Application Support/.Crystal",
+            ],
+            launchAgentLabels: ["com.crystal.service"]
+        ),
+        SpywareSignature(
+            name: "NodeStealer (macOS)",
+            processNames: ["nodestealer", "NodeStealer", "node_helper_app"],
+            bundleIdentifiers: ["com.node.stealer"],
+            filePaths: ["/private/tmp/.nodestealer"],
+            launchAgentLabels: ["com.node.stealer.service"]
+        ),
+        SpywareSignature(
+            name: "Trojan-Proxy.OSX",
+            processNames: ["TrojanProxy", "trojanproxy", "WAVPACK_Helper", "macproxy"],
+            bundleIdentifiers: ["com.wavpack.helper"],
+            filePaths: ["~/Library/Application Support/.wavpack"],
+            launchAgentLabels: ["com.wavpack.helper.plist"]
+        ),
+        SpywareSignature(
+            name: "PerfctlMac",
+            processNames: ["perfctl", "Perfctl", "perfctl_agent"],
+            bundleIdentifiers: ["com.perfctl.agent"],
+            filePaths: [
+                "/private/tmp/.perfctl",
+                "/usr/local/.perfctl",
+            ],
+            launchAgentLabels: ["com.perfctl.service"]
+        ),
+        // Operation Triangulation (Kaspersky 2023-24, predominantly iOS — included for trace artifacts)
+        SpywareSignature(
+            name: "Triangulation Artifact",
+            processNames: ["BackupAgent2", "triangulation"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Backup/.ts_state",
+                "/private/var/tmp/.triangulation",
+            ],
+            launchAgentLabels: []
+        ),
+        // Spynote macOS variant (2024)
+        SpywareSignature(
+            name: "SpyNote (macOS)",
+            processNames: ["spynote", "SpyNote", "snagent"],
+            bundleIdentifiers: ["com.spynote.agent"],
+            filePaths: ["~/Library/Application Support/.SpyNote"],
+            launchAgentLabels: ["com.spynote.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
