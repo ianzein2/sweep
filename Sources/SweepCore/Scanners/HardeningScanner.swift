@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Private Wi-Fi Address randomization")
+        checkPrivateWiFiAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay state")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari Advanced Fingerprinting Protection")
+        checkSafariFingerprintingProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Apple Silicon LocalPolicy (bputil)")
+        checkApplePolicyBoot(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Task Management inventory")
+        checkBackgroundTaskInventory(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment state")
+        checkGatekeeperState(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -454,6 +472,8 @@ public final class HardeningScanner: Scanner {
     private func checkRapidSecurityResponse(findings: inout [Finding], errors: inout [String]) {
         // macOS Ventura+ supports Rapid Security Responses (RSRs) — out-of-band patches for
         // actively exploited bugs. If automatic install is disabled, the Mac may miss emergency fixes.
+        // Tahoe 26.1 rebranded this as "Background Security Improvements" (BSI); the underlying
+        // CriticalUpdateInstall pref still gates both.
         let rsrInstall = ShellRunner.run("/usr/bin/defaults", arguments: [
             "read", "/Library/Preferences/com.apple.SoftwareUpdate", "CriticalUpdateInstall"
         ], timeout: 5)
@@ -463,11 +483,204 @@ public final class HardeningScanner: Scanner {
                 findings.append(Finding(
                     severity: .medium, category: .hardening,
                     title: "Automatic install of security responses is disabled",
-                    detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
+                    detail: "Rapid Security Responses / Background Security Improvements patch actively " +
+                            "exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Private Wi-Fi Address (Sequoia)
+    //
+    // Sequoia added per-SSID MAC randomization with a system-wide kill switch in
+    // /Library/Preferences/SystemConfiguration/com.apple.airport.preferences.plist.
+    // When the kill switch is set, every Wi-Fi network sees the Mac's hardware MAC,
+    // re-enabling cross-network tracking.
+    // https://www.brunerd.com/blog/2024/09/27/getting-ahead-of-private-wi-fi-address-changes-in-macos-sequoia/
+    private func checkPrivateWiFiAddress(findings: inout [Finding], errors: inout [String]) {
+        let plist = "/Library/Preferences/SystemConfiguration/com.apple.airport.preferences.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        // "1" / true = system-wide kill switch ON (insecure: randomization disabled).
+        let killSwitch = (dict["PrivateMACAddressModeSystemSetting"] as? Int ?? 0) == 1 ||
+                         (dict["PrivateMACAddressModeSystemSetting"] as? Bool ?? false)
+        if killSwitch {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Private Wi-Fi Address (MAC randomization) is disabled system-wide",
+                detail: "Mac broadcasts its real hardware MAC address on every Wi-Fi network, " +
+                        "enabling cross-network tracking",
+                path: plist,
+                remediation: "Re-enable: System Settings > Wi-Fi > (i next to network) > Private Wi-Fi Address"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+    //
+    // Private Relay proxies Safari and unencrypted traffic through Apple+partner relays,
+    // hiding the user's IP. An admin-set `DisablePrivateRelay` flag turns it off entirely.
+    // https://www.brunerd.com/blog/2022/09/27/determining-icloud-private-relay-and-limit-ip-tracking-status-in-macos/
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        let prefs = "/Library/Preferences/SystemConfiguration/preferences.plist"
+        guard let data = FileManager.default.contents(atPath: prefs),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+        let disabled = (dict["DisablePrivateRelay"] as? Int ?? 0) == 1 ||
+                       (dict["DisablePrivateRelay"] as? Bool ?? false)
+        if disabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is administratively disabled",
+                detail: "Outbound Safari/unencrypted traffic shows the Mac's real public IP " +
+                        "and is not proxied through Apple's relay network",
+                path: prefs,
+                remediation: "If not required by your network admin, re-enable: System Settings > Apple ID > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Safari Advanced Fingerprinting Protection (Tahoe / Sequoia)
+    //
+    // Tahoe 26 made Advanced Fingerprinting Protection the default for all browsing; the
+    // user-facing scope can still be set to Disabled / Trackers Only / All.
+    // https://lapcatsoftware.com/articles/2025/9/4.html
+    private func checkSafariFingerprintingProtection(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Safari", "WBSPrivacyProxyAvailabilityTraffic"
+        ], timeout: 5)
+        guard result.success else { return }
+
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The integer values Apple uses for the three scopes:
+        //   66976992 = Disabled, 66976996 = Trackers Only, 66977004 = Trackers and Websites.
+        if value == "66976992" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Safari Advanced Fingerprinting Protection is disabled",
+                detail: "Safari's fingerprinting defenses are turned off across all browsing modes",
+                path: nil,
+                remediation: "Enable: Safari > Settings > Advanced > Advanced Fingerprinting Protection > Trackers and Websites"
+            ))
+        }
+    }
+
+    // MARK: - Apple Silicon LocalPolicy (bputil)
+    //
+    // The Apple Silicon equivalent of "SIP off" is a Reduced/Permissive Security boot
+    // policy: it allows unsigned kexts, arbitrary kernels, and disables boot-args
+    // filtering. bputil -d is the only way to read this; the call is harmless and
+    // password-free for non-mutating reads but does require root.
+    // https://github.com/ernw/hardening/blob/master/operating_system/osx/26/Hardening_Guide-macOS_26_Tahoe_1.0.md
+    private func checkApplePolicyBoot(findings: inout [Finding], errors: inout [String]) {
+        // Skip on Intel Macs (no bputil) and as non-root (read access denied).
+        guard getuid() == 0 else { return }
+        guard FileManager.default.fileExists(atPath: "/usr/bin/bputil") else { return }
+
+        let result = ShellRunner.run("/usr/bin/bputil", arguments: ["-d"], timeout: 5)
+        guard result.success else { return }
+
+        let stdout = result.stdout
+        // bputil prints "Security Mode: 1 (Full)" for Full Security, lower values are reduced.
+        let isFull = stdout.contains("Security Mode: 1") ||
+                     stdout.lowercased().contains("full security")
+        if !isFull && stdout.contains("Security Mode") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Apple Silicon boot security is reduced",
+                detail: "LocalPolicy is not in Full Security mode — unsigned kexts, custom kernels, " +
+                        "or boot-arg filtering bypass may be permitted",
+                path: nil,
+                remediation: "Restore Full Security from recoveryOS: Startup Security Utility > Full Security"
+            ))
+        }
+
+        // 3rd-party kext approval is also a major hardening regression.
+        if stdout.contains("3rd Party Kexts Status") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Apple Silicon allows user-approved 3rd-party kexts",
+                detail: "Boot policy permits loading non-Apple kernel extensions — broadens kernel attack surface",
+                path: nil,
+                remediation: "Disable from recoveryOS Startup Security Utility unless a specific kext is required"
+            ))
+        }
+    }
+
+    // MARK: - Background Task Management (BTM) inventory via sfltool
+    //
+    // BTM is the system of record for login items, LaunchAgents, LaunchDaemons, and
+    // legacy persistence registered via SMAppService. Any persistence Sweep wants to
+    // surface via Apple's own ledger flows through `sfltool dumpbtm`. We only flag if
+    // sfltool succeeds and we see non-Apple entries from user-writable paths.
+    // https://eclecticlight.co/2025/12/03/manage-login-and-background-items/
+    private func checkBackgroundTaskInventory(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // sfltool dumps a human-readable record block per item. Look for enabled records
+        // whose executable URL lives under /Users/, /tmp/, or /private/tmp/.
+        let lines = result.stdout.components(separatedBy: "\n")
+        var current: [String] = []
+        var enabledUserItems = 0
+
+        for line in lines {
+            if line.trimmingCharacters(in: .whitespaces).isEmpty {
+                if shouldFlagBTMRecord(current) { enabledUserItems += 1 }
+                current.removeAll()
+            } else {
+                current.append(line)
+            }
+        }
+        if shouldFlagBTMRecord(current) { enabledUserItems += 1 }
+
+        if enabledUserItems > 0 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Background Items registered from user-writable locations (\(enabledUserItems))",
+                detail: "sfltool dumpbtm reports enabled background items whose executable lives in " +
+                        "/Users, /tmp, or /private/tmp — these are common persistence locations for stealers",
+                path: nil,
+                remediation: "Review: sudo sfltool dumpbtm | less — disable unrecognised items in " +
+                             "System Settings > General > Login Items & Extensions"
+            ))
+        }
+    }
+
+    private func shouldFlagBTMRecord(_ record: [String]) -> Bool {
+        // Each record block contains lines like "Name: ...", "Path: ...", "Disposition: enabled".
+        guard !record.isEmpty else { return false }
+        let joined = record.joined(separator: "\n").lowercased()
+        guard joined.contains("disposition") && joined.contains("enabled") else { return false }
+        // Apple-issued items live under /System/, /Library/Apple/, or have team ID == Apple.
+        if joined.contains("team identifier: apple") { return false }
+        // Hits if any path field references a user-writable area.
+        let suspiciousRoots = ["/users/", "/private/tmp/", "/tmp/"]
+        return suspiciousRoots.contains { joined.contains($0) }
+    }
+
+    // MARK: - Gatekeeper assessment state
+    //
+    // `spctl --status` should always say "assessments enabled". On older macOS versions
+    // (pre-Sequoia) `spctl --master-disable` could turn the whole subsystem off; even
+    // post-upgrade, an inherited disabled state silently allows any binary to launch.
+    private func checkGatekeeperState(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        guard result.success else { return }
+        if result.stdout.lowercased().contains("assessments disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper assessments are disabled",
+                detail: "macOS will not verify code signatures or notarisation for downloaded apps",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --global-enable (then sudo spctl --master-enable on older macOS)"
+            ))
         }
     }
 }

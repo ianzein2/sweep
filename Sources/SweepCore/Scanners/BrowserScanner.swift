@@ -17,6 +17,89 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Known malicious / compromised VSCode/Cursor extension IDs reported 2024-2026.
+    // Match is case-insensitive against the `publisher.name` slug at the package root.
+    // Sources cited inline; ReversingLabs ahban cluster, Datadog MUT-9332, Checkmarx
+    // juanblan281, Koi WhiteCobra, Socket/Koi GlassWorm, Nx Console v18.95.0 incident.
+    private let knownMaliciousEditorExtIds: [(id: String, family: String, source: String)] = [
+        // ReversingLabs ahban cluster (Nov 2024 -> Mar 2025)
+        ("ahban.cychelloworld", "ahban ransomware downloader",
+         "https://www.reversinglabs.com/blog/malware-vs-code-extension-names"),
+        ("ahban.shiba", "ahban ransomware downloader",
+         "https://www.reversinglabs.com/blog/malware-vs-code-extension-names"),
+        ("ahbanc.shiba", "ahban (republished)",
+         "https://thehackernews.com/2025/08/researchers-find-vs-code-flaw-allowing.html"),
+        // Datadog MUT-9332 Solidity-themed stealers (May 2025)
+        ("smartcontractai.solaibot", "MUT-9332 Solidity stealer",
+         "https://securitylabs.datadoghq.com/articles/mut-9332-malicious-solidity-vscode-extensions/"),
+        ("ethcompiler.among-eth", "MUT-9332 Solidity stealer",
+         "https://securitylabs.datadoghq.com/articles/mut-9332-malicious-solidity-vscode-extensions/"),
+        ("johngaffney.blankebesxstnion", "MUT-9332 Solidity stealer",
+         "https://securitylabs.datadoghq.com/articles/mut-9332-malicious-solidity-vscode-extensions/"),
+        // Checkmarx juanblan281 (Jan 2026)
+        ("juanblan281.solid281", "Solidity typosquat ScreenConnect RAT",
+         "https://checkmarx.com/zero-post/solidity-devs-targeted-again-malicious-vs-code-extension-drops-screenconnect-based-remote-access-trojan-rat/"),
+        // Solidity Language impersonations (the $500k Cursor crypto-heist family)
+        ("showsnowcrypto.snowshono", "Solidity Language impersonation",
+         "https://www.scworld.com/news/fake-visual-studio-code-extension-for-cursor-led-to-500k-theft"),
+        // Koi WhiteCobra (Sept 2025)
+        ("contractshark.solidity-lang", "WhiteCobra Solidity stealer",
+         "https://www.koi.ai/blog/whitecobra-vscode-cursor-extensions-malware"),
+        // Nx Console v18.95.0 supply-chain compromise (May 2026)
+        // ONLY v18.95.0 is malicious; >=18.100.0 is safe. We match on the version dir
+        // in the heuristic below rather than blanket-banning the publisher.
+        ("nrwl.angular-console-18.95.0", "Nx Console v18.95.0 hijack (CVE-2026-48027)",
+         "https://nx.dev/blog/nx-console-v18-95-0-postmortem"),
+        // Socket/Koi GlassWorm Open VSX cluster (Oct 2025 / Mar 2026)
+        ("twilkbilk.color-highlight-css", "GlassWorm",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+        ("otoboss.autoimport-extension", "GlassWorm",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+        ("oigotm.my-command-palette-extension", "GlassWorm",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+        ("federicanc.dotenv-syntax-highlighting", "GlassWorm",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+        ("crotoapp.vscode-xml-extension", "GlassWorm",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+        ("daeumer-web.es-linter-for-vs-code", "GlassWorm (dbaeumer typosquat)",
+         "https://socket.dev/blog/open-vsx-transitive-glassworm-campaign"),
+    ]
+
+    // Known malicious / compromised Chrome extension IDs reported 2024-2026.
+    // The Cyberhaven supply-chain wave (Dec 2024 / Jan 2025) hijacked legitimate
+    // extensions to exfiltrate cookies and session tokens. The IDs below survived
+    // takedown windows and may still be installed on Macs that never updated.
+    private let knownMaliciousChromeExtIds: [(id: String, family: String, source: String)] = [
+        // Cyberhaven cluster (Dec 2024 supply-chain incident)
+        ("pajkjnmeojmbapicmbpliphjmcekeaac", "Cyberhaven hijack",
+         "https://www.cyberhaven.com/blog/cyberhavens-chrome-extension-security-incident-and-what-were-doing-about-it"),
+        ("nnpnnpemnckcfdebeekibpiijlicmpom", "Internxt VPN hijack (Cyberhaven cluster)",
+         "https://www.bleepingcomputer.com/news/security/cybersecurity-firms-chrome-extension-hijacked-to-steal-users-data/"),
+        ("lbneaaedflankmgmfbmaplggbmjjmbae", "VPNCity hijack (Cyberhaven cluster)",
+         "https://cyberinsider.com/multiple-chrome-vpn-extensions-compromised-in-coordinated-attack/"),
+        ("fbmlcbhdmilaggedifpihjgkkmdgeljh", "ParrotTalks hijack (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        ("oaikpkmjciadfpddlpjjdapglcihgdle", "Uvoice hijack (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        ("jiofmdifioeejeilfkpegipdjiopiekl", "YesCaptcha Assistant hijack (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        ("epikoohpebngmakjinphfiagogjcnddm", "AI Shop Buddy hijack (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        ("ekpkdmohpdnebfedjjfklhpefgpgaaji", "Tackker Keylogger (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        ("pdkmmfdfggfpibdjbbghggcllhhainjo", "Web3 Password Manager hijack (Cyberhaven cluster)",
+         "https://isc.sans.edu/diary/31574"),
+        // Standalone malicious extensions
+        ("fnmihdojmnkclgjpcoonokmkhjpjechg", "AI chat tab/URL exfiltrator (Jan 2026)",
+         "https://thehackernews.com/2026/01/two-chrome-extensions-caught-stealing.html"),
+        ("inhcgfpbfdjbjogdfjbclgolkmhnooop", "AI Sidebar tab/URL exfiltrator (Jan 2026)",
+         "https://thehackernews.com/2026/01/two-chrome-extensions-caught-stealing.html"),
+        ("jkphinfhmfkckkcnifhjiplhfoiefffl", "CL Suite Meta Business 2FA stealer",
+         "https://thehackernews.com/2026/02/malicious-chrome-extensions-caught.html"),
+        ("jcbiifklmgnkppebelchllpdbnibihel", "FreeVPN.One / SpyVPN screen-capture exfiltrator",
+         "https://www.koi.ai/blog/spyvpn-the-vpn-that-secretly-captures-your-screen"),
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +226,22 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Hard-match against the known-malicious ID list before any heuristic
+                    // work — these get a HIGH finding regardless of permissions. We do this
+                    // per-profile (not deduped) so the user sees which profile is affected.
+                    if let hit = knownMaliciousChromeExtIds.first(where: { $0.id == extId }) {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) has a known malicious extension installed",
+                            detail: "Extension ID: \(extId) (profile: \(profile)) — \(hit.family). " +
+                                    "Source: \(hit.source)",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately in \(browserName) > Extensions and rotate " +
+                                         "any cookies/sessions or wallet credentials accessed in this profile."
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
@@ -337,6 +436,26 @@ public final class BrowserScanner: Scanner {
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
 
+                // Hard match against the known-malicious ID list. We match either the
+                // publisher.name slug OR the full publisher.name-version directory so we
+                // can flag the single-version Nx Console hijack without warning on safe
+                // versions of the same extension.
+                let extIdLower = extId.lowercased()
+                let entryLower = entry.lowercased()
+                if let hit = knownMaliciousEditorExtIds.first(where: {
+                    extIdLower == $0.id || entryLower.hasPrefix($0.id)
+                }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) has a known malicious extension installed",
+                        detail: "Extension: \(displayName) (\(extId)) — \(hit.family). Source: \(hit.source)",
+                        path: extPath,
+                        remediation: "Remove immediately in \(editorName) > Extensions and rotate any " +
+                                     "secrets, wallet credentials, or git/npm tokens this editor had access to."
+                    ))
+                    continue
+                }
+
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {
                     findings.append(Finding(
@@ -345,6 +464,22 @@ public final class BrowserScanner: Scanner {
                         detail: "Extension: \(displayName) (\(extId)) — matched pattern \"\(kw)\"",
                         path: extPath,
                         remediation: "Remove this extension in \(editorName) and investigate your keychain/wallet activity"
+                    ))
+                    continue
+                }
+
+                // Invisible Unicode in the display name is a known GlassWorm / typosquat
+                // disguise — variation selectors (U+FE00–FE0F), tag characters (U+E0100–E01EF),
+                // zero-width joiners, and other PUA glyphs let a malicious extension look
+                // identical to a legitimate one in the marketplace listing.
+                if displayName.unicodeScalars.contains(where: isInvisibleSpoofingScalar) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension uses invisible Unicode in its name",
+                        detail: "Extension: \(displayName) (\(extId)) — invisible glyphs are a known " +
+                                "GlassWorm / typosquat technique to impersonate trusted publishers",
+                        path: extPath,
+                        remediation: "Remove this extension and re-install the genuine one from the publisher's site"
                     ))
                     continue
                 }
@@ -382,6 +517,21 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+    }
+
+    /// Detect glyphs commonly used to hide payloads inside marketplace listings.
+    /// Variation selectors and tag characters render to nothing, letting an extension
+    /// display as e.g. "Solidity Language" while having a different underlying slug.
+    private func isInvisibleSpoofingScalar(_ scalar: Unicode.Scalar) -> Bool {
+        let v = scalar.value
+        // Variation Selectors (FE00–FE0F) and Variation Selectors Supplement (E0100–E01EF)
+        if (0xFE00...0xFE0F).contains(v) { return true }
+        if (0xE0100...0xE01EF).contains(v) { return true }
+        // Tag characters (E0000–E007F) — used in some spoofs to encode hidden strings
+        if (0xE0000...0xE007F).contains(v) { return true }
+        // Zero-width characters frequently abused in typosquats
+        if v == 0x200B || v == 0x200C || v == 0x200D || v == 0xFEFF { return true }
+        return false
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {

@@ -78,6 +78,21 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking ~/.zshenv (BlueNoroff Hidden Risk pattern)")
+        scanZshenv(findings: &findings, errors: &errors)
+
+        progress?.update("checking hidden agent dotfiles in home")
+        scanHomeAgentDotfiles(findings: &findings, errors: &errors)
+
+        progress?.update("checking .localized directory bundle shadowing")
+        scanLocalizedAppDirs(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook generators")
+        scanQuickLookGenerators(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +690,174 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - ~/.zshenv (BlueNoroff "Hidden Risk")
+    //
+    // ~/.zshenv runs for every zsh invocation including non-interactive scripts, and the
+    // resulting process is parented by launchd via a clean shell — bypassing Ventura's
+    // Background Items notification. SentinelOne reported BlueNoroff was the first
+    // in-the-wild actor to weaponize this in 2024-2025. ~/.zshenv is rare on clean
+    // systems (most users only have ~/.zshrc), so its mere presence is worth surfacing.
+    // https://www.sentinelone.com/labs/bluenoroff-hidden-risk-threat-actor-targets-macs-with-fake-crypto-news-and-novel-persistence/
+    private func scanZshenv(findings: inout [Finding], errors: inout [String]) {
+        let path = "\(ShellRunner.realUserHome)/.zshenv"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        let lines = content.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let activeLines = lines.filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        if activeLines.isEmpty { return }
+
+        // Look for the canonical BlueNoroff pattern: exec/source/eval pulling from
+        // /tmp, /private/tmp, hidden dotfiles, or remote curl.
+        let suspiciousNeedles = ["curl ", "wget ", "eval ", "exec ", "source ",
+                                 "/tmp/", "/private/tmp/", "/.hidden", "base64"]
+        let hasSuspicious = activeLines.contains { line in
+            suspiciousNeedles.contains { line.lowercased().contains($0) }
+        }
+
+        let severity: Severity = hasSuspicious ? .high : .medium
+        findings.append(Finding(
+            severity: severity, category: .persistence,
+            title: hasSuspicious
+                ? "Suspicious commands in ~/.zshenv (BlueNoroff Hidden Risk pattern)"
+                : "~/.zshenv exists (uncommon — review)",
+            detail: "~/.zshenv runs for every zsh invocation including non-interactive scripts. " +
+                    "First active line: \(String(activeLines.first!.prefix(120)))",
+            path: path,
+            remediation: "Review: cat \(path) — if you did not create this file, remove it. " +
+                         "Most users only need ~/.zshrc."
+        ))
+    }
+
+    // MARK: - Hidden agent dotfiles (AMOS 2025, Odyssey, ClickFix Script Editor)
+    //
+    // Several 2025-2026 stealers drop their persistence helpers as hidden dotfiles in
+    // $HOME: AMOS's .helper + .agent (Trend Micro), Odyssey's .botid + .pwd (Jamf),
+    // ClickFix Script Editor's .mainhelper (Jamf), Nova's .mdrivers (CSN).
+    // None of these are produced by legitimate macOS software, so each is a strong IOC.
+    private func scanHomeAgentDotfiles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // Each entry: (relative path, malware family it's associated with)
+        let knownDrops: [(rel: String, family: String)] = [
+            (".helper",     "AMOS 2025 (com.finder.helper)"),
+            (".agent",      "AMOS 2025 (com.finder.helper)"),
+            (".botid",      "Odyssey Stealer (Poseidon)"),
+            (".pwd",        "Odyssey Stealer (Poseidon)"),
+            (".mainhelper", "ClickFix Script Editor variant"),
+            (".mdrivers",   "Nova Stealer (MioLab)"),
+            ("..txt",       "DigitStealer"),   // Note the literal double-dot — DigitStealer's
+                                               // credential cache, NOT a normal hidden file.
+        ]
+
+        for drop in knownDrops {
+            let path = "\(home)/\(drop.rel)"
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Hidden malware drop file in home directory",
+                detail: "\(drop.rel) is a known IOC for \(drop.family)",
+                path: path,
+                remediation: "Investigate immediately. If you did not create this file, " +
+                             "your Mac is likely compromised. Remove: rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - .localized directory bundle shadowing (theevilbit, Dec 2025)
+    //
+    // Some installers (NordVPN, Microsoft Teams, others) ship the real app inside
+    // /Applications/<App>.localized/ — a directory that's user-writable. An attacker
+    // who controls that path can swap the binary and inherit the parent LaunchDaemon's
+    // root execution context.
+    // https://theevilbit.github.io/posts/localized/
+    private func scanLocalizedAppDirs(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        guard let appsDirContents = try? fm.contentsOfDirectory(atPath: "/Applications") else { return }
+
+        for entry in appsDirContents where entry.hasSuffix(".localized") {
+            let dirPath = "/Applications/\(entry)"
+            // Confirm it's a directory (defensive) and contains a real .app bundle, not just
+            // a .strings file (the historic legitimate use).
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dirPath, isDirectory: &isDir), isDir.boolValue else { continue }
+
+            guard let children = try? fm.contentsOfDirectory(atPath: dirPath) else { continue }
+            let containsApp = children.contains { $0.hasSuffix(".app") }
+            if !containsApp { continue }
+
+            // User-writable / non-root-owned drops the severity to HIGH — that's
+            // the bundle-shadowing condition.
+            let attrs = try? fm.attributesOfItem(atPath: dirPath)
+            let ownerId = attrs?[.ownerAccountID] as? Int ?? 0
+            let nonRoot = ownerId != 0
+
+            findings.append(Finding(
+                severity: nonRoot ? .high : .medium,
+                category: .persistence,
+                title: ".localized directory contains an app bundle (shadowing risk)",
+                detail: "\(entry) owned by UID \(ownerId) — apps inside .localized directories " +
+                        "can be swapped by anyone who controls the parent directory",
+                path: dirPath,
+                remediation: "Verify the bundle inside is the vendor's official copy and " +
+                             "that the directory is owned by root. See theevilbit.github.io/posts/localized/"
+            ))
+        }
+    }
+
+    // MARK: - QuickLook generators (`/Library/QuickLook`, `~/Library/QuickLook`)
+    //
+    // QuickLook generator bundles (*.qlgenerator) are loaded by quicklookd whenever the
+    // user previews a file of the registered type — a stealthy persistence channel that
+    // doesn't show in Background Items. Modern macOS ships QuickLook plugins inside
+    // app bundles; standalone generators in /Library/QuickLook are deprecated and unusual.
+    private func scanQuickLookGenerators(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let qlDirs = ["/Library/QuickLook", "\(home)/Library/QuickLook"]
+        let fm = FileManager.default
+
+        for dir in qlDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".qlgenerator") {
+                let path = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "QuickLook generator installed (deprecated extension point)",
+                    detail: "\(entry) — QuickLook generators load into quicklookd whenever a " +
+                            "matching file type is previewed and are rarely needed on modern macOS",
+                    path: path,
+                    remediation: "If you do not recognize this generator, remove it: " +
+                                 "rm -rf \"\(path)\" && qlmanage -r"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Spotlight importers (`*.mdimporter`)
+    //
+    // mdimporter bundles run inside the mdworker sandbox whenever Spotlight indexes a
+    // file of the registered type. Custom importers outside Apple's own paths or
+    // installed apps are unusual and a low-friction persistence/execution channel.
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let importerDirs = ["/Library/Spotlight", "\(home)/Library/Spotlight"]
+        let fm = FileManager.default
+
+        for dir in importerDirs {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasSuffix(".mdimporter") {
+                let path = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Spotlight importer installed (uncommon extension point)",
+                    detail: "\(entry) — Spotlight importers load into mdworker during indexing; " +
+                            "most legitimate ones ship inside app bundles rather than /Library/Spotlight",
+                    path: path,
+                    remediation: "Verify this importer is from an app you installed. " +
+                                 "If unknown, remove: rm -rf \"\(path)\" && mdimport -r \"\(path)\""
+                ))
+            }
         }
     }
 

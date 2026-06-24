@@ -434,6 +434,277 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026: DPRK / Lazarus / Contagious Interview campaigns
+        SpywareSignature(
+            // Nim-based DPRK Web3 backdoor; CoreKitAgent revives the LaunchAgent on
+            // SIGINT/SIGTERM. The "GoogIe LLC" directory uses a Latin capital I to
+            // visually mimic Google.
+            // https://www.sentinelone.com/labs/macos-nimdoor-dprk-threat-actors-target-web3-and-crypto-platforms-with-nim-based-malware/
+            name: "NimDoor (DPRK)",
+            processNames: ["CoreKitAgent", "GoogIe LLC"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/CoreKit",
+                "~/Library/Application Support/GoogIe LLC",
+                "/private/tmp/.config",
+                "/private/tmp/cfg",
+            ],
+            launchAgentLabels: ["com.google.update"]
+        ),
+        SpywareSignature(
+            // BlueNoroff "Hidden Risk" — first observed in-the-wild ~/.zshenv abuse
+            // for non-interactive shell persistence that bypasses the Ventura+
+            // Background Items notification.
+            // https://www.sentinelone.com/labs/bluenoroff-hidden-risk-threat-actor-targets-macs-with-fake-crypto-news-and-novel-persistence/
+            name: "BlueNoroff Hidden Risk (DPRK)",
+            processNames: ["growth"],
+            bundleIdentifiers: [],
+            filePaths: ["/Users/Shared/growth"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // DPRK Contagious Interview backdoor masquerading as logd at a path the
+            // real Apple logd binary never uses.
+            // https://www.sentinelone.com/blog/macos-flexibleferret-further-variants-of-dprk-malware-family-unearthed/
+            name: "FlexibleFerret / FriendlyFerret (DPRK)",
+            processNames: ["com.apple.secd", "ChromeUpdate", "CameraAccess",
+                           "drivfixer", "InstallerAlert"],
+            bundleIdentifiers: ["Mac-Installer.InstallerAlert"],
+            filePaths: [
+                "/private/var/tmp/logd",
+                "/var/tmp/macpatch.sh",
+                "/var/tmp/CDrivers.zip",
+                "/var/tmp/drivfixer.sh",
+            ],
+            launchAgentLabels: ["com.apple.secd"]
+        ),
+        SpywareSignature(
+            // 2025 Contagious Interview JS stealer + Nuitka/PyInstaller delivery.
+            // https://thehackernews.com/2025/09/dprk-hackers-use-clickfix-to-deliver.html
+            name: "BeaverTail (DPRK)",
+            processNames: ["WifiPreference"],
+            bundleIdentifiers: [],
+            filePaths: ["~/Library/Application Support/WifiPreference"],
+            launchAgentLabels: [
+                "com.avatar.update.wake",
+                "com.wifianalyticsagent",
+            ]
+        ),
+        SpywareSignature(
+            // Famous Chollima / OtterCookie; npm + Vercel delivery.
+            // https://thehackernews.com/2025/11/north-korean-hackers-deploy-197-npm.html
+            name: "OtterCookie (DPRK)",
+            processNames: ["ottercookie"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Lazarus Tauri/Rust trojan smuggling JS in extended attributes.
+            // https://www.group-ib.com/blog/rustyattr-trojan/
+            name: "RustyAttr (Lazarus)",
+            processNames: ["rustyattr"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        // 2025-2026: New macOS infostealer families
+        SpywareSignature(
+            // Jamf-tracked stealer posing as DynamicLake utility; trojanizes Ledger Live's
+            // app.asar. The hidden double-dot file ~/..txt is the persistent credential store.
+            // https://www.jamf.com/blog/jtl-digitstealer-macos-infostealer-analysis/
+            name: "DigitStealer",
+            processNames: ["DynamicLake"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/..txt",
+                "/Volumes/DynamicLake",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // MaaS evolution of Mac.c; swaps Ledger Live / Trezor Suite binaries.
+            // https://www.jamf.com/blog/macsync-stealer-evolution-code-signed-swift-malware-analysis/
+            name: "MacSync Stealer",
+            processNames: ["UserSyncWorker", "devupdatesuite-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/UserSyncWorker",
+                "~/Library/Logs/UserSyncWorker.log",
+                "/tmp/runner",
+                "/tmp/osalogging.zip",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // SHub Reaper (SentinelOne, May 2026). Creates a fake Google Software Update
+            // tree and registers a Keystone-mimicking LaunchAgent.
+            // https://www.sentinelone.com/blog/shub-reaper-macos-stealer-spoofs-apple-google-and-microsoft-in-a-single-attack-chain/
+            name: "SHub Reaper",
+            processNames: ["GoogleUpdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/Google/GoogleUpdate.app",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent"]
+        ),
+        SpywareSignature(
+            // Poseidon rebrand (Jamf). Random LaunchDaemon labels with hidden bot ID files.
+            // https://www.jamf.com/blog/signed-and-stealing-uncovering-new-insights-on-odyssey-infostealer/
+            name: "Odyssey Stealer (Poseidon)",
+            processNames: ["odyssey"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.botid",
+                "~/.pwd",
+                "~/Library/Application Support/UserSyncWorker/last_up",
+                "~/Library/Application Support/UserSyncWorker/gate",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Trend Micro / Microsoft MDR analysis (Sept 2025) — AMOS added a durable
+            // root LaunchDaemon "com.finder.helper" with .helper/.agent in user home.
+            // https://www.trendmicro.com/en_us/research/25/i/an-mdr-analysis-of-the-amos-stealer-campaign.html
+            name: "AMOS 2025 (com.finder.helper)",
+            processNames: [".helper", ".agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.helper",
+                "~/.agent",
+                "/tmp/starter",
+                "/tmp/update",
+            ],
+            launchAgentLabels: ["com.finder.helper"]
+        ),
+        SpywareSignature(
+            // Jamf ChillyHell — notarized modular backdoor masquerading as Apple's
+            // qtop with three persistence fallbacks (LaunchAgent, LaunchDaemon, shell-RC).
+            // https://www.jamf.com/blog/chillyhell-a-modular-macos-backdoor/
+            name: "ChillyHell",
+            processNames: ["qtop"],
+            bundleIdentifiers: ["com.apple.qtop"],
+            filePaths: [
+                "~/Library/com.apple.qtop",
+                "/usr/local/bin/qtop",
+            ],
+            launchAgentLabels: ["com.apple.qtop"]
+        ),
+        SpywareSignature(
+            // ClickFix Script Editor variant (Jamf, Apr 2026); the .mainhelper file
+            // and the stat /dev/console + sudo -u pattern in a LaunchAgent are the IOCs.
+            // https://www.jamf.com/blog/clickfix-macos-script-editor-atomic-stealer/
+            name: "ClickFix Script Editor variant",
+            processNames: ["mainhelper"],
+            bundleIdentifiers: [],
+            filePaths: ["~/.mainhelper"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Proofpoint TA2727 — Wails (Go) infostealer pushed via fake Safari/Chrome
+            // browser updates; abuses AppleScript admin prompt.
+            // https://www.proofpoint.com/us/blog/threat-insight/update-fake-updates-two-new-actors-and-new-mac-malware
+            name: "FrigidStealer",
+            processNames: ["ddaolimaki-daunito", "Safari Updater"],
+            bundleIdentifiers: ["com.wails.ddaolimaki-daunito"],
+            filePaths: [
+                "/Volumes/Safari Updater/Safari Updater.app",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // SentinelOne — multi-runtime macOS loader; uses stable home paths.
+            // https://www.sentinelone.com/blog/readerupdate-reforged-melting-pot-of-macos-malware-adds-go-to-crystal-nim-and-rust-variants/
+            name: "ReaderUpdate",
+            processNames: ["readerupdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/printers/printers",
+                "~/Library/Application Support/etc/etc",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Malwarebytes — first documented Nuitka-compiled Python stealer on macOS.
+            // https://www.malwarebytes.com/blog/threat-intel/2026/03/infiniti-stealer-a-new-macos-infostealer-using-clickfix-and-python-nuitka
+            name: "Infiniti Stealer (NukeChain)",
+            processNames: ["UpdateHelper.bin", "UpdateHelper"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/UpdateHelper.bin"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Stage-1 dropper masquerades as a system dylib; AES-128-ECB obfuscated C2.
+            // https://cybersecuritynews.com/researchers-dissected-macos-appleprocesshub-stealer/
+            name: "AppleProcessHub Stealer",
+            processNames: ["libsystd", "libsystd.dylib"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/libsystd.dylib"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Chinese-aligned multi-component spyware (Apr 2025). Masquerades as Apple's
+            // geod via a daemon named "goed" plus per-app dylib stealers.
+            // https://gbhackers.com/pasivrobber-malware-emerges-targeting-macos-to-steal-data/
+            name: "PasivRobber",
+            processNames: ["goed", "wsus", "center",
+                           "libWXRobber", "libNTQQRobber", "libQQRobber"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/.PasivRobber",
+            ],
+            launchAgentLabels: ["com.apple.geod.helper"]
+        ),
+        SpywareSignature(
+            // FUD macOS backdoor with DYLD injection and ad-hoc resigning.
+            // https://cybersecuritynews.com/new-tiny-fud-attacking-macos-users/
+            name: "Tiny FUD",
+            processNames: ["com.apple.Safari.helper", "com.apple.Webkit.Networking"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // Nova / MioLab — replaces /Applications/Ledger Live.app and Trezor Suite.app
+            // with unsigned Swift+WebKit clones to steal seed phrases.
+            // https://cybersecuritynews.com/new-nova-stealer-attacking-macos-users/
+            name: "Nova Stealer (MioLab)",
+            processNames: ["mdrivers"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.mdrivers",
+                "~/Library/LaunchAgents/LedgerLive.zip",
+                "~/Library/LaunchAgents/TrezorSuite.zip",
+            ],
+            launchAgentLabels: ["application.com.artificialintelligence"]
+        ),
+        SpywareSignature(
+            // Hunt.io Cuckoo Stealer ClickFix variant — Homebrew look-alike LaunchAgent.
+            // https://hunt.io/blog/fake-homebrew-clickfix-cuckoo-stealer-macos
+            name: "Cuckoo Stealer (ClickFix variant)",
+            processNames: ["brewupdater", "upd"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: [
+                "com.homebrew.brewupdater",
+                "com.user.loginscript",
+                "com.dumpmedia.spotifymusicconverter",
+                "com.immyac.videoconverter",
+            ]
+        ),
+        SpywareSignature(
+            // Shai-Hulud npm worm — Bun-runtime payload, GitHub Actions runner persistence,
+            // destructive HOME wipe on exfil failure.
+            // https://unit42.paloaltonetworks.com/npm-supply-chain-attack/
+            name: "Shai-Hulud npm worm",
+            processNames: ["bun_environment"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/bun_environment.js",
+                "/tmp/setup_bun.js",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +721,12 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2025-2026 IOCs
+        "com.apple.qtop",                // ChillyHell modular backdoor
+        "com.apple.secd",                // FlexibleFerret / FriendlyFerret
+        "com.apple.geod.helper",         // PasivRobber masquerading as geod
+        "com.apple.Webkit.Networking",   // Tiny FUD spoofed name (real binary is signed)
+        "com.apple.Safari.helper",       // Tiny FUD spoofed name
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +751,11 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2025-2026: process names abused by DPRK / new infostealer families
+        "com.apple.secd",        // FlexibleFerret / FriendlyFerret backdoor
+        "com.apple.qtop",        // ChillyHell modular backdoor
+        "GoogIe LLC",            // NimDoor (Latin capital I impersonating Google)
+        "CoreKitAgent",          // NimDoor revival agent
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

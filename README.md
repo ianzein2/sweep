@@ -82,9 +82,20 @@ sudo sweep --json
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Private Wi-Fi Address, iCloud Private Relay, Safari fingerprinting protection, Apple Silicon LocalPolicy, Background Task Management inventory, Gatekeeper assessment state |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
+
+### What's new (2025-2026 coverage)
+
+Recent updates add detection for threats reported through mid-2026, including:
+
+- **DPRK / Lazarus campaigns** — NimDoor (CoreKitAgent + `GoogIe LLC`), FlexibleFerret / FriendlyFerret (`com.apple.secd`), BeaverTail, OtterCookie, RustyAttr, BlueNoroff "Hidden Risk" `~/.zshenv` persistence.
+- **2025 infostealer families** — DigitStealer (DynamicLake), MacSync / Mac.c, SHub Reaper, Odyssey (Poseidon rebrand), AMOS `com.finder.helper`, ChillyHell (`com.apple.qtop`), ClickFix Script Editor variant, FrigidStealer, ReaderUpdate, Infiniti Stealer, AppleProcessHub, PasivRobber, Tiny FUD, Nova Stealer (MioLab), Cuckoo ClickFix variant, Shai-Hulud npm worm.
+- **New persistence checks** — `~/.zshenv`, hidden home-directory drops (`.helper`, `.agent`, `.botid`, `.pwd`, `.mainhelper`, `.mdrivers`, `..txt`), `.localized` directory bundle shadowing, QuickLook generators, Spotlight importers.
+- **New hardening checks** — Private Wi-Fi Address (MAC randomization), iCloud Private Relay, Safari Advanced Fingerprinting Protection, Apple Silicon LocalPolicy via `bputil`, Background Task Management inventory via `sfltool dumpbtm`, Gatekeeper assessment state.
+- **Browser / IDE extensions** — Cyberhaven supply-chain wave IDs (Dec 2024), CL Suite, FreeVPN.One/SpyVPN, ahban ransomware cluster, MUT-9332 Solidity stealers, WhiteCobra, Nx Console v18.95.0, GlassWorm Open VSX cluster. Invisible-Unicode detection in editor extension display names.
+- **Wallet / credential targets** — Rabby, Solflare, Backpack, OKX Wallet, Sui Wallet, Bitget Wallet, Tonkeeper, Sparrow, BlueWallet, Zengo, Binance Desktop. Apple Notes `NoteStore.sqlite` exfil detection.
 
 ## Security score
 

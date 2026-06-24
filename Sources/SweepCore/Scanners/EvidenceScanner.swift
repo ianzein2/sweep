@@ -445,14 +445,36 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2025-2026 additions — Sapphire Sleet (Microsoft), MacSync v1.0.8 (THN/CloudSEK),
+        // SHub Reaper (SentinelOne), DigitStealer (Jamf), fake-BlueWallet (Malwarebytes).
+        ("Rabby",    "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Solflare", "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Backpack", "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Sui Wallet", "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("Bitget Wallet", "jiidiaalihmmhddjgbnbgdfflelocpak"),
+        ("Tonkeeper", "Tonkeeper"),
+        ("Sparrow",  "Sparrow"),
+        ("BlueWallet", "BlueWallet"),
+        ("Zengo",    "Zengo"),
+        ("Binance Desktop", "Binance"),
     ]
 
-    /// Browser credential stores AMOS-family stealers copy.
+    /// Browser credential stores AMOS-family stealers copy. The 2025-2026 wave added
+    /// Arc Browser, Orion (Kagi), and Vivaldi alongside the Chromium classics.
+    /// SHub Reaper (SentinelOne, May 2026) also pulls Apple Notes' NoteStore.sqlite.
     private let browserCredStoreNames: Set<String> = [
         "Login Data", "Web Data", "Cookies", "Local State",
         "key4.db", "logins.json", "cookies.sqlite",  // Firefox
         "Keychains", "login.keychain-db",            // macOS keychain copies
+        "NoteStore.sqlite",                          // Apple Notes (SHub Reaper 2026)
+        "NoteStore.sqlite-shm", "NoteStore.sqlite-wal",
     ]
+
+    // (Developer credential exfil detection — ~/.ssh, ~/.aws, ~/.kube copies — is
+    //  intentionally not done by filename match: names like "credentials" and "config"
+    //  collide with too much legitimate software. The location-based heuristic in
+    //  PersistenceScanner's hidden-dotfile check is the higher-signal proxy.)
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
         let fm = FileManager.default
@@ -468,10 +490,14 @@ public final class EvidenceScanner: Scanner {
             "\(home)/Library/Application Support/Microsoft Edge",
             "\(home)/Library/Application Support/Chromium",
             "\(home)/Library/Application Support/Arc",
+            "\(home)/Library/Application Support/Vivaldi",
+            "\(home)/Library/Application Support/Orion",
             "\(home)/Library/Application Support/Firefox",
             "\(home)/Library/Application Support/com.operasoftware.Opera",
             "\(home)/Library/Keychains",
             "/Library/Keychains",
+            // Apple Notes ships its store inside the system group container.
+            "\(home)/Library/Group Containers/group.com.apple.notes",
         ]
 
         for root in searchRoots {
