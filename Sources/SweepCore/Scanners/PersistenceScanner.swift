@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking plugin bundles")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking Login Items v2")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript login items")
+        scanAppleScriptLoginItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -103,6 +112,30 @@ public final class PersistenceScanner: Scanner {
             executablePath = program
         } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
             executablePath = first
+        }
+
+        // DYLD_INSERT_LIBRARIES (and friends) in EnvironmentVariables is a classic library-injection
+        // persistence trick — every time the target loads, it dlopens the attacker's dylib first.
+        // Legitimate macOS plists virtually never set these, so any occurrence is worth surfacing.
+        if let env = plist["EnvironmentVariables"] as? [String: Any] {
+            let dyldKeys = ["DYLD_INSERT_LIBRARIES", "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH",
+                            "DYLD_FALLBACK_FRAMEWORK_PATH", "DYLD_FALLBACK_LIBRARY_PATH"]
+            for key in dyldKeys {
+                guard let value = env[key] as? String, !value.isEmpty else { continue }
+                let isInject = key == "DYLD_INSERT_LIBRARIES"
+                findings.append(Finding(
+                    severity: isInject ? .high : .medium,
+                    category: .persistence,
+                    title: isInject
+                        ? "LaunchAgent injects a dylib via DYLD_INSERT_LIBRARIES"
+                        : "LaunchAgent overrides dyld search path",
+                    detail: "Label: \(label), \(key)=\(String(value.prefix(200)))",
+                    path: path,
+                    remediation: isInject
+                        ? "DYLD_INSERT_LIBRARIES forces every launch of this binary to load \(value) first — verify it is yours, otherwise remove the plist"
+                        : "Verify this override is intentional (rare outside of dev tooling): \(path)"
+                ))
+            }
         }
 
         // Check against known spyware labels
@@ -676,6 +709,245 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - Plugin Bundles (QuickLook, Spotlight, Color Pickers, Screen Savers, Mail, Internet, Audio Units)
+
+    /// Plugin bundles are loaded by host system processes on demand, which makes them an
+    /// attractive (and historically abused) persistence and code-execution surface.
+    /// QuickLook generators run inside `quicklookd` when files are previewed, Spotlight
+    /// importers run inside `mdworker`, Mail bundles run inside `Mail.app`, screensavers
+    /// run as the user during idle, and Audio Units load inside any host (auval, Logic, etc.).
+    /// We enumerate the common directories and flag any non-Apple bundle for review,
+    /// elevating severity when the bundle is unsigned or matches a known spyware signature.
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // `reportSignedThirdParty` controls whether we emit a `.low` finding for a properly-signed
+        // third-party bundle. Hosts where users routinely install dozens of legit plugins (Audio
+        // Units, QuickLook generators, Spotlight importers, Color Pickers) are kept quiet — we
+        // still flag unsigned/spyware bundles, just not every signed third-party one.
+        let pluginRoots: [(label: String, dirs: [String], ext: String, host: String, reportSignedThirdParty: Bool)] = [
+            ("QuickLook plugin",
+             ["\(home)/Library/QuickLook", "/Library/QuickLook"],
+             "qlgenerator",
+             "loaded into quicklookd whenever a file is previewed",
+             false),
+            ("Spotlight importer",
+             ["\(home)/Library/Spotlight", "/Library/Spotlight"],
+             "mdimporter",
+             "loaded into mdworker during indexing — runs as the user",
+             false),
+            ("Color Picker",
+             ["\(home)/Library/ColorPickers", "/Library/ColorPickers"],
+             "colorPicker",
+             "loaded into any app that shows the standard color picker",
+             false),
+            ("Screen Saver",
+             ["\(home)/Library/Screen Savers", "/Library/Screen Savers"],
+             "saver",
+             "runs as the user during system idle",
+             true),
+            ("Mail bundle",
+             ["\(home)/Library/Mail/Bundles", "/Library/Mail/Bundles"],
+             "mailbundle",
+             "loaded into Mail.app at launch",
+             true),
+            ("Internet Plug-In",
+             ["\(home)/Library/Internet Plug-Ins", "/Library/Internet Plug-Ins"],
+             "plugin",
+             "loaded into legacy web hosts (mostly deprecated, suspicious if present)",
+             true),
+            ("Internet Plug-In (webplugin)",
+             ["\(home)/Library/Internet Plug-Ins", "/Library/Internet Plug-Ins"],
+             "webplugin",
+             "loaded into legacy web hosts (mostly deprecated)",
+             true),
+            ("Audio Unit",
+             ["\(home)/Library/Audio/Plug-Ins/Components", "/Library/Audio/Plug-Ins/Components"],
+             "component",
+             "loaded into any Audio Unit host (Logic, GarageBand, auval, etc.)",
+             false),
+        ]
+
+        let fm = FileManager.default
+
+        for entry in pluginRoots {
+            for dir in entry.dirs {
+                guard fm.fileExists(atPath: dir),
+                      let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+                for item in contents {
+                    // Match the expected extension case-insensitively. Bundles can also have no
+                    // extension in the case of Mail bundles directories, so we handle both.
+                    let lc = item.lowercased()
+                    guard lc.hasSuffix(".\(entry.ext.lowercased())") || lc == entry.ext.lowercased() else { continue }
+
+                    let bundlePath = "\(dir)/\(item)"
+                    let bundleName = (item as NSString).deletingPathExtension
+
+                    // Spyware match by name takes priority
+                    if let sig = SpywareSignature.match(processName: bundleName) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware \(entry.label.lowercased()): \(sig.name)",
+                            detail: "Bundle: \(item) at \(dir) — \(entry.host)",
+                            path: bundlePath,
+                            remediation: "Remove: sudo rm -rf \"\(bundlePath)\""
+                        ))
+                        continue
+                    }
+
+                    // Locate the bundle's executable to verify the signature
+                    let infoPlistPath = "\(bundlePath)/Contents/Info.plist"
+                    var executable: String?
+                    if let data = fm.contents(atPath: infoPlistPath),
+                       let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                        executable = plist["CFBundleExecutable"] as? String
+                    }
+
+                    let execPath: String? = executable.map { "\(bundlePath)/Contents/MacOS/\($0)" }
+                    let signed: Bool = execPath.map { checkIsSigned(path: $0) } ?? checkIsSigned(path: bundlePath)
+
+                    if !signed {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Unsigned \(entry.label.lowercased()) installed",
+                            detail: "Bundle: \(item) at \(dir) — \(entry.host)",
+                            path: bundlePath,
+                            remediation: "Verify this bundle is intentional. If not: sudo rm -rf \"\(bundlePath)\""
+                        ))
+                    } else if entry.reportSignedThirdParty {
+                        // Signed but third-party in a host where extras are uncommon (Mail bundles,
+                        // Screen Savers, Internet Plug-Ins) — surface as low so the user can audit.
+                        findings.append(Finding(
+                            severity: .low, category: .persistence,
+                            title: "Third-party \(entry.label.lowercased()) installed",
+                            detail: "Bundle: \(item) at \(dir) — \(entry.host)",
+                            path: bundlePath,
+                            remediation: "Confirm this is software you installed intentionally"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Login Items v2 (BackgroundItems-v*.btm)
+
+    /// macOS Ventura+ moved Login Items / Launch-at-login from System Preferences-managed plists to
+    /// per-user BackgroundItems-v*.btm files. These are NSKeyedArchiver blobs (not plain plists), so
+    /// we surface their presence and let the user audit via `sfltool dumpbtm` rather than try to
+    /// parse the archive ourselves. A user with a long list of background items they don't recognize
+    /// is one of the cleanest indicators of stalkerware silently registering itself for autostart.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let btmPaths = [
+            "/private/var/db/com.apple.backgroundtaskmanagement",
+        ]
+
+        var found = false
+        for root in btmPaths {
+            guard let contents = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for item in contents where item.hasPrefix("BackgroundItems-v") && item.hasSuffix(".btm") {
+                found = true
+                let path = "\(root)/\(item)"
+                let attrs = try? fm.attributesOfItem(atPath: path)
+                let size = (attrs?[.size] as? Int) ?? 0
+                let modDate = attrs?[.modificationDate] as? Date
+                let ageNote = modDate.map { "last modified \(formatRelativeDate($0))" } ?? "modification date unknown"
+
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Login Items / Background Tasks registered",
+                    detail: "\(item): \(size) bytes, \(ageNote) — every app launched at login is recorded here",
+                    path: path,
+                    remediation: "Audit with: sfltool dumpbtm — disable anything you don't recognize in System Settings > General > Login Items"
+                ))
+            }
+        }
+
+        if !found {
+            // Fall back to dumping the live registration — works without root, just lists the user's own entries.
+            let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+            guard result.success else { return }
+            let lines = result.stdout.split(separator: "\n").map { String($0) }
+            let recordCount = lines.filter { $0.contains("Record name:") || $0.contains("type:") }.count
+            if recordCount > 0 {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "\(recordCount) Login Item / Background Task records registered",
+                    detail: "Audit via `sfltool dumpbtm` — checked via runtime query",
+                    path: nil,
+                    remediation: "Disable anything you don't recognize in System Settings > General > Login Items"
+                ))
+            }
+        }
+    }
+
+    // MARK: - AppleScript Login Items (~/Library/Application Scripts)
+
+    /// `~/Library/Application Scripts/<bundle-id>/` is a per-app directory the system grants
+    /// background access to. XCSSET and several APT loaders drop persistence scripts here
+    /// disguised as Apple bundle IDs. We flag any script whose containing directory is a
+    /// known fake Apple bundle ID, plus any oversized AppleScript binary (.scpt > 200KB) which
+    /// is unusual for legitimate snippets and common for obfuscated payloads.
+    private func scanAppleScriptLoginItems(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let root = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard let bundleDirs = try? fm.contentsOfDirectory(atPath: root) else { return }
+
+        for bundleDir in bundleDirs where !bundleDir.hasPrefix(".") {
+            let dirPath = "\(root)/\(bundleDir)"
+
+            // Fake Apple bundle ID directory — strong APT/XCSSET indicator
+            if SpywareSignature.isFakeAppleBundleId(bundleDir) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "AppleScript directory for fake Apple bundle ID",
+                    detail: "Directory: \(bundleDir) — not a legitimate Apple service",
+                    path: dirPath,
+                    remediation: "Inspect, then remove: rm -rf \"\(dirPath)\""
+                ))
+                continue
+            }
+
+            // Walk the directory for oversized or hidden scripts
+            guard let entries = try? fm.contentsOfDirectory(atPath: dirPath) else { continue }
+            for entry in entries {
+                let entryPath = "\(dirPath)/\(entry)"
+                guard let attrs = try? fm.attributesOfItem(atPath: entryPath),
+                      let size = attrs[.size] as? Int else { continue }
+
+                let lower = entry.lowercased()
+                let isScript = lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript") || lower.hasSuffix(".scptd")
+
+                if entry.hasPrefix(".") && isScript {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Hidden AppleScript in Application Scripts",
+                        detail: "Bundle: \(bundleDir), script: \(entry), size: \(size) bytes",
+                        path: entryPath,
+                        remediation: "Inspect with: osadecompile \"\(entryPath)\" — remove if not intentional"
+                    ))
+                } else if isScript && size > 200_000 {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unusually large AppleScript in Application Scripts",
+                        detail: "Bundle: \(bundleDir), script: \(entry), size: \(size) bytes — large scripts are uncommon for legitimate snippets",
+                        path: entryPath,
+                        remediation: "Inspect with: osadecompile \"\(entryPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    private func formatRelativeDate(_ date: Date) -> String {
+        let seconds = -date.timeIntervalSinceNow
+        if seconds < 3600 { return "\(Int(seconds / 60))m ago" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))h ago" }
+        return "\(Int(seconds / 86400))d ago"
     }
 
     private func checkIsSigned(path: String) -> Bool {

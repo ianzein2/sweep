@@ -17,6 +17,37 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    /// Chrome/Chromium extension IDs from the December 2024 Cyberhaven supply-chain campaign.
+    /// In each case a legitimate publisher's account was phished, and a malicious version was
+    /// pushed to the Web Store that exfiltrates cookies and Facebook/LinkedIn session tokens.
+    /// The compromised versions have been pulled, but a user who installed the bad build before
+    /// it was caught still has the malicious code cached locally until the extension auto-updates.
+    /// IDs sourced from Cyberhaven's public IoC list and follow-up community research.
+    private let cyberhavenCompromisedExtIds: [String: String] = [
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Cyberhaven Security Extension v24.10.4",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Internxt VPN (compromised build)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "VPNCity (compromised build)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Uvoice (compromised build)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "ParrotTalks (compromised build)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "TinaMind (compromised build)",
+        "egmennebgadmncfjafcemlecimkepcle": "Bookmark Favicon Changer (compromised build)",
+        "bibjgkidgpfbblifamdlkdlhgihmfohh": "Castorus (compromised build)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Wayin AI (compromised build)",
+        "mbindhfolmpijhodmgkloeeppmkhpmhc": "Search Copilot AI Assistant for Chrome (compromised build)",
+        "hodiladlefdpcbemnbbcpclbmknkiaem": "VidHelper - Video Downloader (compromised build)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Vidnoz Flex (compromised build)",
+        "eanofdhdfbcalhflpbdipkjjkoimeeod": "AI Assistant (compromised build)",
+        "ocoljaoojpfdfjepiagdlpchgcofgocf": "Tackker - online keylogger (compromised build)",
+        "dpggmcodlahmljkhlmpgpdcffdaoccni": "Reader Mode (compromised build)",
+        "kbdomdohjnehghneenffjjojkdcdpghp": "Visual Effects for Google Meet (compromised build)",
+        "njdkgjbjmdceaibhngelkkloceihelle": "Email Hunter (compromised build)",
+        "fopeajnbamiblpibdjbedpbeokphkjdp": "Sort by oldest (compromised build)",
+        "alocfmoeeacnfbkmgekcdkkpdmclgaaf": "Earny - Up to 20% Cash Back (compromised build)",
+        "ekkcfmcgkjfngfgomggcbggidkahmpfo": "Proxy SwitchyOmega (V3) (compromised build)",
+        "hihblcmlaaademjlakdpicchbjnnnkbo": "AI Shop Buddy (compromised build)",
+        "iaoiokopdpbenenofpfgjeocadgdpaco": "Avast Online Security (compromised build)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -142,6 +173,21 @@ public final class BrowserScanner: Scanner {
                       let extensions = try? fm.contentsOfDirectory(atPath: extPath) else { continue }
 
                 for extId in extensions {
+                    // Cyberhaven-style supply-chain compromise: a normally-trusted publisher
+                    // pushed a malicious build. Check this BEFORE the trusted-IDs skip so a
+                    // legitimate looking entry can still flag, and emit a finding immediately.
+                    if let label = cyberhavenCompromisedExtIds[extId] {
+                        let extDirPath = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension is in the Cyberhaven supply-chain IoC list",
+                            detail: "Extension: \(label), ID: \(extId), profile: \(profile)",
+                            path: extDirPath,
+                            remediation: "Remove the extension in \(browserName) > Extensions, log out of all websites, rotate session-sensitive credentials"
+                        ))
+                        continue
+                    }
+
                     if trustedExtensionIds.contains(extId) { continue }
 
                     let dedupeKey = "\(browserName):\(extId)"

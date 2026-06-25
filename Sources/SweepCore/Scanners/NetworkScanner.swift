@@ -67,6 +67,12 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Reverse-tunnel / C2-staging tools running on the box. These are dual-use (legit
+        //    devs run ngrok/cloudflared), but seeing them on a non-developer Mac, or in
+        //    combination with other indicators, is a strong RAT signal.
+        progress?.update("checking reverse-tunnel processes")
+        scanReverseTunnels(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -362,6 +368,123 @@ public final class NetworkScanner: Scanner {
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
             }
+        }
+    }
+
+    // MARK: - Reverse Tunnels / C2 Staging
+
+    /// Reverse-tunnel and tunnel-on-demand tools are increasingly bundled with macOS RATs to
+    /// punch out through NAT and expose local services or shells to an attacker-controlled
+    /// endpoint. Each entry here is dual-use — developers legitimately run these — but on a
+    /// non-developer machine, or running from a non-standard install path, they are a strong
+    /// indicator of remote-access malware (Geacon, Sliver, modified open-source RATs).
+    private struct TunnelTool {
+        let binary: String
+        let label: String
+        let suspiciousArgPatterns: [String]
+    }
+
+    private let knownTunnelTools: [TunnelTool] = [
+        TunnelTool(binary: "ngrok", label: "ngrok",
+                   suspiciousArgPatterns: ["tcp ", "http ", "--authtoken", "start "]),
+        TunnelTool(binary: "frpc", label: "frp client (frpc)",
+                   suspiciousArgPatterns: ["-c ", "--server", "tcp"]),
+        TunnelTool(binary: "frps", label: "frp server (frps)",
+                   suspiciousArgPatterns: ["-c "]),
+        TunnelTool(binary: "chisel", label: "chisel",
+                   suspiciousArgPatterns: ["client ", "server ", "R:"]),
+        TunnelTool(binary: "gost", label: "gost",
+                   suspiciousArgPatterns: ["-L ", "-R ", "tcp:", "ssh:"]),
+        TunnelTool(binary: "cloudflared", label: "cloudflared tunnel",
+                   suspiciousArgPatterns: ["tunnel run", "--url ", "access tcp"]),
+        TunnelTool(binary: "localtunnel", label: "localtunnel",
+                   suspiciousArgPatterns: ["--port"]),
+        TunnelTool(binary: "lt", label: "localtunnel CLI (lt)",
+                   suspiciousArgPatterns: ["--port", "--subdomain"]),
+        TunnelTool(binary: "rathole", label: "rathole",
+                   suspiciousArgPatterns: ["--client", "--server"]),
+        TunnelTool(binary: "sshuttle", label: "sshuttle",
+                   suspiciousArgPatterns: ["-r ", "-vv"]),
+        // Sliver implants ship with a default exec name "sliver-server"/"sliver"
+        TunnelTool(binary: "sliver", label: "Sliver implant",
+                   suspiciousArgPatterns: []),
+        TunnelTool(binary: "sliver-server", label: "Sliver server",
+                   suspiciousArgPatterns: []),
+        // Mythic / Apfell / Apollo agents
+        TunnelTool(binary: "apfell", label: "Apfell/Mythic agent",
+                   suspiciousArgPatterns: []),
+        TunnelTool(binary: "poseidon_x64", label: "Poseidon (Mythic) agent",
+                   suspiciousArgPatterns: []),
+    ]
+
+    /// Where these binaries legitimately live when installed via Homebrew or as a signed
+    /// .pkg. Anything outside of these is more suspicious.
+    private let legitTunnelInstallPaths: [String] = [
+        "/opt/homebrew/", "/usr/local/", "/Applications/", "/Library/Application Support/",
+    ]
+
+    private func scanReverseTunnels(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        guard result.success else { return }
+
+        let myPid = "\(ProcessInfo.processInfo.processIdentifier)"
+
+        for line in result.stdout.split(separator: "\n") {
+            let lineStr = String(line).trimmingCharacters(in: .whitespaces)
+            // Header: "PID COMM ARGS"
+            if lineStr.hasPrefix("PID") { continue }
+
+            // Split into pid, comm, then everything else as args
+            let parts = lineStr.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count >= 2 else { continue }
+            let pid = String(parts[0])
+            if pid == myPid { continue }
+            // comm is the process name as it would appear in /proc-style listings (basename).
+            let comm = String(parts[1])
+            let args = parts.count >= 3 ? String(parts[2]) : ""
+
+            // Match the basename — `comm` is already truncated to the executable's basename.
+            // Match case-insensitively to catch Sliver/Apfell-style PascalCase implants.
+            let commLC = comm.lowercased()
+            guard let tool = knownTunnelTools.first(where: { commLC == $0.binary.lowercased() ||
+                                                              commLC.hasSuffix("/\($0.binary.lowercased())") }) else { continue }
+
+            // Resolve the binary's real path to grade severity
+            var execPath: String?
+            if let pidInt = Int32(pid) {
+                execPath = ShellRunner.processPath(for: pidInt)
+            }
+
+            // Argument analysis — common reverse-tunnel patterns make the finding stronger
+            let argLower = args.lowercased()
+            let argLooksLikeReverseTunnel = tool.suspiciousArgPatterns.contains(where: { argLower.contains($0.lowercased()) })
+
+            let severity: Severity
+            if let path = execPath {
+                let inLegitPath = legitTunnelInstallPaths.contains(where: { path.hasPrefix($0) })
+                if !inLegitPath {
+                    // Positively known to be running from a non-standard path — strong indicator.
+                    severity = .high
+                } else if argLooksLikeReverseTunnel {
+                    severity = .medium
+                } else {
+                    severity = .low
+                }
+            } else {
+                // Path couldn't be resolved (process may have already exited or we lack permission).
+                // Don't escalate to HIGH on an unknown location — the tool name alone is medium-grade.
+                severity = argLooksLikeReverseTunnel ? .medium : .low
+            }
+
+            findings.append(Finding(
+                severity: severity, category: .networkActivity,
+                title: "Reverse-tunnel tool running: \(tool.label)",
+                detail: "PID \(pid), binary at \(execPath ?? "unknown path"), args: \(String(args.prefix(160)))",
+                path: execPath,
+                remediation: severity == .high
+                    ? "Investigate: ps -p \(pid) -o args= — \(tool.label) running from a non-standard path is a strong remote-access indicator"
+                    : "Confirm this is something you (or your IT department) launched intentionally"
+            ))
         }
     }
 
