@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking QuickLook generators")
+        scanQuickLookGenerators(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript Application Scripts")
+        scanApplicationScripts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,140 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Folder Actions
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach AppleScript handlers to a folder — when a file lands in the folder,
+        // the script runs. They're a well-known persistence channel because they survive reboots,
+        // don't show up in Login Items, and are easy to overlook.
+        //
+        // Configuration lives in com.apple.FolderActionsDispatcher's preferences and in the
+        // ~/Library/Scripts/Folder Action Scripts/ directory.
+        let home = ShellRunner.realUserHome
+        let scriptsDir = "\(home)/Library/Scripts/Folder Action Scripts"
+        let fm = FileManager.default
+
+        if let entries = try? fm.contentsOfDirectory(atPath: scriptsDir) {
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(scriptsDir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed",
+                    detail: "Script: \(entry) — Folder Actions run AppleScript automatically when files are added/removed from a watched folder",
+                    path: path,
+                    remediation: "Review the script and detach it: open Automator > File > Open > Folder Actions Setup, or remove the file if not expected"
+                ))
+            }
+        }
+
+        // The dispatcher daemon must be enabled for actions to fire.
+        let enabled = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.FolderActionsDispatcher", "folderActionsEnabled"
+        ], timeout: 5)
+        if enabled.success {
+            let v = enabled.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Folder Actions are globally enabled",
+                    detail: "Folder Actions Dispatcher is on — any attached scripts will run automatically on folder events",
+                    path: nil,
+                    remediation: "If you didn't intentionally configure Folder Actions: defaults delete com.apple.FolderActionsDispatcher folderActionsEnabled"
+                ))
+            }
+        }
+    }
+
+    // MARK: - QuickLook generators
+
+    private func scanQuickLookGenerators(findings: inout [Finding], errors: inout [String]) {
+        // QuickLook generators (.qlgenerator bundles) are code that runs whenever Finder previews
+        // a file of a registered type — including files received via Mail, AirDrop, or downloads.
+        // A malicious generator gets code execution on file preview, with no user click required.
+        // Apple's own generators live under /System/Library/QuickLook/, so we only scan the
+        // user/local paths.
+        let dirs = [
+            "/Library/QuickLook",
+            "\(ShellRunner.realUserHome)/Library/QuickLook",
+        ]
+        let fm = FileManager.default
+
+        for dir in dirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.lowercased().hasSuffix(".qlgenerator") {
+                let path = "\(dir)/\(entry)"
+                let isSigned = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .medium,
+                    category: .persistence,
+                    title: "QuickLook generator installed",
+                    detail: "Generator: \(entry) — QuickLook generators execute code on file preview" +
+                        (isSigned ? " (signed)" : " (unsigned — higher risk)"),
+                    path: path,
+                    remediation: "If not expected, remove: sudo rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - AppleScript stay-open apps / Application Scripts
+
+    private func scanApplicationScripts(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Application Scripts/<bundle-id>/ holds AppleScript handlers that the sandboxed
+        // host app is allowed to run. Several recent macOS malware families (XCSSET, ChromeLoader
+        // adware) abuse this directory by registering scripts under com.apple.* bundle IDs so they
+        // get invoked from privileged contexts.
+        let home = ShellRunner.realUserHome
+        let appScriptsRoot = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: appScriptsRoot),
+              let bundleDirs = try? fm.contentsOfDirectory(atPath: appScriptsRoot) else { return }
+
+        // Bundle IDs that legitimately use Application Scripts — quiet on these to avoid noise.
+        let benignPrefixes: [String] = [
+            "com.apple.mail",
+            "com.apple.iWork",
+            "com.apple.Numbers",
+            "com.apple.Pages",
+            "com.apple.Keynote",
+        ]
+
+        for bundleDir in bundleDirs where !bundleDir.hasPrefix(".") {
+            let dirPath = "\(appScriptsRoot)/\(bundleDir)"
+            guard let scripts = try? fm.contentsOfDirectory(atPath: dirPath) else { continue }
+            let scriptFiles = scripts.filter { name in
+                let lower = name.lowercased()
+                return lower.hasSuffix(".scpt") || lower.hasSuffix(".applescript") || lower.hasSuffix(".scptd")
+            }
+            if scriptFiles.isEmpty { continue }
+
+            let isBenign = benignPrefixes.contains { bundleDir.hasPrefix($0) }
+            let isFakeApple = SpywareSignature.isFakeAppleBundleId(bundleDir)
+
+            if isFakeApple {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "AppleScript handlers under fake Apple bundle ID",
+                    detail: "Directory: \(bundleDir) with \(scriptFiles.count) script(s) — Apple does not ship scripts under this bundle pattern, this is a known malware persistence channel (XCSSET-class)",
+                    path: dirPath,
+                    remediation: "Inspect contents, then remove: rm -rf \"\(dirPath)\""
+                ))
+                continue
+            }
+
+            if !isBenign {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "AppleScript handlers registered for \(bundleDir)",
+                    detail: "\(scriptFiles.count) script(s) under Application Scripts — the named app can run these from a sandbox-trusted location",
+                    path: dirPath,
+                    remediation: "Verify the host app is installed and that the scripts are yours: ls -la \"\(dirPath)\""
+                ))
+            }
         }
     }
 

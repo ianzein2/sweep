@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Time Machine status")
+        checkTimeMachine(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH server config")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth-when-locked")
+        checkBluetoothWhenLocked(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +455,172 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Time Machine
+
+    private func checkTimeMachine(findings: inout [Finding], errors: inout [String]) {
+        // Disabling Time Machine is a classic ransomware pre-step: kills local snapshots so
+        // recovery isn't possible. We also surface a long backup gap as a less urgent signal.
+        let dest = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 5)
+        let hasDestination = dest.success && !dest.stdout.contains("No destinations") && !dest.stdout.isEmpty
+
+        if !hasDestination {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine has no backup destination",
+                detail: "No backup target is configured — if the Mac is hit by ransomware or hardware failure, there is no rollback path",
+                path: nil,
+                remediation: "Configure: System Settings > General > Time Machine > Add Backup Disk"
+            ))
+            return
+        }
+
+        // Local APFS snapshots are taken hourly by default; tmutil listlocalsnapshots returns them per volume.
+        let snaps = ShellRunner.run("/usr/bin/tmutil", arguments: ["listlocalsnapshots", "/"], timeout: 5)
+        if snaps.success {
+            let snapLines = snaps.stdout
+                .split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { $0.contains("com.apple.TimeMachine") }
+            if snapLines.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "No Time Machine local snapshots present",
+                    detail: "A configured Time Machine destination exists but no APFS snapshots were found — this is a common ransomware pre-encryption step",
+                    path: nil,
+                    remediation: "Run: tmutil status — if Time Machine was disabled by something else, re-enable it in System Settings > General > Time Machine"
+                ))
+            }
+        }
+
+        // The com.apple.TimeMachine preference is what `tmutil disable` flips. Detect it directly.
+        let autoBackup = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.TimeMachine", "AutoBackup"
+        ], timeout: 5)
+        if autoBackup.success {
+            let v = autoBackup.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v == "0" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Time Machine automatic backup is OFF",
+                    detail: "AutoBackup=0 — ransomware commonly runs `tmutil disable` before encrypting files",
+                    path: "/Library/Preferences/com.apple.TimeMachine.plist",
+                    remediation: "Re-enable: sudo tmutil enable — then confirm in System Settings > General > Time Machine"
+                ))
+            }
+        }
+    }
+
+    // MARK: - SSH Server Config
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // sshd config flaws turn a remote shell into a remote root shell. We only care if
+        // sshd is actually reachable — sshd_config existing on disk while the service is off
+        // does no harm.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup", arguments: ["-getremotelogin"], timeout: 5)
+        let isOn = sshState.success && sshState.stdout.lowercased().contains(": on")
+
+        let configPath = "/etc/ssh/sshd_config"
+        guard let content = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
+
+        // Track the EFFECTIVE value of each directive (last uncommented occurrence wins, mirroring sshd_config semantics).
+        var permitRootLogin: String?
+        var passwordAuthentication: String?
+        var permitEmptyPasswords: String?
+        var challengeResponseAuth: String?
+
+        for line in content.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].lowercased()
+            let value = String(parts[1]).trimmingCharacters(in: .whitespaces).lowercased()
+            switch key {
+            case "permitrootlogin":          permitRootLogin = value
+            case "passwordauthentication":   passwordAuthentication = value
+            case "permitemptypasswords":     permitEmptyPasswords = value
+            case "challengeresponseauthentication", "kbdinteractiveauthentication":
+                challengeResponseAuth = value
+            default: break
+            }
+        }
+
+        // Only flag when SSH is actually exposed — otherwise these settings can't be abused.
+        guard isOn else { return }
+
+        if let v = permitRootLogin, v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login (PermitRootLogin yes)",
+                detail: "Remote attackers can attempt to log in directly as root over SSH",
+                path: configPath,
+                remediation: "Edit \(configPath): set 'PermitRootLogin no' or 'prohibit-password', then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        if let v = passwordAuthentication, v == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "Passwords are vulnerable to brute-force and credential-stuffing — keys are stronger",
+                path: configPath,
+                remediation: "Switch to key auth, then set 'PasswordAuthentication no' in \(configPath)"
+            ))
+        }
+
+        if let v = permitEmptyPasswords, v == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows empty passwords (PermitEmptyPasswords yes)",
+                detail: "Any account with a blank password can be logged into remotely",
+                path: configPath,
+                remediation: "Edit \(configPath): set 'PermitEmptyPasswords no' immediately"
+            ))
+        }
+
+        if let v = challengeResponseAuth, v == "yes",
+           passwordAuthentication == "no" {
+            // Only flag if password auth is off — otherwise the password warning above already covers it.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH challenge/response auth is enabled",
+                detail: "Some macOS PAM stacks treat this as a password fallback even when PasswordAuthentication is off",
+                path: configPath,
+                remediation: "Edit \(configPath): set 'ChallengeResponseAuthentication no' (or KbdInteractiveAuthentication no on newer OpenSSH)"
+            ))
+        }
+    }
+
+    // MARK: - Bluetooth-when-locked
+
+    private func checkBluetoothWhenLocked(findings: inout [Finding], errors: inout [String]) {
+        // Background Bluetooth scanning while the device is locked is convenient (AirPods, Apple Watch)
+        // but creates a wireless attack surface (sweyntooth-class proximity bugs, BLE keystroke injection).
+        // Only flag if Bluetooth-when-locked is on AND no Apple Watch is paired (so the convenience tradeoff is weaker).
+        let btLock = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "ControllerPowerState"
+        ], timeout: 5)
+        let btOn = btLock.success &&
+            btLock.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+        guard btOn else { return }
+
+        // Paired devices live under PairedDevices in the Bluetooth plist.
+        let paired = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "PairedDevices"
+        ], timeout: 5)
+        let hasAppleWatch = paired.success && paired.stdout.lowercased().contains("watch")
+
+        if !hasAppleWatch {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bluetooth is on with no Apple Watch paired",
+                detail: "Bluetooth remains enabled while the Mac is locked — proximity-based wireless attacks (BLE keystroke injection, Bluetooth stack bugs) become reachable",
+                path: nil,
+                remediation: "If you don't use AirPods/Apple Watch with this Mac, disable Bluetooth from Control Center when not in use"
+            ))
         }
     }
 

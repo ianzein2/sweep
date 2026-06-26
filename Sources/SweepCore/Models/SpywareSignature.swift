@@ -434,6 +434,209 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" / Lazarus cluster (2024-2025)
+        // Delivered to developers via fake recruiter pipelines, npm typosquats, and Zoom updates.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "p.js", "ssh.js", "main99_iros"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+                "~/.npm/_cacache/.beavertail",
+            ],
+            launchAgentLabels: ["com.apple.beavertail"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "tinyproxy", "tcp_pcap"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisible",
+                "~/Library/Application Support/.invisible-ferret",
+                "~/Library/Application Support/.n2",
+                "~/.cache/.npl",
+            ],
+            launchAgentLabels: ["com.apple.invisibleferret"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FrostyFerret"],
+            bundleIdentifiers: ["com.apple.flexibleferret", "com.chrome.update"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/com.apple.questd",
+                "~/Library/LaunchAgents/com.apple.questd.plist",
+            ],
+            launchAgentLabels: ["com.apple.questd", "com.apple.flexibleferret"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIeHelper", "Trojan.MacOS.NimDoor"],
+            bundleIdentifiers: ["com.apple.GoogIe", "com.google.helper.nim"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/LaunchAgents/com.apple.GoogIe.plist",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.apple.GoogIe", "com.google.helper.nim"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["todoswift", "TodoSwift", "appbeatd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "ObjCShellz / RustBucket loader",
+            processNames: ["safarihelper", "SafariFlashHelper", "ProcessRequest"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Caches/.SafariFlashHelper",
+                "/private/var/tmp/.processrequest",
+            ],
+            launchAgentLabels: ["com.apple.processrequest"]
+        ),
+        // 2024-2025 macOS infostealers expansion
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "MacUpdate", "DMGUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "ProcessHub"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.processhub",
+                "~/Library/LaunchAgents/com.apple.processhub.plist",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "TestAtt"],
+            bundleIdentifiers: ["com.rustyattr.agent"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: ["com.rustyattr.service"]
+        ),
+        SpywareSignature(
+            name: "ZuRu",
+            processNames: ["ZuRu", "zuru", "OpenSSHd", "iTermd", "iterm-helper"],
+            bundleIdentifiers: ["com.zuru.agent"],
+            filePaths: [
+                "/private/tmp/.zuru",
+                "~/Library/.OpenSSHd",
+                "~/Library/Application Support/.zuru",
+            ],
+            launchAgentLabels: ["com.zuru.agent", "com.OpenSSHd.helper"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZRat", "hzrat", "OpenVPN_Connect", "VPN_Connect"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+                "~/Library/LaunchAgents/com.openvpn.connect.plist",
+            ],
+            launchAgentLabels: ["com.hzrat.agent"]
+        ),
+        SpywareSignature(
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "LockBit_Mac"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.notlockbit",
+                "~/Library/Application Support/.notlockbit",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MacRansom",
+            processNames: ["MacRansom", "macransom", "ranssom"],
+            bundleIdentifiers: ["com.macransom.agent"],
+            filePaths: [
+                "/private/tmp/.macransom",
+                "~/Library/Application Support/.MacRansom",
+            ],
+            launchAgentLabels: ["com.macransom.service"]
+        ),
+        SpywareSignature(
+            name: "ThiefQuest / EvilQuest",
+            processNames: ["thiefquest", "evilquest", "patch", "questd"],
+            bundleIdentifiers: ["com.apple.questd"],
+            filePaths: [
+                "~/Library/AppQuest/com.apple.questd",
+                "/Library/AppQuest/com.apple.questd",
+                "~/Library/.com.apple.questd",
+            ],
+            launchAgentLabels: ["com.apple.questd"]
+        ),
+        SpywareSignature(
+            name: "SilverSparrow",
+            processNames: ["SilverSparrow", "silversparrow", "agent.sh", "verx"],
+            bundleIdentifiers: ["init.agent.plist", "init.verx.plist"],
+            filePaths: [
+                "~/Library/._insu",
+                "/tmp/agent.sh",
+                "/tmp/version.json",
+                "/tmp/version.plist",
+            ],
+            launchAgentLabels: ["init.agent", "init.verx"]
+        ),
+        SpywareSignature(
+            name: "UpdateAgent / WizardUpdate",
+            processNames: ["UpdateAgent", "updateagent", "WizardUpdate", "WHUpdater", "wzdupd"],
+            bundleIdentifiers: ["com.adobe.acc.installer", "com.wizard.updater"],
+            filePaths: [
+                "~/Library/Application Support/.wizardupdate",
+                "/private/tmp/.updateagent",
+            ],
+            launchAgentLabels: ["com.adobe.acc.installer.helper", "com.wizard.updater"]
+        ),
+        SpywareSignature(
+            name: "Shlayer",
+            processNames: ["Shlayer", "shlayer", "Player", "MyShopcoupon", "MyMacUpdater"],
+            bundleIdentifiers: ["com.player.installer", "com.mac.player.update"],
+            filePaths: [
+                "/private/tmp/Player.app",
+                "~/Library/Application Support/.shlayer",
+            ],
+            launchAgentLabels: ["com.player.installer"]
+        ),
+        SpywareSignature(
+            name: "AdLoad",
+            processNames: ["AdLoad", "adload", "main.command", "playerservice"],
+            bundleIdentifiers: ["com.playerservice", "com.adload.agent"],
+            filePaths: [
+                "~/Library/Application Support/.PlayerService",
+                "~/Library/Application Support/.adload",
+            ],
+            launchAgentLabels: ["com.playerservice", "com.adload.service"]
+        ),
+        SpywareSignature(
+            name: "Pirrit",
+            processNames: ["Pirrit", "pirrit", "ContentBlockerHelper", "InstallMac"],
+            bundleIdentifiers: ["com.pirrit.adware", "com.contentblocker.helper"],
+            filePaths: [
+                "~/Library/Application Support/.pirrit",
+                "/Library/LaunchAgents/com.pirrit.plist",
+            ],
+            launchAgentLabels: ["com.pirrit.adware", "com.contentblocker.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
