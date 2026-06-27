@@ -549,6 +549,65 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+
+                // AMOS / Cuckoo / Realst / Atomic-family stealers all spawn osascript to display
+                // a fake "macOS needs your password" prompt. The distinguishing pattern is the combo
+                // of `display dialog` + `with hidden answer` + (optionally) `with administrator privileges`.
+                // Real Apple components use Authorization Services / TCC prompts, not osascript dialogs.
+                if lineStr.contains("osascript") &&
+                   lineStr.contains("display dialog") &&
+                   (lineStr.contains("hidden answer") || lineStr.contains("administrator privileges")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Fake password prompt being shown via osascript",
+                        detail: "Active: \(String(lineStr.prefix(180))) — AMOS, Cuckoo, Realst and similar stealers use this exact pattern to harvest the login password",
+                        path: nil,
+                        remediation: "Do NOT enter your password into this dialog. Kill the process, then run a full Sweep scan to identify the loader."
+                    ))
+                }
+
+                // `chainbreaker` and `chainbreaker-py` decrypt keychain files offline once the
+                // attacker has the login password. Active invocation here is a smoking gun.
+                if lineStr.contains("chainbreaker") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Keychain extraction tool (chainbreaker) running",
+                        detail: "Active: \(String(lineStr.prefix(160)))",
+                        path: nil,
+                        remediation: "Kill the process and rotate every keychain-stored credential"
+                    ))
+                }
+
+                // `xattr -d com.apple.quarantine` strips the Gatekeeper quarantine bit from a freshly
+                // downloaded binary — a step legitimate apps don't need and stealers rely on to bypass
+                // notarization checks on dropped payloads.
+                if lineStr.contains("xattr") &&
+                   (lineStr.contains("-d com.apple.quarantine") ||
+                    lineStr.contains("-cr") || lineStr.contains("-c -r")) &&
+                   (lineStr.contains("/tmp") || lineStr.contains("/var/folders") ||
+                    lineStr.contains("Downloads")) {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousProcess,
+                        title: "Process is stripping Gatekeeper quarantine attribute",
+                        detail: "Active: \(String(lineStr.prefix(160))) — bypasses macOS download-origin checks on dropped files",
+                        path: nil,
+                        remediation: "Investigate the calling process: ps -p <pid>"
+                    ))
+                }
+
+                // `curl | sh` / `curl | bash` in live processes is the classic drop-and-run loader
+                // used by Shlayer, Bundlore, and modern stealer installers.
+                if (lineStr.contains("curl") || lineStr.contains("wget")) &&
+                   (lineStr.contains("| sh") || lineStr.contains("| bash") ||
+                    lineStr.contains("| zsh") || lineStr.contains("| /bin/sh")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Live pipe-to-shell loader detected",
+                        detail: "Active: \(String(lineStr.prefix(180))) — downloads and immediately executes a remote script",
+                        path: nil,
+                        remediation: "Identify and kill the parent process — this is the canonical macOS malware install pattern"
+                    ))
+                }
             }
         }
     }

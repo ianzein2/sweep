@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server configuration")
+        checkSSHServerConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS version support status")
+        checkMacOSVersionSupport(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Login Items")
+        checkBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth state")
+        checkBluetoothExposure(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join exposure")
+        checkWiFiAutoJoin(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +461,298 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - SSH Server Configuration
+
+    private func checkSSHServerConfig(findings: inout [Finding], errors: inout [String]) {
+        // Only meaningful if SSH (Remote Login) is enabled. If it's off, the config doesn't matter.
+        let sshState = ShellRunner.run("/usr/sbin/systemsetup",
+                                       arguments: ["-getremotelogin"], timeout: 5)
+        guard sshState.success, sshState.stdout.lowercased().contains(": on") else { return }
+
+        // sshd config locations differ by macOS version. Newer macOS uses drop-ins under
+        // /etc/ssh/sshd_config.d, but the main file is still the source of truth.
+        var configContent = ""
+        let configPaths = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+        for path in configPaths {
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                configContent += "\n" + content
+            }
+        }
+        // Drop-in directory — additional sshd_config fragments
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/ssh/sshd_config.d") {
+            for entry in dropIns where entry.hasSuffix(".conf") {
+                if let content = try? String(contentsOfFile: "/etc/ssh/sshd_config.d/\(entry)", encoding: .utf8) {
+                    configContent += "\n" + content
+                }
+            }
+        }
+        guard !configContent.isEmpty else { return }
+
+        // Parse the merged config. Lines starting with # are comments.
+        // Apple's default sshd_config has most directives commented out (defaults apply).
+        let active = configContent
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("#") && !$0.isEmpty }
+
+        func directive(_ key: String) -> String? {
+            // Match case-insensitively per OpenSSH semantics.
+            for line in active {
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                if parts[0].lowercased() == key.lowercased() {
+                    return String(parts[1]).trimmingCharacters(in: .whitespaces)
+                }
+            }
+            return nil
+        }
+
+        // PermitRootLogin — Apple default since macOS 10.15 is "prohibit-password", but explicit "yes" is risky.
+        if let value = directive("PermitRootLogin"), value.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows direct root login (PermitRootLogin yes)",
+                detail: "An attacker who guesses the root password gets full system access without escalation",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set PermitRootLogin to \"prohibit-password\" or \"no\" in sshd_config, then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        // PasswordAuthentication — public-key-only is the hardened baseline.
+        if let value = directive("PasswordAuthentication"), value.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH password authentication is enabled",
+                detail: "SSH is exposed to brute-force / credential stuffing — public-key authentication is the hardened baseline",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Disable: set PasswordAuthentication no in sshd_config after confirming you have SSH keys configured"
+            ))
+        }
+
+        // PermitEmptyPasswords — never acceptable.
+        if let value = directive("PermitEmptyPasswords"), value.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH permits empty passwords",
+                detail: "Any account with an empty password can log in via SSH — almost always a misconfiguration",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Remove or set PermitEmptyPasswords no in sshd_config immediately"
+            ))
+        }
+
+        // X11 / agent forwarding can be abused to pivot off this host once a session exists.
+        if let value = directive("X11Forwarding"), value.lowercased() == "yes" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding is enabled",
+                detail: "Allows graphical apps to tunnel through SSH; not needed on most macOS hosts and widens the attack surface",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Disable if unused: set X11Forwarding no in sshd_config"
+            ))
+        }
+
+        // Custom port is fine, but we surface non-22 listeners so the user sees what's exposed.
+        if let value = directive("Port"), let port = Int(value), port != 22 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH is listening on a non-standard port (\(port))",
+                detail: "This is sometimes deliberate (security-through-obscurity) and sometimes attacker-installed",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Verify this port change was intentional"
+            ))
+        }
+    }
+
+    // MARK: - macOS Version Support
+
+    private func checkMacOSVersionSupport(findings: inout [Finding], errors: inout [String]) {
+        // Apple actively patches the current macOS release plus the two immediately prior.
+        // Older majors stop receiving security updates and are vulnerable to disclosed CVEs forever.
+        // Map: major version → human name → status.
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Names for context in the finding text.
+        let majorName: [Int: String] = [
+            11: "Big Sur",
+            12: "Monterey",
+            13: "Ventura",
+            14: "Sonoma",
+            15: "Sequoia",
+            16: "Tahoe",
+            17: "macOS 17",
+        ]
+        let name = majorName[major] ?? "macOS \(major)"
+
+        // Anything older than 14 (Sonoma) is outside Apple's update window as of late 2025.
+        // We give a 1-version buffer to avoid noisy alerts the same week a new macOS ships.
+        if major < 14 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major) (\(name)) is no longer receiving security updates",
+                detail: "Apple supports only the current macOS plus the two prior majors. Running \(name) leaves disclosed kernel and Safari CVEs unpatched.",
+                path: nil,
+                remediation: "Upgrade to the latest macOS your Mac supports: System Settings > General > Software Update"
+            ))
+        } else if major == 14 {
+            // Sonoma is on the way out — surface as medium so users plan an upgrade.
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "macOS \(major) (\(name)) is in its final year of security updates",
+                detail: "Apple maintains \(name) for a limited window. Plan to upgrade before patches stop.",
+                path: nil,
+                remediation: "Schedule an upgrade to a supported macOS via System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Background Items (SMAppService persistence — Ventura+)
+
+    private func checkBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura introduced SMAppService for app-managed background items. The system tracks
+        // them in BackgroundItems.btm, an opaque sqlite/proplist store. We can't parse it portably
+        // from a sandboxed CLI, but `sfltool dumpbtm` (root only) prints a readable listing.
+        let dump = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard dump.success, !dump.stdout.isEmpty else { return }
+
+        // The dump groups items per user. We look for entries that are:
+        //   - Disabled by the user (sign someone tried to install something they declined)
+        //   - From unsigned developers (no Team ID)
+        //   - From temporary directories
+        var currentName: String?
+        var currentPath: String?
+        var currentTeamId: String?
+        var currentDisposition: String?
+
+        func flushItem() {
+            defer {
+                currentName = nil
+                currentPath = nil
+                currentTeamId = nil
+                currentDisposition = nil
+            }
+            guard let name = currentName, let path = currentPath else { return }
+            // Apple-bundled background items are not noteworthy.
+            if path.hasPrefix("/System/") || path.hasPrefix("/usr/libexec/") { return }
+            if name.hasPrefix("com.apple.") { return }
+
+            let isTempPath = path.hasPrefix("/tmp/") || path.hasPrefix("/private/tmp/") ||
+                             path.hasPrefix("/var/tmp/")
+            let isHiddenPath = path.split(separator: "/").contains { $0.hasPrefix(".") }
+            let hasTeamId = !(currentTeamId?.isEmpty ?? true) && currentTeamId != "(null)"
+
+            if isTempPath || isHiddenPath {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Login Item from temp / hidden path",
+                    detail: "\(name) → \(path)\(currentDisposition.map { " — \($0)" } ?? "")",
+                    path: path,
+                    remediation: "Review in System Settings > General > Login Items & Extensions, and remove if unrecognized"
+                ))
+            } else if !hasTeamId {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Background Login Item with no developer Team ID",
+                    detail: "\(name) → \(path) — no signing team identifier",
+                    path: path,
+                    remediation: "Review in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+
+        for rawLine in dump.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flushItem()
+                continue
+            }
+            // sfltool output uses keys like "Name:", "URL:", "Team:", "Identifier:", "Disposition:".
+            if line.hasPrefix("Name:") {
+                flushItem()
+                currentName = line.replacingOccurrences(of: "Name:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Identifier:") && currentName == nil {
+                currentName = line.replacingOccurrences(of: "Identifier:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("URL:") || line.hasPrefix("Executable Path:") {
+                let v = line.contains("Executable Path:")
+                    ? line.replacingOccurrences(of: "Executable Path:", with: "")
+                    : line.replacingOccurrences(of: "URL:", with: "")
+                currentPath = v.trimmingCharacters(in: .whitespaces)
+                    .replacingOccurrences(of: "file://", with: "")
+            } else if line.hasPrefix("Team Identifier:") || line.hasPrefix("Team:") {
+                currentTeamId = line.replacingOccurrences(of: "Team Identifier:", with: "")
+                    .replacingOccurrences(of: "Team:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Disposition:") {
+                currentDisposition = line.replacingOccurrences(of: "Disposition:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            }
+        }
+        flushItem()
+    }
+
+    // MARK: - Bluetooth Exposure
+
+    private func checkBluetoothExposure(findings: inout [Finding], errors: inout [String]) {
+        // Bluetooth left on and discoverable is an entry vector — recent CVEs (e.g. BLURtooth,
+        // SweynTooth, and Apple-specific BLE handoff bugs) all required Bluetooth to be active.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "ControllerPowerState"
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value == "1" else { return }
+
+        // Only flag discoverability separately; Bluetooth-on-by-default is normal for most users.
+        let discov = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "DiscoverableState"
+        ], timeout: 5)
+        if discov.success, discov.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bluetooth is in discoverable mode",
+                detail: "Other devices nearby can see this Mac. macOS normally only enters discoverable mode while the Bluetooth settings pane is open.",
+                path: nil,
+                remediation: "Close System Settings > Bluetooth, or turn Bluetooth off when not in use"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join Exposure
+
+    private func checkWiFiAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // macOS keeps a list of preferred networks and auto-joins by SSID alone.
+        // An attacker on the same airwaves can stand up an open AP with a remembered SSID
+        // (e.g., "xfinitywifi", "attwifi", "Starbucks WiFi") and silently capture traffic.
+        // The risk is auto-joining OPEN preferred networks.
+        let result = ShellRunner.run("/usr/sbin/networksetup",
+                                     arguments: ["-listpreferredwirelessnetworks", "en0"],
+                                     timeout: 5)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        let knownOpenSSIDs: Set<String> = [
+            "xfinitywifi", "attwifi", "Starbucks WiFi", "Google Starbucks",
+            "Boingo Hotspot", "Boingo Wireless", "Boingo Hot Spot",
+            "Marriott_GUEST", "Hyatt", "Hilton Honors", "GoGoInflight",
+            "T-Mobile Wi-Fi", "Optimum WiFi", "_The Free Internet",
+            "Hotel WiFi", "Free WiFi", "Free Public WiFi", "Wayport_Access",
+        ]
+        let lines = result.stdout.split(separator: "\n").map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        let preferred = lines.dropFirst().filter { !$0.isEmpty } // first line is a label
+
+        let matched = preferred.filter { knownOpenSSIDs.contains($0) }
+        if !matched.isEmpty {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Mac auto-joins \(matched.count) known-open hotspot SSID(s)",
+                detail: "Auto-joining: \(matched.joined(separator: ", ")) — these SSIDs are trivially impersonated by attackers running an evil-twin AP",
+                path: nil,
+                remediation: "Forget what you don't need: System Settings > Wi-Fi > Advanced — and enable \"Ask to join networks\""
+            ))
         }
     }
 
