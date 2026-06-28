@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH password authentication")
+        checkSSHPasswordAuth(findings: &findings, errors: &errors)
+
+        progress?.update("checking Touch ID for sudo")
+        checkTouchIDForSudo(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My status")
+        checkFindMy(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen-sharing privacy")
+        checkScreenSharingPrivacy(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +456,126 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - SSH password authentication
+
+    private func checkSSHPasswordAuth(findings: inout [Finding], errors: inout [String]) {
+        // If Remote Login is on, the contents of /etc/ssh/sshd_config decide whether attackers
+        // can brute-force a password. PasswordAuthentication should be no; ChallengeResponseAuthentication
+        // and KbdInteractiveAuthentication should also be off if SSH is open at all.
+        guard let content = try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8) else { return }
+
+        var passwordOn = false
+        var rootLoginOn = false
+
+        for raw in content.split(separator: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let lower = line.lowercased()
+            if lower.hasPrefix("passwordauthentication ") && lower.contains("yes") { passwordOn = true }
+            if lower.hasPrefix("challengeresponseauthentication ") && lower.contains("yes") { passwordOn = true }
+            if lower.hasPrefix("kbdinteractiveauthentication ") && lower.contains("yes") { passwordOn = true }
+            if lower.hasPrefix("permitrootlogin") && (lower.contains("yes") || lower.contains("without-password")) {
+                rootLoginOn = true
+            }
+        }
+
+        // Only matters if SSH is actually accepting connections. Check via launchctl.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let sshEnabled = launchctl.success && launchctl.stdout.contains("com.openssh.sshd")
+        guard sshEnabled else { return }
+
+        if passwordOn {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH server accepts password authentication",
+                detail: "Remote Login is enabled and /etc/ssh/sshd_config allows passwords — attackers can brute-force the account",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PasswordAuthentication no' and 'ChallengeResponseAuthentication no' in /etc/ssh/sshd_config, then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+        if rootLoginOn {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH server allows root login",
+                detail: "/etc/ssh/sshd_config sets PermitRootLogin yes",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitRootLogin no' in /etc/ssh/sshd_config"
+            ))
+        }
+    }
+
+    // MARK: - Touch ID for sudo
+
+    private func checkTouchIDForSudo(findings: inout [Finding], errors: inout [String]) {
+        // Touch ID for sudo (added by Apple via /etc/pam.d/sudo_local in macOS Sonoma 14.0)
+        // dramatically reduces the window for shoulder-surfed or shell-history-leaked sudo passwords.
+        // Apple ships the template only on machines where it's actually applicable, so the template's
+        // presence is itself the right gate — it appears on Apple Silicon Macs with biometrics.
+        let fm = FileManager.default
+        let sudoLocal = "/etc/pam.d/sudo_local"
+        let templateExists = fm.fileExists(atPath: "/etc/pam.d/sudo_local.template")
+        let active = (try? String(contentsOfFile: sudoLocal, encoding: .utf8))?.contains("pam_tid.so") ?? false
+
+        if !active && templateExists {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Touch ID for sudo is not configured",
+                detail: "Apple ships a template at /etc/pam.d/sudo_local.template but /etc/pam.d/sudo_local does not enable pam_tid.so",
+                path: sudoLocal,
+                remediation: "Enable: sudo cp /etc/pam.d/sudo_local.template /etc/pam.d/sudo_local && sudo sed -i '' 's/^#auth/auth/' /etc/pam.d/sudo_local"
+            ))
+        }
+    }
+
+    // MARK: - Find My / Activation Lock
+
+    private func checkFindMy(findings: inout [Finding], errors: inout [String]) {
+        // Find My + Activation Lock is the strongest theft-deterrent macOS offers. We probe
+        // the FindMy daemon's presence and Activation-Lock status via system_profiler.
+        let prof = ShellRunner.run("/usr/sbin/system_profiler",
+                                   arguments: ["SPHardwareDataType", "-detailLevel", "mini"],
+                                   timeout: 10)
+        guard prof.success else { return }
+
+        // Activation Lock is only reported by system_profiler if it is OFF (since Sonoma).
+        // The literal "Activation Lock Status: Disabled" appears when Find My / Activation Lock
+        // is not engaged on this Mac.
+        if prof.stdout.contains("Activation Lock Status: Disabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Activation Lock is disabled",
+                detail: "Find My is the only protection against an unattended Mac being wiped, restored, and reused",
+                path: nil,
+                remediation: "Enable: System Settings > [your name] > iCloud > Find My Mac — turn on"
+            ))
+        }
+    }
+
+    // MARK: - Screen-sharing privacy
+
+    private func checkScreenSharingPrivacy(findings: inout [Finding], errors: inout [String]) {
+        // macOS 15+ shows a per-app indicator while an app is recording the screen, but the
+        // ScreenCaptureKit privacy preference (`AllowApplicationsToRecord`) can be disabled
+        // outright by configuration profiles. Surface if so.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "ScreenCaptureWindowMode"
+        ], timeout: 5)
+        // The "always show indicator" mode is value 1 / "Always". A value of 2 means "Hide" — that's
+        // a regression from default and removes the only user-visible signal of a recording app.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "2" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Screen-recording indicator is hidden",
+                    detail: "Control Center is configured to hide the recording indicator — apps can capture the screen without a visible cue",
+                    path: nil,
+                    remediation: "System Settings > Control Center > Screen Mirroring indicator: 'Always' (or 'When Active')"
                 ))
             }
         }

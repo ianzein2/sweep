@@ -1,6 +1,6 @@
 # sweep
 
-A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 13 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
+A macOS security scanner that detects spyware, keyloggers, and surveillance software. Available as a CLI tool and a native macOS app. Runs 15 security scans in parallel, scores your Mac's security posture, and can auto-fix common issues.
 
 ## Download
 
@@ -64,7 +64,7 @@ sudo sweep --json
 
 ### Available scanners
 
-`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`
+`process`, `permission`, `persistence`, `evidence`, `eventtap`, `device`, `kernel`, `integrity`, `network`, `profile`, `browser`, `deep`, `hardening`, `miner`, `mcp`
 
 ## What it checks
 
@@ -82,7 +82,9 @@ sudo sweep --json
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH (incl. password-auth and root login), Touch ID for sudo, Find My, screen-recording indicator, sharing services, software updates |
+| **Crypto Miner** | Detects cryptojackers — XMRig and other miner binaries, mining-pool connections, stratum argv patterns, miner drops in `/tmp` |
+| **MCP Server** | Audits Claude Desktop / Cursor / Windsurf MCP server configs — flags servers that auto-install from registries, run shell commands at startup, point off-host, or receive secret env vars |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

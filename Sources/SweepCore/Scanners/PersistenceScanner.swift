@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking modern Login Items (SMAppService)")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking custom URL scheme handlers")
+        scanURLSchemeHandlers(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +681,126 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Modern Login Items (SMAppService Background Items)
+
+    /// macOS 13+ moved Login Items to SMAppService — apps bundle helper plists inside their own
+    /// .app and register them at first launch. The state lives in /var/db/com.apple.backgroundtaskmanagement/
+    /// as a binary plist (NSKeyedArchiver). Apple's `sfltool dumpbtm` is the documented way to read it.
+    /// Disabled items still on disk and items pointing at non-existent bundle paths are both
+    /// common spyware-cleanup leftovers worth surfacing.
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        let sfltool = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        guard sfltool.success && !sfltool.stdout.isEmpty else { return }
+
+        // sfltool dumpbtm prints stanzas separated by blank lines, e.g.:
+        //   UUID: ...
+        //   Name: Some Helper
+        //   Type: legacy daemon
+        //   Disposition: [enabled]
+        //   URL: file:///Applications/Foo.app/Contents/Library/LoginItems/FooHelper.app
+        //   Bundle ID: com.foo.helper
+        //   Executable Path: /Applications/Foo.app/.../FooHelper
+        let stanzas = sfltool.stdout.components(separatedBy: "\n\n")
+        for stanza in stanzas {
+            var name = ""
+            var bundleId = ""
+            var execPath = ""
+            var disposition = ""
+
+            for raw in stanza.split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("Name:") {
+                    name = String(line.dropFirst("Name:".count)).trimmingCharacters(in: .whitespaces)
+                } else if line.hasPrefix("Bundle ID:") {
+                    bundleId = String(line.dropFirst("Bundle ID:".count)).trimmingCharacters(in: .whitespaces)
+                } else if line.hasPrefix("Executable Path:") {
+                    execPath = String(line.dropFirst("Executable Path:".count)).trimmingCharacters(in: .whitespaces)
+                } else if line.hasPrefix("Disposition:") {
+                    disposition = String(line.dropFirst("Disposition:".count)).trimmingCharacters(in: .whitespaces)
+                }
+            }
+
+            if name.isEmpty && bundleId.isEmpty { continue }
+
+            // Known spyware match against bundle ID
+            if !bundleId.isEmpty, let sig = SpywareSignature.match(bundleId: bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware Background Item: \(sig.name)",
+                    detail: "Name: \(name), Bundle: \(bundleId), Disposition: \(disposition)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove the parent .app, then: sfltool resetbtm"
+                ))
+                continue
+            }
+
+            // Fake-Apple bundle ID disguising as a system item
+            if !bundleId.isEmpty && SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Item with fake Apple bundle ID",
+                    detail: "Name: \(name), Bundle: \(bundleId) — not a legitimate Apple Background Item",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove the registering app; reset with: sfltool resetbtm"
+                ))
+                continue
+            }
+
+            // Executable path missing — leftover from a removed installer, commonly seen after
+            // cleanup of stealer apps. Low severity, but worth noting.
+            if !execPath.isEmpty && !FileManager.default.fileExists(atPath: execPath) &&
+               !bundleId.hasPrefix("com.apple.") {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Background Item references missing executable",
+                    detail: "Name: \(name), Bundle: \(bundleId), Missing: \(execPath)",
+                    path: nil,
+                    remediation: "Reset stale entries: sfltool resetbtm"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Custom URL scheme handlers
+
+    /// Custom URL schemes registered by .app bundles are a stealthy execution channel — a
+    /// link like `evil://x` on a webpage can launch the registered app. Malware registers
+    /// schemes that look system-like (e.g. `xprotect://`, `softwareupdate://`).
+    private func scanURLSchemeHandlers(findings: inout [Finding], errors: inout [String]) {
+        let lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
+        guard FileManager.default.fileExists(atPath: lsregister) else { return }
+
+        let result = ShellRunner.run(lsregister, arguments: ["-dump", "-v"], timeout: 20)
+        guard result.success else { return }
+
+        // lsregister -dump prints "bindings:" sections like:
+        //   bindings: someapp:, scheme:, file/.../My.app/Contents/Info.plist
+        // We scan for scheme bindings under non-system bundle paths that mimic Apple names.
+        let suspectSchemes: Set<String> = [
+            "xprotect:", "softwareupdate:", "icloud-update:", "applesoftware:",
+            "applesecurity:", "applehelper:", "appleagent:",
+        ]
+
+        for raw in result.stdout.split(separator: "\n") {
+            let line = String(raw).trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("bindings:") else { continue }
+            let bindingsPart = line.replacingOccurrences(of: "bindings:", with: "").trimmingCharacters(in: .whitespaces)
+            // The schemes are the colon-suffixed tokens before the next comma.
+            for token in bindingsPart.split(separator: ",") {
+                let scheme = String(token).trimmingCharacters(in: .whitespaces).lowercased()
+                if suspectSchemes.contains(scheme) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious URL scheme registered: \(scheme)",
+                        detail: "An app has registered the \(scheme) handler — Apple does not ship this scheme",
+                        path: nil,
+                        remediation: "Find the registering app with: \(lsregister) -dump | grep -B1 \(scheme) — then remove it"
+                    ))
+                }
+            }
         }
     }
 

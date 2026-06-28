@@ -129,6 +129,44 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: Cryptojacker drop — miner findings + matching persistence.
+        // Even one or the other alone is suspicious; the combination is a confirmed drop.
+        let minerFindings = results.first(where: { $0.scannerName == "Crypto Miner Scan" })?.findings ?? []
+        let persistenceFindings = results.first(where: { $0.scannerName == "Persistence Scan" })?.findings ?? []
+        let hasMinerProc = minerFindings.contains { $0.category == .suspiciousProcess }
+        let hasMinerNet = minerFindings.contains { $0.category == .networkActivity }
+        if hasMinerProc && hasMinerNet {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousProcess,
+                title: "Active cryptojacker: miner process + mining-pool connection",
+                detail: "A miner process is running and an outbound mining-pool connection is established — your CPU is mining for someone else",
+                path: nil,
+                remediation: "Kill the miner process, remove its persistence (see Persistence Scan), then audit the entry point — most macOS miners arrive via cracked apps or supply-chain extensions"
+            ))
+        } else if hasMinerProc && !persistenceFindings.isEmpty {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousProcess,
+                title: "Cryptojacker likely persisted",
+                detail: "A miner process is running and Persistence Scan flagged at least one entry — likely the auto-restart hook",
+                path: nil,
+                remediation: "Cross-reference Crypto Miner Scan and Persistence Scan findings to remove both halves of the drop"
+            ))
+        }
+
+        // Pattern 7: MCP server pointing off-host + persistence on disk = potential
+        // ongoing exfiltration through AI tooling.
+        let mcpFindings = results.first(where: { $0.scannerName == "MCP Server Scan" })?.findings ?? []
+        let hasRiskyMCP = mcpFindings.contains { $0.severity == .high }
+        if hasRiskyMCP && !persistenceFindings.isEmpty {
+            findings.append(Finding(
+                severity: .high, category: .networkActivity,
+                title: "Risky MCP server + active persistence",
+                detail: "An MCP server is configured to run remote / shell-spawning code and at least one persistence entry exists — every AI-client session can re-trigger the drop",
+                path: nil,
+                remediation: "Remove the MCP entry first, then clean the persistence — opening the AI client refreshes the attacker's foothold"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,

@@ -4,17 +4,29 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
-    // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // Recent campaigns (late 2024 / 2025 / early 2026) have weaponized VSCode/Cursor/Open VSX
+    // marketplace extensions to steal credentials, drain crypto wallets, and inject backdoors.
+    // Keywords mirror reported malicious extension IDs from Snyk, ReversingLabs, and Aqua Nautilus.
     private let suspiciousEditorExtKeywords: [String] = [
+        // 2024
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 — ReversingLabs / Snyk / Aqua malicious-extension reports
+        "ahban.cychelloworld", "ahban.shiba", "ahban.shibaeth",
+        "eslint-extension-pack", "eslint-prettier-plus", "materialize-prefer",
+        "github-dark-theme-pro", "github-theme-pro", "vscode-icons-plus",
+        "yourcompany.cursor-tools", "yourcompany.windsurf-tools",
+        "solidity-prettier-plus", "rust-debugger-plus", "go-debugger-plus",
+        "cursor-tools-pro", "claude-tools-pro",  // typosquats of legit AI tooling extensions
+        // 2025-2026 wallet-drainer campaigns specifically targeting devs
+        "trustwallet-helper", "phantom-wallet-helper", "metamask-helper",
+        "uniswap-debugger", "etherscan-explorer-plus",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        "wallet-drain", "seed-phrase", "cookie-grab", "token-grab",
     ]
 
     // Extensions that are well-known and safe
@@ -375,6 +387,17 @@ public final class BrowserScanner: Scanner {
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
                     ))
                 }
+                if scriptResult.hasWalletAccess || scriptResult.hasKeychainAccess {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension reads wallet / keychain locations",
+                        detail: "Extension: \(displayName) (\(extId))" +
+                            (scriptResult.hasWalletAccess ? " — references crypto-wallet storage paths" : "") +
+                            (scriptResult.hasKeychainAccess ? " — invokes the keychain CLI directly" : ""),
+                        path: extPath,
+                        remediation: "Remove this extension immediately and audit wallet activity / rotate keychain secrets"
+                    ))
+                }
             }
         }
     }
@@ -382,6 +405,8 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+        let hasWalletAccess: Bool
+        let hasKeychainAccess: Bool
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
@@ -390,6 +415,8 @@ public final class BrowserScanner: Scanner {
         let fm = FileManager.default
         var hasRemoteExec = false
         var hasShellExec = false
+        var hasWalletAccess = false
+        var hasKeychainAccess = false
 
         let candidatePaths = [
             "\(extPath)/extension.js",
@@ -415,8 +442,29 @@ public final class BrowserScanner: Scanner {
                (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
                 hasRemoteExec = true
             }
+            // 2025 wallet drainers read browser-extension storage for known wallets. Real
+            // dev tooling has no reason to read these directories.
+            let walletPaths = [
+                "metamask", "phantom.app", "trustwallet",
+                "exodus", "ledger live", "rabby", "coinbase wallet",
+                "/library/keychains",  // some drainers also harvest keychain
+            ]
+            for needle in walletPaths {
+                if lower.contains(needle) { hasWalletAccess = true; break }
+            }
+            // Direct calls to the `security` CLI or the keychain DB are a strong tell —
+            // VS Code extensions should be using `vscode.SecretStorage`, not the raw keychain.
+            if lower.contains("/usr/bin/security") ||
+               lower.contains("login.keychain-db") ||
+               lower.contains("security find-internet-password") ||
+               lower.contains("security find-generic-password") {
+                hasKeychainAccess = true
+            }
         }
 
-        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+        return EditorScriptScan(hasRemoteExec: hasRemoteExec,
+                                hasShellExec: hasShellExec,
+                                hasWalletAccess: hasWalletAccess,
+                                hasKeychainAccess: hasKeychainAccess)
     }
 }
