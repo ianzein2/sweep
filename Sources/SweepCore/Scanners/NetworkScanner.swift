@@ -40,6 +40,23 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 documented macOS malware C2 ports
+        8000,                                  // Cthulhu Stealer (Darktrace, 2024)
+        1001,                                  // ChillyHell modular backdoor (Jamf Threat Labs, 2025)
+        1224, 1244, 1245,                      // BeaverTail/InvisibleFerret/NimDoor (Unit42, Datadog, SentinelLabs)
+        3011,                                  // BeaverTail variant (Unit42)
+        5918, 5934, 5961, 5974,                // OtterCookie / Contagious Interview cluster (Talos)
+        3333,                                  // Odyssey Stealer hidden admin panels (Hunt.io / Forcepoint)
+        // Common C2 framework defaults
+        50050,                                 // Cobalt Strike Team Server (Unit42)
+        40056,                                 // Havoc C4 teamserver (default)
+        7443,                                  // Mythic C2 UI (default)
+        // Generic suspicious alt-HTTP / RAT panels
+        8081, 8088, 8089, 8090, 8181, 9090, 9091,
+        4040, 5001, 5002,                      // Stealer staging / msfvenom defaults
+        7547, 5938,                            // CWMP / TeamViewer abused for tunneling
+        9050, 9150,                            // Tor SOCKS (when used by non-Tor app)
+        2222,                                  // Alt-SSH used by reverse shells
     ]
 
     private let blockedAppleDomains: Set<String> = [

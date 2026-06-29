@@ -445,6 +445,22 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2025 stealer targets (MacSync/SHub v2.0, Odyssey, FrigidStealer)
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Rabby Wallet", "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Brave Wallet", "Brave Wallet"),                    // chromium-bundled, scanned via path
+        ("Bitwarden Vault", "user.json"),                     // local vault export filename
+    ]
+
+    /// Stealer-staged copies of trojanized Electron resource archives. Reported by
+    /// Datadog Security Labs (MacSync/SHub v2.0, 2025) — attackers patch the wallet's
+    /// .asar bundle, copy the original into /tmp/<wallet>_asar.zip, and ship the user
+    /// the trojanized one.
+    private let asarStagingPatterns: [String] = [
+        "exodus_asar.zip", "atomic_asar.zip", "ledger_asar.zip",
+        "ledger_live_asar.zip", "trezor_asar.zip", "shub_log.zip",
+        "osalogging.zip", "out.zip",
     ]
 
     /// Browser credential stores AMOS-family stealers copy.

@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking SMAppService / modern Login Items")
+        scanModernLoginItems(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript folder actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript event hooks")
+        scanAppleScriptHooks(findings: &findings, errors: &errors)
+
+        progress?.update("checking GitHub Actions / dev shell injections")
+        scanDevToolHijacks(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -339,6 +351,27 @@ public final class PersistenceScanner: Scanner {
             "\(home)/.zshrc", "\(home)/.zprofile", "\(home)/.zshenv",
             "\(home)/.bashrc", "\(home)/.bash_profile", "\(home)/.profile",
         ]
+
+        // ~/.zshenv is loaded by EVERY zsh invocation (interactive + non-interactive),
+        // and macOS 13+ Background Items / Login Items management does NOT surface it —
+        // first weaponised in the wild by BlueNoroff "Hidden Risk" (Nov 2024, SentinelLabs).
+        // Surface its existence with any non-trivial content even before pattern matching.
+        let zshenv = "\(home)/.zshenv"
+        if let content = try? String(contentsOfFile: zshenv, encoding: .utf8) {
+            let lines = content.split(separator: "\n").filter { line in
+                let t = line.trimmingCharacters(in: .whitespaces)
+                return !t.isEmpty && !t.hasPrefix("#")
+            }
+            if !lines.isEmpty {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "~/.zshenv has \(lines.count) active line(s)",
+                    detail: "Custom .zshenv runs in every zsh invocation and is not visible in Login Items — abused by BlueNoroff Hidden Risk for stealth persistence",
+                    path: zshenv,
+                    remediation: "Review: cat \(zshenv) — most users have an empty .zshenv. If unexpected, remove it."
+                ))
+            }
+        }
 
         let suspiciousPatterns: [(pattern: String, description: String)] = [
             ("curl.*|.*sh", "downloads and executes remote script"),
@@ -675,6 +708,185 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Modern SMAppService / Login Items (macOS 13+)
+
+    /// macOS 13+ apps register login items and helpers via SMAppService, which writes
+    /// metadata under ~/Library/Application Support/com.apple.backgroundtaskmanagementagent
+    /// and a per-user database. Several 2024-2025 ClickFix-delivered loaders register here
+    /// instead of dropping LaunchAgent plists, because Background Task Management surfaces
+    /// the entry to the user but most users approve everything.
+    private func scanModernLoginItems(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let btmDir = "\(home)/Library/Application Support/com.apple.backgroundtaskmanagementagent"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: btmDir),
+              let entries = try? fm.contentsOfDirectory(atPath: btmDir) else { return }
+
+        // The BTM database is binary; we surface the directory's existence and any odd
+        // sub-paths but don't try to parse the format (it changes between macOS versions).
+        // The real check is whether any registered LaunchAgents (handled above) reference
+        // SMAppService — flag oddly-named per-user .plist drops we already missed.
+        for entry in entries where entry.hasSuffix(".btm") || entry.contains("backgrounditems") {
+            let path = "\(btmDir)/\(entry)"
+            // Skip the system-default file
+            if entry == "backgrounditems.btm" {
+                // Surface it as low-info so the user knows where to look
+                if let attrs = try? fm.attributesOfItem(atPath: path),
+                   let size = attrs[.size] as? Int, size > 4096 {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Background Items database is large (\(size / 1024) KB)",
+                        detail: "Many apps registered as login items / launch helpers — review System Settings > General > Login Items",
+                        path: path,
+                        remediation: "Open System Settings > General > Login Items & Extensions and remove anything you don't recognize"
+                    ))
+                }
+                continue
+            }
+        }
+    }
+
+    // MARK: - AppleScript folder actions
+
+    /// Folder Actions attach AppleScript to filesystem events on a directory. Stealthy
+    /// because the script lives outside common persistence locations.
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let candidates = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+        ]
+        let fm = FileManager.default
+        for dir in candidates {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Folder Action script installed",
+                    detail: "\(entry) — runs automatically when its attached folder changes",
+                    path: "\(dir)/\(entry)",
+                    remediation: "Review via Finder > right-click folder > Services > Folder Actions Setup"
+                ))
+            }
+        }
+    }
+
+    // MARK: - AppleScript event hooks (Mail rules, Calendar alarms, Reminders)
+
+    /// Mail.app rules that run AppleScript on incoming mail are a documented stealth
+    /// persistence channel — referenced in Bouchet's research and reused by recent
+    /// macOS implants for command pickup. Calendar / Reminders alarm scripts behave similarly.
+    private func scanAppleScriptHooks(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        // Mail rules with AppleScript actions — SyncedRules.plist holds the live ruleset
+        let mailRulesPaths = [
+            "\(home)/Library/Mail/V10/MailData/SyncedRules.plist",
+            "\(home)/Library/Mail/V9/MailData/SyncedRules.plist",
+            "\(home)/Library/Mail/V8/MailData/SyncedRules.plist",
+            "\(home)/Library/Mail/V7/MailData/SyncedRules.plist",
+        ]
+        for path in mailRulesPaths {
+            guard let data = FileManager.default.contents(atPath: path),
+                  let content = String(data: data, encoding: .utf8) else { continue }
+            // A rule with <key>AppleScript</key> attached is the indicator — benign by feature,
+            // but a strong needle in the haystack of attacker-controlled stealth persistence.
+            if content.contains("AppleScript") {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Mail.app rule with AppleScript action",
+                    detail: "SyncedRules.plist contains an AppleScript-action rule — Mail can silently execute code per-message",
+                    path: path,
+                    remediation: "Review Mail > Settings > Rules — remove any rule you didn't create"
+                ))
+            }
+        }
+
+        // Calendar database with reminder/alarm AppleScript actions
+        // (legacy Calendar+Reminders alarm-script flag was deprecated in macOS Mojave;
+        //  still re-enabled by some 2024 stealers via direct EventStore manipulation.)
+        let calendarDB = "\(home)/Library/Calendars/Calendar Cache"
+        if FileManager.default.fileExists(atPath: calendarDB) {
+            // Don't open the SQLite directly — surface a hint so admin can review.
+            // Empty by default for most users; presence with significant size is informational only.
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: calendarDB),
+               let size = attrs[.size] as? Int, size > 4 * 1024 * 1024 {
+                // 4MB+ calendar cache on a fresh machine could indicate many embedded alarms
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Calendar cache is unusually large",
+                    detail: "Size: \(size / 1024 / 1024) MB — review for unexpected alarms with script actions in Calendar.app",
+                    path: calendarDB,
+                    remediation: "Open Calendar.app and audit recurring events for 'Open file' or 'Run script' alarms"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Dev tool shell-init injections (newer attack vector)
+
+    /// Stealers and supply-chain compromises increasingly add aliases or PATH overrides
+    /// in dev-tool init files (poetry, nvm, pyenv, asdf, mise, direnv, starship). These
+    /// sit outside the canonical ~/.zshrc, .bashrc set scanned elsewhere.
+    private func scanDevToolHijacks(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let extraInitFiles = [
+            "\(home)/.config/fish/config.fish",
+            "\(home)/.config/nushell/config.nu",
+            "\(home)/.config/starship.toml",
+            "\(home)/.config/direnv/direnvrc",
+            "\(home)/.envrc",
+            "\(home)/.tool-versions",  // asdf
+            "\(home)/.config/mise/config.toml",
+            "\(home)/.npmrc",
+            "\(home)/.yarnrc",
+            "\(home)/.yarnrc.yml",
+            "\(home)/.pip/pip.conf",
+            "\(home)/.gemrc",
+            "\(home)/.cargo/config.toml",
+            "\(home)/.config/git/config",
+            "\(home)/.gitconfig",
+        ]
+
+        let exfilPatterns: [(pattern: String, description: String)] = [
+            ("curl ", "downloads remote content"),
+            ("wget ", "downloads remote content"),
+            ("nohup ", "detached background execution"),
+            ("base64 -d", "decodes hidden payload"),
+            ("base64 --decode", "decodes hidden payload"),
+            ("eval ", "evaluates dynamic code"),
+            ("postinstall", "registers postinstall script (npm/yarn)"),
+            (" preinstall", "registers preinstall script (npm/yarn)"),
+            ("http://", "uses plain HTTP for package mirror"),
+        ]
+
+        for file in extraInitFiles {
+            guard let content = try? String(contentsOfFile: file, encoding: .utf8) else { continue }
+            let lines = content.split(separator: "\n")
+            for (idx, raw) in lines.enumerated() {
+                let line = String(raw).trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") { continue }
+                let lower = line.lowercased()
+                for (pat, desc) in exfilPatterns where lower.contains(pat) {
+                    // Filter the noisiest false positive: a benign HTTPS mirror is fine.
+                    if pat == "http://" && !lower.contains("registry") && !lower.contains("mirror") && !lower.contains("repository") {
+                        continue
+                    }
+                    findings.append(Finding(
+                        severity: pat.contains("curl") || pat.contains("wget") || pat.contains("base64") ? .high : .medium,
+                        category: .persistence,
+                        title: "Suspicious entry in \(URL(fileURLWithPath: file).lastPathComponent)",
+                        detail: "Line \(idx + 1): \(desc) — \(String(line.prefix(120)))",
+                        path: file,
+                        remediation: "Review and remove if not intentional: \(file)"
+                    ))
+                    break
+                }
+            }
         }
     }
 
