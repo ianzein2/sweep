@@ -11,10 +11,34 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 additions reported by ExtensionTotal, Koi Security, and Aikido
+        "ahmadalli-vscode-restore-terminals", "darcula-theme-enhanced",
+        "material-icon-theme-enhanced", "cursor-helper-prettier",
+        "cursor-ai-improved", "ai-completion-pro", "code-genie-plus",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2025 stealer/wallet-drainer naming patterns
+        "drainer", "seed-phrase", "wallet-import", "private-key", "cookie-export",
+    ]
+
+    /// Browser extension IDs reported as malicious in 2024-2025 takedown notices.
+    /// Chrome / Brave / Edge share the same ID format and these were observed across all three.
+    private let knownBadExtensionIds: Set<String> = [
+        // 2024-2025 takedown clusters (Cyberhaven incident + clones, Dec 2024)
+        "nnpnnpemnckcfdebeekibpiijlicmpom",
+        "kkodiihpgodmdankclfibbiphjkfdenh",
+        "ajneghihjbebmnljfhlpdmjjpifeaokc",
+        "bbdnohkpnbkdkmnkddobeafboooinpla",
+        "eaijffijbobmnonfhilihbejadplhddo",
+        "egmennebgadmncfjafcemlecimkepcle",
+        "hihhmjgbcjbkohbinjphhjlnchfmnlhh",
+        "hmbfooaaipiaplhpnfbgomicofhbdfje",
+        // Wallet-drainer / phishing impersonators of MetaMask & Phantom (2024)
+        "egjidjbpglichdcondbcbdnbeeppgdph",
+        "ndcileolkflehcjpmjnfbnaibdcgglog",
+        "afhflppjbohjbkapmlmpnfjbnphedaeo",
     ]
 
     // Extensions that are well-known and safe
@@ -127,6 +151,9 @@ public final class BrowserScanner: Scanner {
 
         // Collect extensions across all profiles, deduplicate by (browser, extId)
         var seenExtensions: [String: ChromeExtensionInfo] = [:] // key: "browserName:extId"
+        // Track which known-bad IDs we've already flagged per browser so we don't repeat
+        // when the same extension is installed across multiple profiles.
+        var reportedBadIds: Set<String> = []
 
         for browserPath in chromePaths {
             let browserName = browserPath.contains("Chrome") ? "Chrome" :
@@ -143,6 +170,23 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-bad extension IDs trip before any heuristic — these are
+                    // documented in public takedown / threat-intel reports.
+                    if knownBadExtensionIds.contains(extId) {
+                        let badKey = "\(browserName):\(extId)"
+                        if !reportedBadIds.contains(badKey) {
+                            reportedBadIds.insert(badKey)
+                            findings.append(Finding(
+                                severity: .high, category: .suspiciousFile,
+                                title: "\(browserName) extension matches known malicious ID",
+                                detail: "Extension ID \(extId) (profile \(profile)) is on the public 2024-2025 malicious takedown list",
+                                path: "\(extPath)/\(extId)",
+                                remediation: "Remove immediately in \(browserName) > Extensions and rotate any session cookies / passwords it could access"
+                            ))
+                        }
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 
