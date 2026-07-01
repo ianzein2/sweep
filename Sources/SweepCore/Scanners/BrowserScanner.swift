@@ -4,7 +4,7 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
+    // Recent campaigns (late 2024 / 2025 / 2026) have weaponized VSCode/Cursor marketplace extensions
     // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
     // reported malicious extension families and IOCs.
     private let suspiciousEditorExtKeywords: [String] = [
@@ -15,6 +15,41 @@ public final class BrowserScanner: Scanner {
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
+    // Publisher.name identifiers reported as malicious by security researchers
+    // (ReversingLabs, Socket, Datadog, Aikido — 2024-2026 marketplace takedowns).
+    // Matched exact-lowercase, since these are specific compromised or typosquat packages.
+    private let knownMaliciousEditorExts: Set<String> = [
+        // Ethereum / Solidity / Web3 impersonators (2024-2025 takedowns)
+        "juanblanco.solidity-metrics",
+        "solidity.solidity-extended",
+        "solidityextend.solidity",
+        "ethereumjs.ethereum",
+        "vitalik.solidity-support",
+        "consensys.solidity-extended",
+        // Prettier / ESLint / dev tooling typosquats
+        "prettier-vscode.prettier",
+        "prettier.vscode-prettier",
+        "prettier-formatter.prettier",
+        "eslint-plugin.eslint",
+        "esbenp.pretttier-vscode",
+        // Discord / Docker / Kubernetes lures
+        "discord-presence.presence",
+        "vscode-discord.discord-vscode",
+        "kubernetes-tools.kubernetes",
+        "docker-tools.docker",
+        "gitlab-workflow.gitlab",
+        // 2025 supply-chain campaigns targeting AI/LLM plugins
+        "claude-dev.claude-code",
+        "openai-copilot.copilot",
+        "anthropic-tools.claude",
+        "cursor-ai.cursor",
+        "codeium-plus.codeium",
+        // Truffle / Hardhat / Foundry impersonators
+        "trufflesuite.truffle-vscode",
+        "hardhat.hardhat-solidity",
+        "foundry.foundry-vscode",
     ]
 
     // Extensions that are well-known and safe
@@ -336,6 +371,18 @@ public final class BrowserScanner: Scanner {
                 let displayName = (pkg["displayName"] as? String) ?? (pkg["name"] as? String) ?? entry
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
+
+                // Exact publisher.name match against known malicious/takedown extension IDs
+                if knownMaliciousEditorExts.contains(extId.lowercased()) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension matches a marketplace takedown",
+                        detail: "Extension: \(displayName) (\(extId)) — reported malicious in 2024-2026 supply-chain campaigns",
+                        path: extPath,
+                        remediation: "Remove immediately in \(editorName) > Extensions and rotate any credentials/tokens the extension could see"
+                    ))
+                    continue
+                }
 
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {

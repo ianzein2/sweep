@@ -445,6 +445,19 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // 2024-2026 additions — wallets AMOS/Banshee/Odyssey variants explicitly target
+        ("Rabby",    "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Sui Wallet", "opcgpfmipidbgpenhmajoajpbobppdil"),
+        ("Aptos Petra", "ejjladinnckdgjemekebdpeokbikhfci"),
+        ("Backpack (Solana)", "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Rainbow",  "opfgelmcmbiajamepnmloijbpoleiama"),
+        ("MyEtherWallet", "myetherwallet"),
+        ("Wasabi Wallet", "WalletWasabi"),
+        ("Sparrow",  "Sparrow"),
+        ("Bitcoin Core wallet", "wallets/wallet.dat"),
+        ("Blockstream Green", "Green"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.

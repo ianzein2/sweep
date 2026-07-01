@@ -35,11 +35,17 @@ public final class NetworkScanner: Scanner {
     ]
 
     private let suspiciousPorts: Set<Int> = [
-        4444, 5555, 6666, 7777, 8888, 9999,  // Common RAT/C2 ports
+        4444, 5555, 6666, 7777, 8888, 9999,  // Common RAT / Metasploit / Sliver default listeners
         1337, 31337,                           // Hacker culture ports
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // Modern C2 framework defaults (2023-2026)
+        50050,                                 // Cobalt Strike teamserver default
+        40056,                                 // Havoc listener default
+        7443,                                  // Havoc HTTPS listener
+        4321, 7005, 7006,                     // Mythic C2 defaults
+        4433, 8834,                            // Nessus/attack framework common ports
     ]
 
     private let blockedAppleDomains: Set<String> = [
