@@ -60,6 +60,12 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Well-known stealer drop-file names left behind by AMOS, Poseidon, Cthulhu,
+        //    FrigidStealer, Odyssey and the "ClickFix" family. These are cheap, high-signal
+        //    filename fingerprints that surface even when the primary process is gone.
+        progress?.update("checking known stealer drop files")
+        scanForStealerDropFiles(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -547,6 +553,91 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Known Stealer Drop Files
+
+    /// Filenames that AMOS-family and North-Korea-linked stealer campaigns are known to
+    /// stage in /tmp or hidden dirs. Reported by Kandji, SentinelLabs, Proofpoint,
+    /// Group-IB and Palo Alto in 2024-2025 write-ups.
+    private let stealerDropFiles: [(name: String, family: String)] = [
+        // AMOS / Atomic macOS Stealer
+        ("out.zip", "AMOS / Poseidon-family stealer output archive"),
+        ("kb.txt", "AMOS / Poseidon-family keychain dump"),
+        ("system.log.zip", "AMOS staging archive"),
+        ("wallets.zip", "AMOS / Odyssey wallet exfil archive"),
+        // Cthulhu
+        ("Cthulhu.zip", "Cthulhu Stealer output archive"),
+        // Poseidon
+        ("Poseidon.zip", "Poseidon Stealer output archive"),
+        // Odyssey / ClickFix
+        ("Odyssey.zip", "Odyssey Stealer output archive"),
+        ("clickfix.sh", "ClickFix (OyeMac) delivery stager"),
+        // FrigidStealer
+        ("frigid.zip", "FrigidStealer output archive"),
+        // BeaverTail / InvisibleFerret
+        (".n2", "BeaverTail staging directory"),
+        (".p2", "BeaverTail staging directory"),
+        ("pay", "InvisibleFerret Python stager"),
+        // DPRK RustBucket family follow-on stages
+        ("cache_lock", "RustBucket / KandyKorn cache marker"),
+        // ObjCShellz / BALLAST
+        ("dumphelp", "ObjCShellz post-exploit helper"),
+        // Generic
+        ("passwords.txt", "Generic credential dump"),
+        ("keychain.dump", "Keychain dump artifact"),
+        ("chrome_cookies.sqlite", "Chrome cookie theft artifact"),
+    ]
+
+    private func scanForStealerDropFiles(home: String, findings: inout [Finding], errors: inout [String]) {
+        let searchRoots = [
+            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+            "/Users/Shared",
+            "\(home)/Library/Caches",
+            "\(home)/Library/Application Support",
+        ]
+        let fm = FileManager.default
+
+        for root in searchRoots {
+            guard fm.fileExists(atPath: root),
+                  let enumerator = fm.enumerator(
+                    at: URL(fileURLWithPath: root),
+                    includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey],
+                    options: [.skipsPackageDescendants]
+                  ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 5 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let dirName = url.deletingLastPathComponent().lastPathComponent
+                if skipDirs.contains(dirName) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                let name = url.lastPathComponent
+                if let hit = stealerDropFiles.first(where: { $0.name == name }) {
+                    // Only flag if the file has plausible content — the same name in a
+                    // .git repository or unrelated log dump should not trigger.
+                    let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                    guard size > 0 else { continue }
+
+                    let modDate = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                        .contentModificationDate
+                    let age = modDate.map { formatAge($0) } ?? "unknown"
+
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Known stealer artifact: \(name)",
+                        detail: "\(hit.family). Path: \(url.path), modified: \(age)",
+                        path: url.path,
+                        remediation: "Isolate this Mac from the network, save the file for forensics, then remove it and rotate all passwords/wallets."
                     ))
                 }
             }

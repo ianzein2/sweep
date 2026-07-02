@@ -11,10 +11,35 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2024-2025 additions — VSX/OpenVSX / VSCode Marketplace incidents:
+        "solaire", "material-theme-freeclipboard",         // "Material Theme" cluster (Feb 2025)
+        "prettier-eslint-runner", "prettier-vscode-runner", // Feb 2025 impersonation batch
+        "beavertail",                                       // DPRK Contagious Interview payload
+        "eth-source", "sol-source", "web3-source",          // "source-helper" impersonation cluster
+        "chatgpt-easy-code", "ai-code-assistant-helper",    // Fake AI extension family
+        "cyberhaven-security-update",                       // Dec 2024 supply-chain OAuth phishing (Chrome, but reused)
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2024-2025 patterns
+        "clipper", "drainer", "wallet-drain", "cookie-stealer", "session-hijack",
+        "oauth-phish", "token-exfil", "npm-installer-helper",
+    ]
+
+    // Browser extension IDs known to be malicious (Chrome/Chromium extension IDs).
+    // Sources: Cyberhaven Dec-2024 disclosure, Extension Total, Secure Annex research.
+    private let knownMaliciousChromeExtIds: [String: String] = [
+        "hlmnnpahpnnlodhemieonjhciddhbaaf": "Cyberhaven (Dec 2024 supply-chain compromise)",
+        "kbcijlodgjcbdjnaopeaeggeiafamibp": "Reader Mode (compromised extension)",
+        "pkcbhnalbdiokggcnpokaenkbahaoafo": "Search Copilot AI Assistant (impersonation)",
+        "hmlkgcdnalfhbfebgeidhcelloafmpjm": "M-Files Web (compromised, Dec 2024)",
+        "bpmcpldpdmajfigpchkicefoigmkfalc": "Bookmark Favicon Changer (compromised)",
+        "aeachknmefphepccionboohckonoeemg": "Castorus (compromised, Dec 2024)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Uvoice (compromised, Dec 2024)",
+        "eanofdhdfbcalhflpbdipkjjkoimeeod": "ParrotTalks (compromised)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "Internxt VPN (compromised)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Bard AI Chat (compromised)",
     ]
 
     // Extensions that are well-known and safe
@@ -197,6 +222,19 @@ public final class BrowserScanner: Scanner {
             let profileNote = ext.profiles.count > 1
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
+
+            // Known-malicious ID match takes priority — these are extensions with public
+            // compromise disclosures. Flag as HIGH regardless of the current manifest state.
+            if let compromiseNote = knownMaliciousChromeExtIds[ext.extId] {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension matches a known-malicious ID",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — \(compromiseNote)",
+                    path: ext.extDir,
+                    remediation: "Remove immediately in \(ext.browserName) > Extensions, then reset browser session cookies and rotate any OAuth-linked credentials"
+                ))
+                continue
+            }
 
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(

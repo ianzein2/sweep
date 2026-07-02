@@ -55,6 +55,27 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking XProtect / MRT freshness")
+        checkXProtectFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking Signed System Volume (SSV) integrity")
+        checkSignedSystemVolume(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari auto-open of downloaded files")
+        checkSafariAutoOpenDownloads(findings: &findings, errors: &errors)
+
+        progress?.update("checking Terminal Secure Keyboard Entry")
+        checkTerminalSecureKeyboardEntry(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi auto-join for known open networks")
+        checkWiFiOpenAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption / freshness")
+        checkTimeMachineBackups(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Task Management state")
+        checkBackgroundTaskManagement(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +489,225 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - XProtect / MRT Freshness
+
+    private func checkXProtectFreshness(findings: inout [Finding], errors: inout [String]) {
+        // Apple ships silent signature updates for XProtect (bundle version) and XProtect
+        // Remediator. If the last modification is very old, either signature updates are
+        // disabled/blocked or the machine has been offline — both delay defenses for
+        // actively exploited macOS malware families.
+        let candidates = [
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle",
+            "/Library/Apple/System/Library/CoreServices/XProtect.app",
+            "/System/Library/CoreServices/XProtect.bundle",
+        ]
+        let fm = FileManager.default
+        var newest: Date?
+        var newestPath: String?
+        for path in candidates where fm.fileExists(atPath: path) {
+            if let attrs = try? fm.attributesOfItem(atPath: path),
+               let modDate = attrs[.modificationDate] as? Date {
+                if newest == nil || modDate > newest! {
+                    newest = modDate
+                    newestPath = path
+                }
+            }
+        }
+
+        guard let modDate = newest, let modPath = newestPath else { return }
+        let ageDays = -modDate.timeIntervalSinceNow / 86400
+        if ageDays > 60 {
+            findings.append(Finding(
+                severity: ageDays > 180 ? .high : .medium,
+                category: .hardening,
+                title: "XProtect signatures are stale (\(Int(ageDays)) days old)",
+                detail: "XProtect bundle last updated \(Int(ageDays)) days ago — Apple usually ships new IOCs every 1-3 weeks",
+                path: modPath,
+                remediation: "Ensure network access to Apple, then: sudo /usr/sbin/softwareupdate --background-critical"
+            ))
+        }
+    }
+
+    // MARK: - Signed System Volume (SSV) Integrity
+
+    private func checkSignedSystemVolume(findings: inout [Finding], errors: inout [String]) {
+        // macOS Big Sur+ ships the OS on a cryptographically sealed Signed System Volume.
+        // If `csrutil authenticated-root` is disabled, an attacker or careless admin has
+        // broken the seal — a HIGH-severity hardening regression that also blocks OS updates.
+        let result = ShellRunner.run("/usr/bin/csrutil",
+                                     arguments: ["authenticated-root", "status"], timeout: 5)
+        if result.success {
+            let lower = result.stdout.lowercased()
+            if lower.contains("disabled") {
+                findings.append(Finding(
+                    severity: .high, category: .systemIntegrity,
+                    title: "Signed System Volume (SSV) is disabled",
+                    detail: "csrutil authenticated-root is off — the OS is no longer cryptographically sealed against tampering",
+                    path: nil,
+                    remediation: "Re-seal from Recovery: boot into Recovery, open Terminal, run: csrutil authenticated-root enable"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Safari Auto-Open of "Safe" Downloads
+
+    private func checkSafariAutoOpenDownloads(findings: inout [Finding], errors: inout [String]) {
+        // Safari's "Open safe files after downloading" auto-mounts DMGs and auto-extracts
+        // ZIPs, which has repeatedly been abused (recent 2024-2025 stealer chains such as
+        // ClickFix and FrigidStealer social-engineer users into downloading a DMG that
+        // then autoruns installers). Recommend disabling.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Safari", "AutoOpenSafeDownloads"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Safari auto-opens \"safe\" downloads",
+                    detail: "AutoOpenSafeDownloads=1 — DMGs and ZIPs auto-mount/extract after download, abused by recent macOS stealer campaigns",
+                    path: nil,
+                    remediation: "Disable: Safari > Settings > General > uncheck \"Open ‘safe’ files after downloading\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Terminal Secure Keyboard Entry
+
+    private func checkTerminalSecureKeyboardEntry(findings: inout [Finding], errors: inout [String]) {
+        // Terminal's "Secure Keyboard Entry" prevents other apps (including Accessibility-
+        // authorized keyloggers and event taps) from reading keystrokes typed into Terminal.
+        // Off by default; enabling is a cheap, high-value defense on developer machines.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+        // Absent-or-0 both mean "off". Only surface as LOW — this is guidance, not a fault.
+        if !result.success || result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) != "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Terminal Secure Keyboard Entry is off",
+                detail: "Other apps (including keyloggers with Accessibility permission) can read keystrokes typed in Terminal",
+                path: nil,
+                remediation: "Enable: open Terminal > Terminal menu > Secure Keyboard Entry"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join Open Networks
+
+    private func checkWiFiOpenAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // Auto-joining known networks is fine; auto-joining OPEN networks with the same
+        // SSID as ones you've used before is how rogue-AP attacks (Karma, Wifi Pineapple)
+        // hijack traffic. Flag if the "auto-join" hotspot list is populated but this is
+        // best expressed as a check on the "AutoJoinDisabled" flag.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        ], timeout: 5)
+        // If we can't read the file (SIP-protected on modern macOS), skip silently.
+        guard result.success else { return }
+
+        // Count networks whose SecurityType is "Open"; each is an auto-join Rogue-AP risk.
+        let output = result.stdout
+        let openHits = output.components(separatedBy: "SecurityType").filter {
+            $0.hasPrefix(" = \"Open\";") || $0.hasPrefix(" = Open;")
+        }.count
+        if openHits > 0 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "\(openHits) open Wi-Fi network(s) set to auto-join",
+                detail: "Open networks in your saved list auto-connect on match — a rogue access point can spoof the SSID and MITM your traffic",
+                path: nil,
+                remediation: "Review: System Settings > Wi-Fi > … next to each open network > \"Auto-Join\": Off"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine Backup Freshness
+
+    private func checkTimeMachineBackups(findings: inout [Finding], errors: inout [String]) {
+        // Ransomware families targeting macOS (recently: NotLockBit, TurtleRAT) rely on the
+        // victim having no working recovery point. A stale Time Machine backup means recovery
+        // from a ransomware or stealer incident may not be possible.
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["latestbackup"], timeout: 10)
+        if result.success {
+            let out = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if out.isEmpty || out.lowercased().contains("no machine directory") {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "No Time Machine backups found",
+                    detail: "tmutil reports no backups — without a snapshot, ransomware or drive failure means data loss",
+                    path: nil,
+                    remediation: "Set up a Time Machine destination: System Settings > General > Time Machine"
+                ))
+                return
+            }
+        }
+
+        // Local snapshots freshness: `tmutil listlocalsnapshots /` should return one per day.
+        let snaps = ShellRunner.run("/usr/bin/tmutil",
+                                    arguments: ["listlocalsnapshots", "/"], timeout: 10)
+        if snaps.success {
+            let lines = snaps.stdout.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("com.apple.TimeMachine.") }
+            if lines.isEmpty {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "No local Time Machine snapshots present",
+                    detail: "APFS local snapshots let you roll back the disk without an external drive — none exist right now",
+                    path: nil,
+                    remediation: "Enable Time Machine so local snapshots are created: System Settings > General > Time Machine"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Task Management (macOS Ventura+)
+
+    private func checkBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        // macOS 13+ tracks every persistent background item (LaunchAgents, LaunchDaemons,
+        // login items) in a system database (`sfltool`). Malware families like Adload
+        // and FlexibleFerret rely on users not noticing new entries. Surface the count
+        // when it is unusually high — a rough proxy for "look at what's set to auto-launch".
+        //
+        // We can't parse the internal database, but we can read the total count from
+        // `sfltool dumpbtm`; failing that, we fall back to counting user-installed
+        // LaunchAgents which is what BTM entries roughly cover.
+        let btm = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        if btm.success {
+            let items = btm.stdout.components(separatedBy: "\nRecord type: ")
+            // First split segment is the header; each subsequent segment is one BTM record.
+            let total = max(items.count - 1, 0)
+            if total > 40 {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Large number of Background Items (\(total))",
+                    detail: "Background Task Management is tracking \(total) launch/login items — recent stealers hide as extra items here",
+                    path: nil,
+                    remediation: "Review: System Settings > General > Login Items & Extensions"
+                ))
+            }
+            return
+        }
+
+        // sfltool requires elevated privileges on some macOS versions; fall back to a rough
+        // headcount of user LaunchAgents.
+        let home = ShellRunner.realUserHome
+        let userAgents = "\(home)/Library/LaunchAgents"
+        if let count = try? FileManager.default.contentsOfDirectory(atPath: userAgents)
+            .filter({ $0.hasSuffix(".plist") }).count, count > 15 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Many user LaunchAgents (\(count))",
+                detail: "Login/background items are tracked by Background Task Management (macOS Ventura+) — a high count may hide unwanted entries",
+                path: userAgents,
+                remediation: "Review: System Settings > General > Login Items & Extensions"
+            ))
         }
     }
 }

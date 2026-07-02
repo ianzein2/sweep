@@ -40,6 +40,27 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 additions — modern offensive-tooling default listeners.
+        // We deliberately omit common dev-server ports (8000/8080/8081-8083) since flagging
+        // them creates false positives for the developer audience.
+        50050,                                 // Cobalt Strike default teamserver
+        4321, 4322,                            // Sliver / Metasploit default staged handlers
+        40056, 40057,                          // Havoc C2 defaults
+    ]
+
+    /// Hostname substrings that appear in remote endpoints commonly used as free tunneling
+    /// providers by 2024-2025 macOS stealer / RAT campaigns. Presence in an active connection
+    /// is not proof of compromise (many legitimate devs use these), but is worth flagging.
+    private let suspiciousTunnelHosts: [String] = [
+        "trycloudflare.com",       // Cloudflare Quick Tunnels — AMOS, Poseidon, FrigidStealer C2 fronting
+        "ngrok.io", ".ngrok-free.app", ".ngrok.app",  // ngrok — historical + current abuse
+        "loca.lt", "localtunnel.me",
+        "localtonet.com",
+        "serveo.net",
+        "pinggy.io",
+        ".telebit.io", ".telebit.cloud",
+        // Free DDNS often used for cheap C2 rotations
+        ".duckdns.org", ".no-ip.com", ".ddns.net", ".hopto.org",
     ]
 
     private let blockedAppleDomains: Set<String> = [
@@ -175,6 +196,23 @@ public final class NetworkScanner: Scanner {
                         path: nil,
                         remediation: "Investigate this process: ps aux | grep \(pid)"
                     ))
+                }
+            }
+
+            // Check for suspicious tunnel/DDNS providers in the connection string.
+            // These are legitimately used by developers, so we only flag when the process
+            // itself is NOT already whitelisted as a browser or dev tool.
+            for conn in connections where conn.isEstablished {
+                let lower = conn.connection.lowercased()
+                if let matched = suspiciousTunnelHosts.first(where: { lower.contains($0) }) {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "Connection to tunneling/DDNS provider (\(matched))",
+                        detail: "Process: \(command) (PID \(pid)), Connection: \(conn.connection) — often used as C2 fronting by macOS stealers and RATs",
+                        path: nil,
+                        remediation: "Verify this is legitimate developer traffic; otherwise inspect the process: ps -p \(pid) -o command="
+                    ))
+                    break
                 }
             }
 
