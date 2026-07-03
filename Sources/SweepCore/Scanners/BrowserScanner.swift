@@ -17,6 +17,35 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chrome-Web-Store extension IDs known to have shipped malicious versions in
+    // the December 2024 Cyberhaven-style supply-chain compromise (publisher accounts
+    // phished, then a poisoned build pushed via auto-update). Even after the vendors
+    // rolled back, users who never restarted Chrome or who disabled auto-update may
+    // still have the compromised version cached on disk — hence blocking by ID here.
+    // Sources: Cyberhaven 2024-12-27 advisory; Secure Annex follow-up publication.
+    private let compromisedExtensionIds: [String: String] = [
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (v24.10.4)",
+        "eanofdhdfbcalhflpbdipkjjkoimeeod": "Internxt VPN",
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "VPNCity",
+        "kkodiihpgodmdankclfibbiphjkfdenh": "Bookmark Favicon Changer",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "Uvoice",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "Search Copilot AI Assistant",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Reader Mode",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "ParrotTalks",
+        "cedgndijpacnfbdggppddacngjfdkaca": "Primus",
+        "hihblcmlaaademjlakdpicchbjnnnkbo": "Tackker (online keylogger tool)",
+        "gbdjcgalliefpinpmggefbloehmmknca": "AI Assistant - ChatGPT & Gemini",
+        "cplhlgabfijoiabgkigdafklbhhdkahj": "Bard AI Chat",
+        "afkoofjocpbclhnldmmaphappihehpma": "Wayin AI",
+        "jiofmdifioeejeilfkpegipdjiopiekl": "Hi AI",
+        "clcbhoeoedjabnmcfneadmmmemamljon": "Sort by Oldest",
+        "mkhaklhbhdijadffnolckcmpojpiajmo": "Rewards Search Automator",
+        "eaijffijbobmnonfhilihbejadplhddo": "Yesware — Sales Engagement Platform",
+        "bibjcjfmgapbfoljiojpipaooddpkpai": "Bookmark Sidebar",
+        "fbdaejgpjpnnhoglgmkoichmknhmfbop": "Vidnoz Flex – Video recorder & Video sharing",
+        "acmfnomgphggonodopogfbmkneeplgnh": "Reader Mode (variant)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -63,6 +92,15 @@ public final class BrowserScanner: Scanner {
         //    malicious marketplace extensions that steal cookies, keychains, and wallets.
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
+
+        // 5. Native Messaging Host manifests — a browser-side channel that lets an
+        //    extension launch and pipe stdio to any local binary. Stealers install
+        //    a host manifest here to keep a persistent local execution channel even
+        //    if the extension itself is removed or the browser is closed. Vendor
+        //    manifests are well-known (Google Keystone, 1Password, Grammarly, etc.);
+        //    anything else pointing at /tmp, ~/Library, or hidden dirs is suspect.
+        progress?.update("scanning Chrome Native Messaging Hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -142,6 +180,18 @@ public final class BrowserScanner: Scanner {
                       let extensions = try? fm.contentsOfDirectory(atPath: extPath) else { continue }
 
                 for extId in extensions {
+                    // Compromised-extension list takes precedence over the trusted list
+                    // in case Chrome ever ships a fake trust bit for a hijacked publisher.
+                    if let vendor = compromisedExtensionIds[extId] {
+                        findings.append(Finding(
+                            severity: .high, category: .keylogging,
+                            title: "\(browserName) extension flagged as part of Dec-2024 supply-chain compromise",
+                            detail: "Extension ID \(extId) (\(vendor)) shipped a poisoned build after the publisher account was phished — profile: \(profile)",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove and reinstall from the store only after confirming the vendor's advisory is closed: \(browserName) > Extensions"
+                        ))
+                        continue
+                    }
                     if trustedExtensionIds.contains(extId) { continue }
 
                     let dedupeKey = "\(browserName):\(extId)"
@@ -418,5 +468,126 @@ public final class BrowserScanner: Scanner {
         }
 
         return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+    }
+
+    // MARK: - Chrome / Chromium Native Messaging Hosts
+
+    // Well-known host names shipped by mainstream vendors. Anything else deserves a look.
+    private let trustedNativeHostNames: Set<String> = [
+        "com.google.chrome.remote_desktop", "com.google.chrome.remote_assistance",
+        "com.google.chrome.remote_webauthn", "com.google.chromewebrtcloghelper",
+        "com.google.keystone", "com.google.keystone.agent", "com.google.keystone.daemon",
+        "com.1password.1password", "com.1password.browser_support",
+        "com.lastpass.lpnativehelper", "com.bitwarden.browser",
+        "com.dashlane.dashlanephonefinder", "com.dashlane.desktop.chrome",
+        "com.grammarly.desktopintegrations",
+        "com.microsoft.autoupdate.helper", "com.microsoft.updates.native_messaging_host",
+        "com.mozilla.updater",
+        "com.thunderbird.thunderbird", "com.zoom.zoommeetings",
+        "com.docker.desktop.chromeextension",
+        "com.riotgames.riotclient", "org.chromium.chromoting",
+        "com.jetbrains.intellij", "com.jetbrains.toolbox",
+    ]
+
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // Search both system-wide and per-user host directories for every
+        // Chromium-family browser we already check for extensions in.
+        let hostDirs: [(dir: String, scope: String)] = [
+            // System scope
+            ("/Library/Google/Chrome/NativeMessagingHosts", "System / Chrome"),
+            ("/Library/Application Support/Chromium/NativeMessagingHosts", "System / Chromium"),
+            ("/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts", "System / Brave"),
+            ("/Library/Microsoft/Edge/NativeMessagingHosts", "System / Edge"),
+            ("/Library/Application Support/Mozilla/NativeMessagingHosts", "System / Firefox"),
+            // User scope
+            ("\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts", "User / Chrome"),
+            ("\(home)/Library/Application Support/Chromium/NativeMessagingHosts", "User / Chromium"),
+            ("\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts", "User / Brave"),
+            ("\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts", "User / Edge"),
+            ("\(home)/Library/Application Support/Mozilla/NativeMessagingHosts", "User / Firefox"),
+        ]
+
+        let fm = FileManager.default
+        for (dir, scope) in hostDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                let hostName = (manifest["name"] as? String) ?? entry.replacingOccurrences(of: ".json", with: "")
+                let execPath = (manifest["path"] as? String) ?? ""
+
+                // Trusted vendor manifest — skip.
+                if trustedNativeHostNames.contains(hostName) { continue }
+
+                // Highly-suspicious execution targets. Native Messaging Hosts run whatever
+                // "path" points to when the extension calls chrome.runtime.connectNative(),
+                // so a path in /tmp or a hidden directory is a direct code-execution channel.
+                let lowerPath = execPath.lowercased()
+                let isTempPath = lowerPath.hasPrefix("/tmp/") || lowerPath.hasPrefix("/private/tmp/") ||
+                                 lowerPath.hasPrefix("/var/tmp/")
+                let isHiddenPath = execPath.contains("/.") ||
+                                   execPath.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+                let isMissing = !execPath.isEmpty && !fm.fileExists(atPath: execPath)
+
+                if isTempPath || isHiddenPath {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Native Messaging Host targets suspicious path",
+                        detail: "\(scope) — host \"\(hostName)\" → \(execPath)" +
+                            (isTempPath ? " (temp dir)" : "") +
+                            (isHiddenPath ? " (hidden path)" : ""),
+                        path: manifestPath,
+                        remediation: "Delete this manifest and the referenced binary: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Manifest without an "allowed_origins" pin means any extension in the browser
+                // can invoke it — a common mistake in malicious hosts that want to run from
+                // multiple droppers under different IDs.
+                let allowedOrigins = manifest["allowed_origins"] as? [String] ?? []
+                let allowedExtensions = manifest["allowed_extensions"] as? [String] ?? []
+                if allowedOrigins.isEmpty && allowedExtensions.isEmpty {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Native Messaging Host has no allowed_origins / allowed_extensions",
+                        detail: "\(scope) — host \"\(hostName)\" can be invoked by ANY installed extension",
+                        path: manifestPath,
+                        remediation: "Remove this manifest if not expected: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Broken host — points at a binary that no longer exists. Often left over from
+                // an uninstalled tool, but sometimes an incomplete stealer install.
+                if isMissing {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Native Messaging Host references missing binary",
+                        detail: "\(scope) — host \"\(hostName)\" → \(execPath) (does not exist)",
+                        path: manifestPath,
+                        remediation: "Safe to remove if not expected: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Anything left is unknown vendor with a real binary — surface as MEDIUM so
+                // the user knows something can be launched into their browser process.
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Unknown Native Messaging Host installed",
+                    detail: "\(scope) — host \"\(hostName)\" → \(execPath). Not a mainstream vendor.",
+                    path: manifestPath,
+                    remediation: "Verify you installed this. Native Messaging Hosts run local binaries when extensions message them: rm \"\(manifestPath)\" to remove."
+                ))
+            }
+        }
     }
 }

@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking /etc/synthetic.conf")
+        scanSyntheticConf(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -654,6 +657,51 @@ public final class PersistenceScanner: Scanner {
                     }
                 }
             }
+        }
+    }
+
+    // MARK: - /etc/synthetic.conf
+
+    private func scanSyntheticConf(findings: inout [Finding], errors: inout [String]) {
+        // /etc/synthetic.conf is read by apfs.util at boot and creates synthetic empty
+        // directories or firmlinks at the root of the read-only system volume. It's the
+        // supported way to add a top-level dir on modern macOS — but it's also a stealth
+        // persistence surface because most users don't know it exists. Any entry that
+        // firmlinks a root-level name to a user-writable path (or /tmp) lets a non-privileged
+        // process backdoor system-looking directories, and rogue entries survive OS updates.
+        let path = "/etc/synthetic.conf"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        for (idx, rawLine) in content.split(separator: "\n").enumerated() {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+
+            // Format is TAB-separated: name [target]. Two fields = firmlink to target.
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: true)
+            let target = fields.count >= 2 ? String(fields[1]) : ""
+            let severity: Severity
+            let detail: String
+            if target.isEmpty {
+                // Just a synthetic empty directory — low signal on its own but worth reporting
+                // so the user can confirm they added it.
+                severity = .medium
+                detail = "Line \(idx + 1): creates root-level directory \"/\(fields.first ?? "?")\" at boot"
+            } else {
+                // Firmlink pointing at a user-writable or temp location is high-risk
+                let isRisky = target.hasPrefix("/private/tmp") || target.hasPrefix("/tmp") ||
+                              target.hasPrefix("/Users/") || target.hasPrefix("~")
+                severity = isRisky ? .high : .medium
+                detail = "Line \(idx + 1): firmlinks \"/\(fields.first ?? "?")\" → \(target)" +
+                    (isRisky ? " — target is user-writable" : "")
+            }
+
+            findings.append(Finding(
+                severity: severity, category: .persistence,
+                title: "Entry in /etc/synthetic.conf",
+                detail: detail,
+                path: path,
+                remediation: "Inspect and remove if unexpected: sudo nano \(path); reboot to apply"
+            ))
         }
     }
 

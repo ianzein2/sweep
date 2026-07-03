@@ -287,7 +287,13 @@ public final class DeepScanner: Scanner {
         let result = ShellRunner.run("/bin/ps", arguments: ["eww", "-o", "pid,command"], timeout: 5)
         guard result.success else { return }
 
+        // DYLD_INSERT_LIBRARIES is the classic injection vector, but stealers
+        // (Atomic, RustDoor 2024) increasingly abuse the *_PATH variants to force
+        // resolution against a malicious library shipped in the app bundle or /tmp.
         let dangerousEnvVars = ["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
+                                "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH",
+                                "DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH",
+                                "DYLD_PRINT_LIBRARIES", "DYLD_PRINT_TO_FILE",
                                 "CFNETWORK_DIAGNOSTICS", "MallocStackLogging"]
 
         let lines = result.stdout.split(separator: "\n")
