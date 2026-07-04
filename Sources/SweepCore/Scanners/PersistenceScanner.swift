@@ -96,13 +96,43 @@ public final class PersistenceScanner: Scanner {
         let label = plist["Label"] as? String ?? "unknown"
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
+        let programArguments = plist["ProgramArguments"] as? [String] ?? []
 
         // Get executable path
         var executablePath: String?
         if let program = plist["Program"] as? String {
             executablePath = program
-        } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
+        } else if let first = programArguments.first {
             executablePath = first
+        }
+
+        // 2024-2025: DYLD injection via launchd EnvironmentVariables. A legitimate Apple
+        // daemon never sets DYLD_INSERT_LIBRARIES; this is a persistent code-injection technique
+        // used by RustDoor and several stealer families.
+        if let envVars = plist["EnvironmentVariables"] as? [String: Any] {
+            let dyldKeys = ["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
+                            "DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH", "DYLD_ROOT_PATH"]
+            for key in dyldKeys where envVars[key] != nil {
+                let value = "\(envVars[key] ?? "")"
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Launchd plist sets \(key) — persistent dylib injection",
+                    detail: "Label: \(label), \(key)=\(String(value.prefix(120)))",
+                    path: path,
+                    remediation: "Verify this daemon is legitimate — \(key) in a launchd plist is a persistent code-injection technique"
+                ))
+                return
+            }
+        }
+
+        // Shell one-liner as the launchd program is a very common malware pattern
+        // (`sh -c 'curl … | sh'`, `bash -c '…base64 -d…'`). Flag before the signature checks so
+        // custom-labeled malware still trips this.
+        if let shellFinding = detectSuspiciousProgramArguments(
+            arguments: programArguments, label: label, plistPath: path
+        ) {
+            findings.append(shellFinding)
+            return
         }
 
         // Check against known spyware labels
@@ -191,6 +221,56 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Orphaned plist — safe to remove if not needed"
             ))
         }
+    }
+
+    // MARK: - Suspicious ProgramArguments
+
+    /// A launchd plist that invokes a shell interpreter with an inline command is a strong
+    /// malware indicator. Legitimate daemons ship a binary; using `sh -c 'curl X | sh'` in
+    /// ProgramArguments is what stealers and ClickFix loaders do.
+    private func detectSuspiciousProgramArguments(
+        arguments: [String], label: String, plistPath: String
+    ) -> Finding? {
+        // Whitelist Apple's legitimate periodic wrappers.
+        if label.hasPrefix("com.apple.") { return nil }
+        // Need at least an interpreter + `-c` + payload.
+        guard arguments.count >= 3 else { return nil }
+
+        let interp = URL(fileURLWithPath: arguments[0]).lastPathComponent
+        let shellNames: Set<String> = ["sh", "bash", "zsh", "dash", "ksh", "python", "python3",
+                                      "perl", "ruby", "osascript"]
+        guard shellNames.contains(interp) else { return nil }
+
+        // Second argument is typically `-c` for shells or `-e`/`-c` for interpreters.
+        let usesInlineFlag = arguments.dropFirst().contains(where: {
+            $0 == "-c" || $0 == "-e"
+        })
+        guard usesInlineFlag else { return nil }
+
+        // Join the payload and look for canonical malicious idioms.
+        let payload = arguments.dropFirst(2).joined(separator: " ").lowercased()
+        let signals: [(pattern: String, why: String)] = [
+            ("curl", "downloads via curl"),
+            ("wget", "downloads via wget"),
+            ("base64 -d", "base64-decodes payload"),
+            ("base64 --decode", "base64-decodes payload"),
+            ("| sh", "pipes to shell"),
+            ("| bash", "pipes to shell"),
+            ("eval ", "runs eval on dynamic content"),
+            ("osascript", "invokes AppleScript"),
+            ("pbpaste", "reads clipboard (ClickFix pattern)"),
+            ("do shell script", "AppleScript shell execution"),
+        ]
+        let matched = signals.first { payload.contains($0.pattern) }
+        guard let hit = matched else { return nil }
+
+        return Finding(
+            severity: .high, category: .persistence,
+            title: "Launchd plist runs inline shell command",
+            detail: "Label: \(label), \(interp) -c: \(String(payload.prefix(140))) — \(hit.why)",
+            path: plistPath,
+            remediation: "Inspect and remove if not expected: sudo rm \"\(plistPath)\""
+        )
     }
 
     // MARK: - Legacy StartupItems

@@ -434,6 +434,217 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 DPRK / "Contagious Interview" family (Ferret cluster + NimDoor + BeaverTail)
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "frostyferret", "chromeupdate", "ChromeUpdateAlert"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.frostyferret",
+                "~/Library/Application Support/com.google.chrome.update",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["FriendlyFerret", "friendlyferret", "MediaConverter"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.friendlyferret"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MultiFerret / FlexibleFerret",
+            processNames: ["FlexibleFerret", "multiferret", "cameraaccess"],
+            bundleIdentifiers: ["com.apple.cameraaccess"],
+            filePaths: ["/private/tmp/.flexibleferret", "~/Library/Application Support/.cameraaccess"],
+            launchAgentLabels: ["com.apple.cameraaccess"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "installer_helper", "GoogleUpdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Application Support/.googleupdater",
+                "~/Library/LaunchAgents/com.google.updater.plist",
+            ],
+            launchAgentLabels: ["com.google.updater"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "car.node", "n2.js"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "browserpassreader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisibleferret",
+                "~/Library/Application Support/.browser_pass_reader",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024 BlueNoroff / Lazarus toolchain
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["RustDoor", "rustdoor", "zshrc-helper", "com.apple.gtd", "zshremover"],
+            bundleIdentifiers: ["com.apple.rustdoor"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "~/.zshrc_helper",
+            ],
+            launchAgentLabels: ["com.apple.gtd", "com.apple.rustdoor"]
+        ),
+        SpywareSignature(
+            name: "GateDoor",
+            processNames: ["GateDoor", "gatedoor", "com.apple.gd"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.gatedoor"],
+            launchAgentLabels: ["com.apple.gd"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZRat", "hzrat", "OpenVPNConnect_Helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.updater"]
+        ),
+        // 2025 stealers
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "MacUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigidstealer",
+            ],
+            launchAgentLabels: ["com.frigid.updater"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "com.odyssey.mac"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        SpywareSignature(
+            name: "Amos v2 / Amos-Ultra",
+            processNames: ["AMOS-Ultra", "amos_v2", "atomic-ultra", "am_updater"],
+            bundleIdentifiers: ["com.amos.ultra", "com.amos.v2"],
+            filePaths: [
+                "/private/tmp/.amos_ultra",
+                "~/Library/Application Support/.amos_v2",
+            ],
+            launchAgentLabels: ["com.amos.updater"]
+        ),
+        SpywareSignature(
+            name: "JockMomma",
+            processNames: ["JockMomma", "jockmomma", "swiftbelt"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.jockmomma"],
+            launchAgentLabels: []
+        ),
+        // Adware — very common on user Macs, often mistaken for legitimate software
+        SpywareSignature(
+            name: "Adload",
+            processNames: [
+                "Adload", "adloadhelper", "MacKeeper", "AwesomeSearch",
+                "SearchDefault", "MyShopcoupon", "MyCouponsmart",
+                "PDFConverterSearch", "DominantPartition",
+            ],
+            bundleIdentifiers: [
+                "com.MyCouponsmart", "com.MyShopcoupon",
+                "com.SearchDefault", "com.DominantPartition",
+                "com.pcv.hlpramc", "com.pcv.hlprbldr",
+            ],
+            filePaths: [
+                "/Library/Application Support/com.apple.TCC/AdloadHelper",
+                "~/Library/Application Support/.AdloadHelper",
+            ],
+            launchAgentLabels: [
+                "com.MyCouponsmart.agent", "com.pcv.hlpramcupd",
+                "com.pcv.hlprbldrd",
+            ]
+        ),
+        SpywareSignature(
+            name: "Genieo / InstallMac",
+            processNames: [
+                "Genieo", "genieo", "InstallMac", "OmniboxHelper",
+                "OmniboxSearch", "SearchProtect", "GenieoHelper",
+            ],
+            bundleIdentifiers: ["com.genieo.installmac", "com.genieoinnovation.macextension"],
+            filePaths: [
+                "~/Library/Application Support/Genieo",
+                "/Library/Application Support/Genieo",
+                "~/Library/LaunchAgents/com.genieoinnovation.macextension.plist",
+            ],
+            launchAgentLabels: [
+                "com.genieoinnovation.macextension",
+                "com.genieoinnovation.macextension.plist",
+                "com.Genieo.completer.update",
+            ]
+        ),
+        SpywareSignature(
+            name: "OSX.Shlayer",
+            processNames: ["Shlayer", "shlayer", "MyDecryptor", "Player.dmg"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.shlayer",
+                "~/Library/Application Support/.Shlayer",
+            ],
+            launchAgentLabels: []
+        ),
+        // XPC / RMM / Remote access tools abused for MacOS attacks in 2024-2025
+        SpywareSignature(
+            name: "OSX.ZuRu",
+            processNames: ["ZuRu", "zuru", "libcrypto.2.dylib.zuru"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.zuru",
+                "~/Library/Application Support/.zuru",
+            ],
+            launchAgentLabels: ["com.apple.terminal.updater"]
+        ),
+        SpywareSignature(
+            name: "BundleBot / BackChannel",
+            processNames: ["BundleBot", "bundlebot", "backchannel", "BackChannelHelper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.bundlebot"],
+            launchAgentLabels: ["com.apple.backchannel"]
+        ),
+        SpywareSignature(
+            name: "PlushDaemon",
+            processNames: ["PlushDaemon", "plushdaemon", "plushd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.plushd",
+                "~/Library/Application Support/.plush",
+            ],
+            launchAgentLabels: ["com.apple.plushd"]
+        ),
+        SpywareSignature(
+            name: "KeySteal",
+            processNames: ["KeySteal", "keysteal", "kchelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.keysteal",
+                "~/Library/Application Support/.KeySteal",
+            ],
+            launchAgentLabels: ["com.apple.keysteal"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +661,18 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed in 2024-2025 campaigns
+        "com.apple.gtd",                 // RustDoor
+        "com.apple.gd",                  // GateDoor
+        "com.apple.rustdoor",
+        "com.apple.terminal.updater",    // ZuRu variants
+        "com.apple.backchannel",         // BundleBot
+        "com.apple.plushd",              // PlushDaemon
+        "com.apple.keysteal",
+        "com.apple.cameraaccess",        // FlexibleFerret
+        "com.apple.macshare.plist",      // SpectralBlur
+        "com.google.updater",            // NimDoor masquerade
+        "com.google.chrome.update",      // FrostyFerret masquerade
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

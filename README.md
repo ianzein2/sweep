@@ -81,7 +81,7 @@ sudo sweep --json
 | **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, Time Machine exclusions, ClickFix shell-history traces, staged `.pkg`/`.dmg` installers, fake AppleScript password prompts |
 | **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).

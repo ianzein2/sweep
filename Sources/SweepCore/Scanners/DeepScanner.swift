@@ -37,6 +37,24 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check Time Machine exclusions on suspicious paths — malware asks tmutil to
+        //    exclude its install directory so it doesn't get restored/backed up.
+        progress?.update("checking Time Machine exclusions")
+        scanTimeMachineExclusions(findings: &findings, errors: &errors)
+
+        // 7. Look for ClickFix / clipboard-run traces in shell history — the dominant
+        //    initial-access vector in 2024-2025 macOS campaigns.
+        progress?.update("checking shell history for ClickFix indicators")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
+        // 8. Look for staged pkg installers dropped by loaders — a common stealer intermediate.
+        progress?.update("checking for staged installers")
+        scanStagedInstallers(findings: &findings, errors: &errors)
+
+        // 9. Look for AppleScript files that mimic macOS password prompts.
+        progress?.update("checking for fake password prompt scripts")
+        scanFakePasswordPrompts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +295,196 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Time Machine Exclusions
+
+    /// Malware calls `tmutil addexclusion` on its install directory so backups don't preserve
+    /// evidence of the compromise. Real users normally exclude large caches (node_modules,
+    /// virtual machines, Xcode DerivedData) — anything hidden or under /tmp is suspect.
+    private func scanTimeMachineExclusions(findings: inout [Finding], errors: inout [String]) {
+        // Sticky Time Machine exclusions live in Spotlight metadata under the
+        // com_apple_backup_excludeItem attribute — mdfind is the fastest way to enumerate them.
+        let candidateRoots = [
+            "/tmp", "/private/tmp", "/var/tmp",
+            "\(ShellRunner.realUserHome)/Library/Application Support",
+            "\(ShellRunner.realUserHome)/.local",
+        ]
+
+        for root in candidateRoots {
+            let cmd = "mdfind -onlyin \"\(root)\" 'com_apple_backup_excludeItem == *' 2>/dev/null | head -20"
+            let res = ShellRunner.run("/bin/sh", arguments: ["-c", cmd], timeout: 5)
+            guard res.success && !res.stdout.isEmpty else { continue }
+
+            for line in res.stdout.split(separator: "\n") {
+                let path = String(line).trimmingCharacters(in: .whitespaces)
+                if path.isEmpty { continue }
+
+                let last = URL(fileURLWithPath: path).lastPathComponent
+                let hasHiddenComponent = path.split(separator: "/").contains { $0.hasPrefix(".") }
+                let inTemp = path.hasPrefix("/tmp") || path.hasPrefix("/private/tmp") ||
+                             path.hasPrefix("/var/tmp")
+
+                // Skip known legitimate cache directories.
+                let legitCaches = ["node_modules", "DerivedData", ".build", "target",
+                                   "Caches", ".cache", "venv", ".venv", ".Trash",
+                                   "vmware", "parallels", "Docker.raw"]
+                if legitCaches.contains(where: { last.contains($0) || path.contains("/\($0)/") }) {
+                    continue
+                }
+
+                if hasHiddenComponent || inTemp {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "Backup-excluded file in hidden or temp location",
+                        detail: "Time Machine will skip this path — malware excludes its install directory to avoid restoration",
+                        path: path,
+                        remediation: "Remove exclusion after inspection: sudo tmutil removeexclusion \"\(path)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - ClickFix / clipboard-run detection
+
+    /// ClickFix (also called FakeCAPTCHA) works by tricking the user into pasting a shell
+    /// command copied by a malicious webpage. The command usually chains `curl … | sh`,
+    /// pipes `pbpaste`, or decodes base64. Traces linger in `.zsh_history` / `.bash_history`.
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let histFiles = [
+            "\(home)/.zsh_history", "\(home)/.bash_history",
+            "\(home)/.history", "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Every hit is a HIGH — these idioms are essentially only used by malicious loaders.
+        let clickFixPatterns: [(String, String)] = [
+            ("pbpaste | sh", "shell reading from clipboard"),
+            ("pbpaste|sh", "shell reading from clipboard"),
+            ("pbpaste | bash", "shell reading from clipboard"),
+            ("pbpaste|bash", "shell reading from clipboard"),
+            ("echo -n \"\" | pbcopy", "clipboard scrubbed after paste (ClickFix cleanup)"),
+            ("curl -s -o /tmp/", "silent curl into /tmp"),
+            ("| base64 -d | sh", "base64-decoded shell payload"),
+            ("| base64 --decode | sh", "base64-decoded shell payload"),
+            ("osascript -e 'do shell script", "AppleScript one-liner running shell"),
+            ("chmod +x /tmp/", "chmod on freshly downloaded /tmp binary"),
+        ]
+
+        for histFile in histFiles {
+            guard let content = try? String(contentsOfFile: histFile, encoding: .utf8) else { continue }
+            let lower = content.lowercased()
+            let fileName = URL(fileURLWithPath: histFile).lastPathComponent
+
+            var hits: [(pattern: String, why: String)] = []
+            for (pattern, why) in clickFixPatterns where lower.contains(pattern.lowercased()) {
+                hits.append((pattern, why))
+            }
+            if hits.isEmpty { continue }
+
+            // Deduplicate by pattern.
+            let uniqueHits = Array(Set(hits.map { $0.pattern }))
+            let firstWhy = hits.first?.why ?? ""
+
+            findings.append(Finding(
+                severity: .high, category: .suspiciousProcess,
+                title: "Shell history contains ClickFix-style command",
+                detail: "In \(fileName): \(firstWhy) — matched \(uniqueHits.count) pattern(s). Attacker got you to paste a command from a fake CAPTCHA or error dialog.",
+                path: histFile,
+                remediation: "Open \(histFile), review recent entries, rotate any secrets typed after the paste, and scan for follow-on malware."
+            ))
+        }
+    }
+
+    // MARK: - Staged installers
+
+    /// A signed `.pkg` sitting in /tmp is a stealer's second stage — it was downloaded and
+    /// left there for the user to double-click. Legitimate software never installs from /tmp.
+    private func scanStagedInstallers(findings: inout [Finding], errors: inout [String]) {
+        let stagingDirs = ["/tmp", "/private/tmp", "/var/tmp",
+                           "\(ShellRunner.realUserHome)/Downloads"]
+        let fm = FileManager.default
+
+        for dir in stagingDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            let isDownloads = dir.hasSuffix("/Downloads")
+
+            for entry in contents {
+                let ext = URL(fileURLWithPath: entry).pathExtension.lowercased()
+                guard ["pkg", "dmg", "mpkg"].contains(ext) else { continue }
+                let filePath = "\(dir)/\(entry)"
+
+                guard let attrs = try? fm.attributesOfItem(atPath: filePath),
+                      let modDate = attrs[.modificationDate] as? Date else { continue }
+                // Only flag recent drops — old files in Downloads are the user's own.
+                let ageSeconds = -modDate.timeIntervalSinceNow
+                if isDownloads && ageSeconds > 86400 * 3 { continue }
+
+                let severity: Severity = isDownloads ? .low : .high
+                let where_ = isDownloads ? "Downloads" : "system temp directory"
+
+                findings.append(Finding(
+                    severity: severity, category: .suspiciousFile,
+                    title: "\(ext.uppercased()) installer staged in \(where_)",
+                    detail: "File: \(entry) — installers dropped in /tmp are almost always malicious second-stage payloads",
+                    path: filePath,
+                    remediation: isDownloads
+                        ? "Verify you downloaded this and know the source"
+                        : "Do not run. Inspect origin, then remove: sudo rm \"\(filePath)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Fake password-prompt AppleScripts
+
+    /// A canonical AMOS / Poseidon / Cthulhu step: drop a `.scpt` into /tmp that prompts the
+    /// user with a fake macOS system dialog asking for their login password, then pipe the
+    /// answer to `sudo -S`. We look for AppleScripts under /tmp that contain both a password
+    /// prompt and a shell-exec instruction.
+    private func scanFakePasswordPrompts(findings: inout [Finding], errors: inout [String]) {
+        let stagingDirs = ["/tmp", "/private/tmp", "/var/tmp"]
+        let fm = FileManager.default
+
+        for dir in stagingDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in contents {
+                let ext = URL(fileURLWithPath: entry).pathExtension.lowercased()
+                guard ["scpt", "applescript", "osascript"].contains(ext) else { continue }
+                let filePath = "\(dir)/\(entry)"
+
+                // `.scpt` is compiled — read as raw text; strings we're after are plain ASCII.
+                guard let raw = fm.contents(atPath: filePath),
+                      let text = String(data: raw, encoding: .utf8)
+                            ?? String(data: raw, encoding: .isoLatin1) else { continue }
+                let lower = text.lowercased()
+
+                let promptsForPassword =
+                    lower.contains("hidden answer") ||   // AppleScript flag for password fields
+                    lower.contains("with hidden") ||
+                    lower.contains("password")
+                let runsShell =
+                    lower.contains("do shell script") ||
+                    lower.contains("sudo -s") ||
+                    lower.contains("| sudo -s") ||
+                    lower.contains("| sudo ")
+
+                if promptsForPassword && runsShell {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "AppleScript in /tmp mimics macOS password prompt",
+                        detail: "File \(entry) both prompts for a password and executes a shell — classic AMOS-style credential theft",
+                        path: filePath,
+                        remediation: "Do not run. Change your login password, then: sudo rm \"\(filePath)\""
+                    ))
+                }
+            }
         }
     }
 
