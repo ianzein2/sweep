@@ -434,6 +434,182 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // ─── 2025-2026 stealer / RAT families ───
+        // PamStealer (Jamf Threat Labs, July 2026) — Rust infostealer masquerading as the Maccy
+        // clipboard-manager, abuses the PAM API to validate stolen passwords before exfiltration.
+        // Persists via SMAppService + a legacy login-item helper that impersonates System Settings.
+        SpywareSignature(
+            name: "PamStealer",
+            processNames: ["Maccy", "MaccyHelper", "SystemSettingsHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/com.apple.finder.core",
+                "~/Library/Caches/com.apple.finder.core",
+                "/tmp/SystemSettings",
+            ],
+            launchAgentLabels: []
+        ),
+        // MacSync Stealer (Jamf/CloudSEK, Dec 2025) — code-signed, notarized Swift dropper
+        // distributed via ClickFix + malvertising. Drops a "UserSyncWorker" LaunchAgent that
+        // shells out to /tmp/runner every few minutes.
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["UserSyncWorker", "usersyncworker", "MacSync"],
+            bundleIdentifiers: ["com.usersync.worker", "com.macsync.installer"],
+            filePaths: [
+                "~/Library/Logs/UserSyncWorker.log",
+                "~/Library/Application Support/UserSyncWorker",
+                "/tmp/runner",
+                "/tmp/osalogging.zip",
+            ],
+            launchAgentLabels: [
+                "com.usersync.worker",
+                "com.apple.softwareupdate.plist",
+            ]
+        ),
+        // SHub Reaper (SentinelOne, May 2026) — masquerades as Google/Apple/Microsoft updaters,
+        // creates a fake GoogleUpdate.app and a com.google.keystone.agent LaunchAgent that runs every 60s.
+        SpywareSignature(
+            name: "SHub Reaper",
+            processNames: ["GoogleUpdate", "GoogleUpdateHelper", "shub", "Reaper"],
+            bundleIdentifiers: ["com.google.keystone.agent.helper"],
+            filePaths: [
+                "~/Library/Application Support/Google/GoogleUpdate.app",
+                "/tmp/shub_split.sh",
+                "/tmp/shub",
+            ],
+            launchAgentLabels: [
+                "com.google.keystone.agent",
+                "com.google.keystone.xpcservice",
+            ]
+        ),
+        // FlexibleFerret (SentinelOne / Jamf, Feb 2025) — DPRK-aligned "Contagious Interview" family.
+        // Ships as InstallerAlert.app + versus.app with a "zoom" binary and com.zoom.plist LaunchAgent
+        // pointing at /private/var/tmp/logd.
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["versus", "InstallerAlert", "zoom", "logd", "FROSTYFERRET_UI", "FRIENDLYFERRET_SECD"],
+            bundleIdentifiers: [
+                "com.zoomus.installer",
+                "com.installeralert.app",
+                "com.versus.app",
+            ],
+            filePaths: [
+                "/var/tmp/macpatch.sh",
+                "/var/tmp/CDrivers.zip",
+                "/var/tmp/drivfixer.sh",
+                "/private/var/tmp/logd",
+                "/tmp/InstallerAlert.app",
+                "/tmp/versus.app",
+            ],
+            launchAgentLabels: [
+                "com.zoom.plist",
+                "com.zoom.zoom",
+                "com.apple.audio.driver",
+            ]
+        ),
+        // RustDoor (Bitdefender / Unit 42, 2024-2025) — Rust backdoor posing as a Visual Studio /
+        // dev-tools update, favoured by BlueNoroff for crypto-industry targeting.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "VisualStudioUpdate", "vsupdate", "zshrc_helper"],
+            bundleIdentifiers: [
+                "com.visualstudio.updater",
+                "com.apple.rustdoor",
+            ],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/private/tmp/.vsupdate",
+                "~/.zshrc_helper",
+            ],
+            launchAgentLabels: [
+                "com.apple.systemupdate.rust",
+                "com.visualstudio.updater",
+            ]
+        ),
+        // Koi Stealer for macOS (Unit 42, 2025) — Contagious Interview payload paired with RustDoor,
+        // gathers wallet + browser + Keychain data in two stages.
+        SpywareSignature(
+            name: "Koi Stealer",
+            processNames: ["koi", "KoiStealer", "koistealer", "VisualStudio"],
+            bundleIdentifiers: ["com.visualstudio.helper", "com.koi.stealer"],
+            filePaths: [
+                "~/Library/Application Support/.koi",
+                "/private/tmp/.koi",
+                "/private/tmp/koistage2",
+            ],
+            launchAgentLabels: ["com.apple.visualstudio.updater"]
+        ),
+        // macOS.Gaslight (SecurityAffairs, 2025) — DPRK loader that leaves a decoy directory to
+        // waste analyst time; the real payload runs under com.apple.EdoneViewer.
+        SpywareSignature(
+            name: "macOS.Gaslight",
+            processNames: ["EdoneViewer", "edoneviewer"],
+            bundleIdentifiers: ["com.EdoneViewer"],
+            filePaths: [
+                "~/Library/Application Support/EdoneViewer",
+                "/private/var/tmp/.edonelog",
+            ],
+            launchAgentLabels: ["com.EdoneViewer.helper"]
+        ),
+        // GhostClaw / OpenClaw RAT (npm supply chain, March 2026) — installed by the malicious
+        // @openclaw-ai/openclawai package; drops a persistent helper in ~/.openclaw.
+        SpywareSignature(
+            name: "GhostClaw RAT",
+            processNames: ["ghostclaw", "openclaw", "openclawai", "clawhelper"],
+            bundleIdentifiers: ["com.openclaw.ai", "com.ghostclaw.agent"],
+            filePaths: [
+                "~/.openclaw",
+                "~/Library/Application Support/.openclaw",
+                "/tmp/openclawai",
+            ],
+            launchAgentLabels: ["com.openclaw.agent"]
+        ),
+        // WAVESHAPER / HYPERCALL (UNC1069 / Mandiant, 2025) — Golang loader + C++ daemon backdoor.
+        SpywareSignature(
+            name: "WAVESHAPER",
+            processNames: ["waveshaper", "WaveShaper", "com.apple.audio.waveshaper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/.waveshaper",
+                "/private/var/tmp/.waveshaper",
+            ],
+            launchAgentLabels: ["com.apple.audio.waveshaper"]
+        ),
+        SpywareSignature(
+            name: "HYPERCALL",
+            processNames: ["hypercall", "HyperCall"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hypercall",
+                "~/Library/Application Support/.hypercall",
+            ],
+            launchAgentLabels: []
+        ),
+        // PhantomRaven-linked payload (npm supply-chain, 2025) — 126 packages dropped a cross-platform
+        // stealer that stages to ~/Library/Application Support/.phantom on macOS.
+        SpywareSignature(
+            name: "PhantomRaven Stealer",
+            processNames: ["phantom", "phantomraven", "raven-agent"],
+            bundleIdentifiers: ["com.phantomraven.agent"],
+            filePaths: [
+                "~/Library/Application Support/.phantom",
+                "/tmp/.phantomraven",
+            ],
+            launchAgentLabels: ["com.phantomraven.agent"]
+        ),
+        // Fully / FullyUndetectable stealer (2024-2025) — sold on cybercrime forums as a
+        // "FUD" macOS grabber; leaves a launch agent under com.fully.grabber.
+        SpywareSignature(
+            name: "FullyUndetectable Stealer",
+            processNames: ["FullyGrabber", "fudstealer", "fud_agent"],
+            bundleIdentifiers: ["com.fully.grabber"],
+            filePaths: [
+                "~/Library/Application Support/.fudgrabber",
+                "/tmp/.fud",
+            ],
+            launchAgentLabels: ["com.fully.grabber"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +626,14 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2025-2026 additions — seen in DPRK Ferret / MacSync / PamStealer campaigns
+        "com.apple.finder.core",
+        "com.apple.audio.driver",
+        "com.apple.audio.waveshaper",
+        "com.apple.systemupdate.rust",
+        "com.apple.visualstudio.updater",
+        "com.apple.rustdoor",
+        "com.apple.EdoneViewer",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

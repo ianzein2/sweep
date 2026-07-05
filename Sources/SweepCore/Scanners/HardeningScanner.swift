@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking XProtect / MRT definitions")
+        checkXProtectFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkPrivateWiFiAddress(findings: &findings, errors: &errors)
+
+        progress?.update("checking Terminal secure keyboard entry")
+        checkTerminalSecureKeyboard(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment")
+        checkGatekeeperAssessment(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,153 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - XProtect / MRT Definitions Freshness
+
+    private func checkXProtectFreshness(findings: inout [Finding], errors: inout [String]) {
+        // XProtect (macOS's built-in AV definitions) and its remediator (MRT / XProtectRemediator)
+        // ship signatures for new families (AMOS, MacSync, Ferret, PamStealer, …) via Apple's
+        // background config-data channel. Stale definitions mean the built-in AV misses
+        // families that have been publicly documented for months.
+        let candidates: [(path: String, name: String)] = [
+            // Modern location (Ventura+)
+            ("/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist",
+             "XProtect definitions"),
+            ("/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist",
+             "XProtect bundle"),
+            // Remediator (kills known-bad binaries out of band)
+            ("/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/Info.plist",
+             "XProtect Remediator"),
+            // Legacy pre-Ventura fallback
+            ("/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist",
+             "XProtect definitions (legacy)"),
+        ]
+
+        let fm = FileManager.default
+        var mostRecent: Date?
+        var checkedAny = false
+
+        for (path, _) in candidates {
+            guard fm.fileExists(atPath: path),
+                  let attrs = try? fm.attributesOfItem(atPath: path),
+                  let mtime = attrs[.modificationDate] as? Date else { continue }
+            checkedAny = true
+            if mostRecent == nil || mtime > mostRecent! {
+                mostRecent = mtime
+            }
+        }
+
+        guard checkedAny, let latest = mostRecent else { return }
+
+        let ageDays = Int(-latest.timeIntervalSinceNow / 86400)
+        // Apple typically pushes XProtect updates every 1-2 weeks. >30d is a strong signal
+        // that config-data delivery is broken (network policy, hosts hijack, or paused updates).
+        if ageDays >= 90 {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "XProtect definitions are \(ageDays) days old",
+                detail: "Built-in macOS anti-malware signatures haven't updated in months — new families (MacSync, PamStealer, Ferret variants) won't be blocked",
+                path: nil,
+                remediation: "Run: sudo softwareupdate --background — and confirm /etc/hosts isn't blocking swscan.apple.com / gdmf.apple.com"
+            ))
+        } else if ageDays >= 30 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect definitions are \(ageDays) days old",
+                detail: "Apple normally pushes updates every 1-2 weeks. Older-than-30-day definitions miss recent stealer families",
+                path: nil,
+                remediation: "Run: sudo softwareupdate --background — then re-check"
+            ))
+        }
+    }
+
+    // MARK: - Private Wi-Fi Address (MAC Randomization)
+
+    private func checkPrivateWiFiAddress(findings: inout [Finding], errors: inout [String]) {
+        // macOS 14+ enables MAC randomization ("Private Wi-Fi Address") per-SSID.
+        // A disabled state exposes a stable device fingerprint that can be used to
+        // correlate the user across public networks. `airport -I` is deprecated, but
+        // system-profiler still reports the current interface's setting.
+        let result = ShellRunner.run("/usr/sbin/system_profiler",
+                                     arguments: ["SPAirPortDataType"], timeout: 10)
+        guard result.success else { return }
+
+        // The block that matters looks like:
+        //   Current Network Information:
+        //     "SSID":
+        //       ...
+        //       MAC Address Type: Random   <-- or "Fixed" / "Off"
+        let out = result.stdout
+        guard out.contains("MAC Address Type") else { return }
+
+        let lines = out.split(separator: "\n").map { String($0) }
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("MAC Address Type:") else { continue }
+            let value = trimmed
+                .replacingOccurrences(of: "MAC Address Type:", with: "")
+                .trimmingCharacters(in: .whitespaces)
+                .lowercased()
+
+            if value == "fixed" || value == "off" || value == "hardware" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Private Wi-Fi Address is disabled on the current network",
+                    detail: "The real hardware MAC is broadcast — trivially trackable across public Wi-Fi",
+                    path: nil,
+                    remediation: "Enable per-network: System Settings > Wi-Fi > (network) > Details > Private Wi-Fi Address"
+                ))
+            }
+            return  // only report on the current network
+        }
+    }
+
+    // MARK: - Terminal Secure Keyboard Entry
+
+    private func checkTerminalSecureKeyboard(findings: inout [Finding], errors: inout [String]) {
+        // Terminal.app's "Secure Keyboard Entry" mode blocks other processes (including keyloggers
+        // and event-tap-based spyware) from reading key events while the terminal has focus.
+        // It's off by default. Users who type SSH passphrases, sudo passwords, or crypto secrets
+        // into Terminal benefit meaningfully from enabling it.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry"
+        ], timeout: 5)
+
+        // A missing key or a "0" both mean disabled. If the user isn't a Terminal user at all,
+        // the key is missing and we still surface a LOW because the recommendation is universal.
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isEnabled = result.success && raw == "1"
+        if !isEnabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Terminal Secure Keyboard Entry is off",
+                detail: "Other processes on the Mac can observe keys typed into Terminal — including sudo passwords, SSH passphrases, and API tokens",
+                path: nil,
+                remediation: "Enable: Terminal menu > Secure Keyboard Entry (or: defaults write com.apple.Terminal SecureKeyboardEntry -bool true)"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper Assessment
+
+    private func checkGatekeeperAssessment(findings: inout [Finding], errors: inout [String]) {
+        // Even when Gatekeeper "shows" as enabled in System Settings, `spctl --status` may report
+        // "assessments disabled" if a user (or malware) ran `sudo spctl --master-disable`.
+        // A recent ClickFix trend is to instruct the victim to run exactly that command so the
+        // second-stage payload can install without prompts.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        guard result.success else { return }
+        let out = result.stdout.lowercased()
+        if out.contains("assessments disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper app assessment is disabled",
+                detail: "spctl reports assessments disabled — unsigned or unnotarized apps will run without a warning. Recent ClickFix campaigns instruct victims to disable this",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --master-enable"
+            ))
         }
     }
 
