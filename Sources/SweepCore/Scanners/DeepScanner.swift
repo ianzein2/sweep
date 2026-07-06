@@ -37,6 +37,18 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check for quarantine-attribute stripping on recently downloaded binaries
+        progress?.update("checking Gatekeeper quarantine tampering")
+        scanQuarantineTampering(findings: &findings, errors: &errors)
+
+        // 7. Check for suspicious LSQuarantine metadata (recently downloaded binaries)
+        progress?.update("checking sudo credential caching")
+        scanSudoCredentialCaching(findings: &findings, errors: &errors)
+
+        // 8. Check for AppleScript / osascript persistence artifacts
+        progress?.update("checking AppleScript history")
+        scanAppleScriptHistory(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -306,6 +318,169 @@ public final class DeepScanner: Scanner {
                         detail: "PID \(pid) — this environment variable enables runtime code injection",
                         path: nil,
                         remediation: "Investigate: ps eww \(pid) — then kill if not expected"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Gatekeeper Quarantine Tampering
+
+    private func scanQuarantineTampering(findings: inout [Finding], errors: inout [String]) {
+        // Every file downloaded via a browser gets the com.apple.quarantine xattr; Gatekeeper
+        // reads that to decide whether to prompt on first launch. A common attacker technique
+        // (used by Atomic Stealer, RustDoor droppers, and "how to bypass Gatekeeper" instructions
+        // handed to victims) is: `xattr -d com.apple.quarantine ~/Downloads/App.app`.
+        //
+        // We flag executables in Downloads / Desktop that (a) look like they were downloaded and
+        // (b) have had their quarantine attribute stripped. Presence of the attribute is normal
+        // and expected; ABSENCE on a downloaded binary is the anomaly.
+        let home = ShellRunner.realUserHome
+        let scanDirs = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+        ]
+        let fm = FileManager.default
+
+        for dir in scanDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for file in contents.prefix(50) {  // cap per-directory workload
+                if file.hasPrefix(".") { continue }
+                let filePath = "\(dir)/\(file)"
+
+                // Only care about executables and app bundles — .zip/.dmg auto-clear on unarchive
+                let isApp = file.hasSuffix(".app")
+                let isBinary: Bool = {
+                    guard !isApp,
+                          let attrs = try? fm.attributesOfItem(atPath: filePath),
+                          let perms = attrs[.posixPermissions] as? Int else { return false }
+                    return (perms & 0o111) != 0
+                }()
+                guard isApp || isBinary else { continue }
+
+                // Check LSQuarantine metadata — the Spotlight kMDItemWhereFroms says "downloaded"
+                // even if the xattr was stripped. If we can prove it was downloaded AND has no
+                // quarantine xattr, that's tampering.
+                let whereFromResult = ShellRunner.run("/usr/bin/mdls",
+                                                     arguments: ["-name", "kMDItemWhereFroms", filePath], timeout: 3)
+                let looksDownloaded = whereFromResult.success &&
+                    whereFromResult.stdout.contains("http")
+
+                guard looksDownloaded else { continue }
+
+                let xattrResult = ShellRunner.run("/usr/bin/xattr", arguments: [filePath], timeout: 3)
+                let hasQuarantine = xattrResult.success &&
+                    xattrResult.stdout.contains("com.apple.quarantine")
+
+                if !hasQuarantine {
+                    findings.append(Finding(
+                        severity: .medium, category: .systemIntegrity,
+                        title: "Downloaded file has Gatekeeper quarantine stripped",
+                        detail: "File: \(file) — was downloaded from the web but quarantine attribute removed. Attackers instruct victims to run `xattr -d com.apple.quarantine` to bypass Gatekeeper warnings.",
+                        path: filePath,
+                        remediation: "Verify you trust the source. If not: rm \"\(filePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Sudo Credential Caching
+
+    private func scanSudoCredentialCaching(findings: inout [Finding], errors: inout [String]) {
+        // The sudoers directive `Defaults timestamp_timeout=-1` disables the sudo password-cache
+        // expiration, so once you sudo once, sudo stays authenticated forever. Attackers set this
+        // via /etc/sudoers.d/ so their followup commands don't prompt.
+        // Also flag `Defaults tty_tickets` being off (shared tty tickets across sessions).
+        let sudoersMain = "/etc/sudoers"
+        var allPaths = [sudoersMain]
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                allPaths.append("/etc/sudoers.d/\(entry)")
+            }
+        }
+
+        for path in allPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("#") { continue }
+
+                // timestamp_timeout=-1 disables sudo password caching timeout entirely
+                if trimmed.contains("timestamp_timeout=-1") {
+                    findings.append(Finding(
+                        severity: .high, category: .systemIntegrity,
+                        title: "sudo password cache never expires",
+                        detail: "\(URL(fileURLWithPath: path).lastPathComponent): \(trimmed) — after one sudo, no re-prompt for the session's lifetime",
+                        path: path,
+                        remediation: "Remove or change to a positive number: sudo visudo -f \(path)"
+                    ))
+                }
+                // !tty_tickets removes per-terminal isolation of the sudo timestamp
+                if trimmed.contains("!tty_tickets") ||
+                   (trimmed.contains("tty_tickets") && trimmed.contains("=false")) {
+                    findings.append(Finding(
+                        severity: .medium, category: .systemIntegrity,
+                        title: "sudo tty_tickets disabled",
+                        detail: "\(URL(fileURLWithPath: path).lastPathComponent): \(trimmed) — a sudo timestamp in one terminal grants sudo in every terminal",
+                        path: path,
+                        remediation: "Remove this line: sudo visudo -f \(path)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - AppleScript / osascript Persistence
+
+    private func scanAppleScriptHistory(findings: inout [Finding], errors: inout [String]) {
+        // Both stalkerware and infostealers pull off the "trojan AppleScript" trick: drop a .scpt
+        // into ~/Library/Scripts/ or /Library/Scripts/, then have a launch agent invoke it via
+        // osascript. XCSSET and Atomic Stealer both do this.
+        // We flag any .scpt whose contents mention shell exec, curl/wget, base64, or dangerous
+        // keychain/keychain-item access.
+        let home = ShellRunner.realUserHome
+        let scriptDirs = [
+            "\(home)/Library/Scripts",
+            "/Library/Scripts",
+            "\(home)/Library/Application Scripts",
+        ]
+        let fm = FileManager.default
+
+        let suspiciousInScript = [
+            "do shell script",           // AppleScript → shell — infostealers use this constantly
+            "curl -s",                    // silent download
+            "curl -o",                    // download-to-file
+            "wget",                       // ditto
+            "base64 --decode",           // hidden payload
+            "keychain-item",             // reading keychain
+            "security find-generic",     // keychain enumeration
+            "sudo -A",                    // askpass sudo (used to trick user via dialog)
+            "osascript -e",              // nested osascript exec
+        ]
+
+        for dir in scriptDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".scpt") || entry.hasSuffix(".applescript") {
+                let path = "\(dir)/\(entry)"
+                // .scpt files are compiled AppleScript — read them as raw bytes and grep, since
+                // the compiled form preserves the source strings inline.
+                guard let data = fm.contents(atPath: path),
+                      let text = String(data: data, encoding: .utf8) ??
+                                 String(data: data, encoding: .macOSRoman) else { continue }
+
+                let hits = suspiciousInScript.filter { text.lowercased().contains($0) }
+                if !hits.isEmpty {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "AppleScript with shell/network capabilities",
+                        detail: "\(entry) contains: \(hits.joined(separator: ", ")) — verify this script's origin",
+                        path: path,
+                        remediation: "Inspect: osadecompile \"\(path)\" (or open in Script Editor)"
                     ))
                 }
             }

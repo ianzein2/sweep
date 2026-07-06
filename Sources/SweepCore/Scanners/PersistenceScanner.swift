@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions")
+        scanFolderActions(findings: &findings, errors: &errors)
+
+        progress?.update("checking screen saver bundles")
+        scanScreenSaverBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking custom URL scheme handlers")
+        scanURLSchemeHandlers(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine exclusions")
+        scanTimeMachineExclusions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +687,230 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Folder Actions (AppleScript persistence)
+
+    private func scanFolderActions(findings: inout [Finding], errors: inout [String]) {
+        // Folder Actions attach an AppleScript to a folder — anything added/removed from the
+        // folder triggers the script. Attackers use this for stealth persistence: drop a script
+        // that runs when the Downloads folder or Desktop changes.
+        // The wiring lives in ~/Library/Preferences/com.apple.FolderActionsDispatcher.plist
+        // and the scripts themselves in ~/Library/Scripts/Folder Action Scripts/.
+        let home = ShellRunner.realUserHome
+        let plistPath = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            // Also check for any scripts sitting in the folder-actions directory even without
+            // active wiring — a common state for dormant persistence waiting to be activated.
+            let scriptDir = "\(home)/Library/Scripts/Folder Action Scripts"
+            if let scripts = try? FileManager.default.contentsOfDirectory(atPath: scriptDir),
+               !scripts.filter({ !$0.hasPrefix(".") }).isEmpty {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Folder Action scripts installed but not wired",
+                    detail: "\(scripts.count) script(s) in Folder Action Scripts directory — dormant AppleScripts a folder-attach can activate",
+                    path: scriptDir,
+                    remediation: "Inspect each script: ls \"\(scriptDir)\""
+                ))
+            }
+            return
+        }
+
+        // Any wired-up folder action is a persistence vector — report each with the folder and script.
+        if let folderActions = plist["FolderActions"] as? [[String: Any]] {
+            for action in folderActions {
+                let folder = action["PathAlias"] as? String ??
+                             action["Path"] as? String ??
+                             "unknown folder"
+                let scripts = (action["Scripts"] as? [[String: Any]]) ?? []
+                let scriptNames = scripts.compactMap { $0["ScriptName"] as? String }
+                let scriptPreview = scriptNames.prefix(3).joined(separator: ", ")
+
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script attached to \(URL(fileURLWithPath: folder).lastPathComponent)",
+                    detail: "Folder: \(folder), Scripts: \(scriptPreview.isEmpty ? "(unknown)" : scriptPreview) — runs whenever the folder contents change",
+                    path: plistPath,
+                    remediation: "Review: /System/Library/CoreServices/Applications/Folder\\ Actions\\ Setup.app — remove entries you did not add"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Screen Saver Bundles
+
+    private func scanScreenSaverBundles(findings: inout [Finding], errors: inout [String]) {
+        // Third-party .saver bundles run in the loginwindow context when the screensaver activates.
+        // They're a well-known persistence vector — Airyx and older OSX/CoinTicker used this.
+        // A .saver is really a bundle that can execute arbitrary code via a screen-saver plugin.
+        let home = ShellRunner.realUserHome
+        let saverDirs = [
+            "\(home)/Library/Screen Savers",
+            "/Library/Screen Savers",
+        ]
+        let fm = FileManager.default
+
+        for dir in saverDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".saver") {
+                let saverPath = "\(dir)/\(entry)"
+
+                // Skip Apple's own — the /System/Library equivalents are what ship with macOS.
+                // A .saver under /Library/Screen Savers with an Apple identifier is more suspicious
+                // than under /System/, so treat presence as noteworthy.
+                let signed = checkIsSigned(path: saverPath)
+
+                // Check name against known spyware
+                let matchedSpyware = SpywareSignature.match(processName: entry) != nil ||
+                                     SpywareSignature.match(processName: entry.replacingOccurrences(of: ".saver", with: "")) != nil
+
+                if matchedSpyware {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware installed as screen saver",
+                        detail: "File: \(entry) — runs on screensaver activation with loginwindow privileges",
+                        path: saverPath,
+                        remediation: "Remove: rm -rf \"\(saverPath)\""
+                    ))
+                } else if !signed {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned third-party screen saver installed",
+                        detail: "File: \(entry) — .saver bundles execute code every time the screen saver runs",
+                        path: saverPath,
+                        remediation: "Verify the source or remove: rm -rf \"\(saverPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Custom URL Scheme Handlers
+
+    private func scanURLSchemeHandlers(findings: inout [Finding], errors: inout [String]) {
+        // Malicious apps register handlers for common URL schemes (mailto:, http:, iMessage:) so
+        // that clicking a link in Mail/Messages funnels through their process first. Classic
+        // XCSSET behavior. We flag the top-level Launch Services database — reading it is fast
+        // and reveals unusual registrations without needing lsregister.
+        //
+        // Suspicious signals: multiple registrations for the same scheme by non-browser bundle IDs,
+        // or a scheme handler by an app in /tmp, /var/tmp, or a hidden directory.
+        let result = ShellRunner.run("/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Support/lsregister",
+                                     arguments: ["-dump", "-h"], timeout: 15)
+        guard result.success else { return }
+
+        let lines = result.stdout.split(separator: "\n")
+        var currentHandler: String?
+        var currentPath: String?
+
+        for line in lines {
+            let ls = String(line).trimmingCharacters(in: .whitespaces)
+
+            // Line format we care about looks like:
+            //   bundle id:          com.acme.app
+            //   path:                /path/to/App.app
+            //   claim ... URLSchemes: [scheme1, scheme2]
+            if ls.hasPrefix("bundle id:") {
+                currentHandler = ls.replacingOccurrences(of: "bundle id:", with: "").trimmingCharacters(in: .whitespaces)
+                currentPath = nil
+            } else if ls.hasPrefix("path:") && currentHandler != nil {
+                currentPath = ls.replacingOccurrences(of: "path:", with: "").trimmingCharacters(in: .whitespaces)
+            } else if ls.contains("URLSchemes:") && currentHandler != nil {
+                // Extract schemes between [ ... ]
+                guard let start = ls.firstIndex(of: "["),
+                      let end = ls.firstIndex(of: "]"),
+                      start < end else { continue }
+                let inner = ls[ls.index(after: start)..<end]
+                let schemes = inner.split(separator: ",").map {
+                    $0.trimmingCharacters(in: .whitespaces).lowercased()
+                }
+
+                // Only flag registrations for schemes that browsers/mail normally own — if a random
+                // app is claiming these, that's a hijack attempt.
+                let hijackableSchemes: Set<String> = ["http", "https", "mailto", "imessage",
+                                                       "ftp", "ssh", "vnc", "smb", "afp"]
+                let hits = schemes.filter { hijackableSchemes.contains($0) }
+                if !hits.isEmpty, let handler = currentHandler {
+                    // Trusted browsers and system apps are OK
+                    let trustedHandlers: Set<String> = [
+                        "com.apple.safari", "com.apple.mail", "com.apple.messages",
+                        "com.google.chrome", "com.brave.browser", "com.microsoft.edgemac",
+                        "org.mozilla.firefox", "com.operasoftware.opera",
+                        "com.vivaldi.vivaldi", "company.thebrowser.browser",  // Arc
+                    ]
+                    if trustedHandlers.contains(handler.lowercased()) { continue }
+                    if handler.hasPrefix("com.apple.") { continue }
+
+                    let pathHint = currentPath ?? "unknown path"
+                    let isHiddenPath = pathHint.contains("/.") || pathHint.contains("/tmp/") || pathHint.contains("/var/tmp/")
+
+                    findings.append(Finding(
+                        severity: isHiddenPath ? .high : .medium,
+                        category: .persistence,
+                        title: "Non-browser app claims \(hits.joined(separator: ", ")) URL scheme(s)",
+                        detail: "Handler: \(handler) at \(pathHint) — clicking a link in Mail/Messages could route through this app first",
+                        path: currentPath,
+                        remediation: "Reset default app: System Settings > Desktop & Dock > Default web browser / Mail app"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Time Machine Exclusions
+
+    private func scanTimeMachineExclusions(findings: inout [Finding], errors: inout [String]) {
+        // Ransomware and some infostealers set com.apple.metadata:com_apple_backup_excludeItem="com.apple.backupd"
+        // on their staging dirs so the loot never gets backed up — and can't be recovered from Time Machine.
+        // We look for the exclusion attribute on paths outside of common exclusion targets (Caches, node_modules).
+        // Only inspect a bounded number of user directories to stay fast.
+        let home = ShellRunner.realUserHome
+        let scanDirs = [
+            "\(home)/Documents",
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "\(home)/Library/Application Support",
+        ]
+
+        for dir in scanDirs {
+            // Use xattr in list mode with the specific attribute name, bounded to shallow depth.
+            let result = ShellRunner.run("/bin/sh", arguments: [
+                "-c",
+                "/usr/bin/find \"\(dir)\" -maxdepth 3 -type d -exec /usr/bin/xattr -p com.apple.metadata:com_apple_backup_excludeItem {} \\; -print 2>/dev/null | /usr/bin/grep -B1 excludeItem | /usr/bin/head -60"
+            ], timeout: 10)
+
+            guard result.success else { continue }
+            let out = result.stdout
+            guard !out.isEmpty else { continue }
+
+            // Report a rolled-up finding — listing every excluded directory would spam. Show the
+            // count and the first couple of paths.
+            let excludedDirs = out.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { $0.hasPrefix("/") }
+
+            // Skip common legitimate exclusions
+            let legitPrefixes = ["node_modules", "Caches", "DerivedData", ".git", "target", "build"]
+            let suspicious = excludedDirs.filter { path in
+                let last = URL(fileURLWithPath: path).lastPathComponent
+                return !legitPrefixes.contains { last.hasPrefix($0) || path.contains("/\($0)/") }
+            }
+
+            if !suspicious.isEmpty {
+                let preview = suspicious.prefix(3).joined(separator: ", ")
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Directories excluded from Time Machine in \(URL(fileURLWithPath: dir).lastPathComponent)",
+                    detail: "\(suspicious.count) director\(suspicious.count == 1 ? "y" : "ies") won't be backed up: \(preview) — ransomware sets this to hide staging areas",
+                    path: dir,
+                    remediation: "Remove exclusion: xattr -d com.apple.metadata:com_apple_backup_excludeItem \"<path>\""
+                ))
+            }
         }
     }
 

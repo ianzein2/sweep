@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Time Machine backups")
+        checkTimeMachine(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi Auto-Join")
+        checkWiFiAutoJoin(findings: &findings, errors: &errors)
+
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS auto-install")
+        checkMacOSAutoInstall(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari safe browsing")
+        checkSafariSafeBrowsing(findings: &findings, errors: &errors)
+
+        progress?.update("checking accessory security")
+        checkAccessorySecurity(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +484,222 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Time Machine (ransomware recovery)
+
+    private func checkTimeMachine(findings: inout [Finding], errors: inout [String]) {
+        // A working, recent Time Machine backup is the single most effective defense against
+        // macOS ransomware families (KeRanger, ThiefQuest/EvilQuest, LockBit-mac, NotLockBit).
+        // We surface the state so users know whether they'd survive an encrypter.
+        let plist = "/Library/Preferences/com.apple.TimeMachine.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let props = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            // No Time Machine plist means Time Machine was never configured
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine has never been configured",
+                detail: "No backups exist — ransomware, disk failure, or theft would cause total data loss",
+                path: nil,
+                remediation: "Set up Time Machine: System Settings > General > Time Machine > Add Backup Disk"
+            ))
+            return
+        }
+
+        let autoBackup = (props["AutoBackup"] as? Int ?? 0) == 1 ||
+                          (props["AutoBackup"] as? Bool ?? false)
+        if !autoBackup {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine automatic backups are off",
+                detail: "Backups won't run on their own — a ransomware event or disk failure would strand you at the last manual snapshot",
+                path: plist,
+                remediation: "Enable in System Settings > General > Time Machine > Back up automatically"
+            ))
+        }
+
+        // Check backup freshness — the most recent successful snapshot per destination.
+        // Old backups can't help recover from recent ransomware.
+        var newestBackup: Date?
+        if let destinations = props["Destinations"] as? [[String: Any]] {
+            for dest in destinations {
+                if let snapshots = dest["SnapshotDates"] as? [Date] {
+                    if let latest = snapshots.max() {
+                        if newestBackup == nil || latest > newestBackup! {
+                            newestBackup = latest
+                        }
+                    }
+                }
+            }
+        }
+
+        if let latest = newestBackup {
+            let days = Calendar.current.dateComponents([.day], from: latest, to: Date()).day ?? 0
+            if days > 30 {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Latest Time Machine backup is \(days) days old",
+                    detail: "Backup destinations exist but none has run recently — you'd lose \(days) days of work in a ransomware/wipe event",
+                    path: plist,
+                    remediation: "Reconnect the backup disk and run: tmutil startbackup"
+                ))
+            } else if days > 7 {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Latest Time Machine backup is \(days) days old",
+                    detail: "Backup exists but is aging — verify the backup disk is still healthy and reachable",
+                    path: nil,
+                    remediation: "Run: tmutil status; and check System Settings > General > Time Machine"
+                ))
+            }
+        } else if autoBackup {
+            // Configured but no completed backup — likely a broken destination
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine is on but no completed backup found",
+                detail: "Automatic backups are enabled but no snapshot has completed — destination may be unreachable",
+                path: plist,
+                remediation: "Verify backup disk is connected and readable: tmutil status"
+            ))
+        }
+    }
+
+    // MARK: - Wi-Fi Auto-Join
+
+    private func checkWiFiAutoJoin(findings: inout [Finding], errors: inout [String]) {
+        // Auto-joining open Wi-Fi networks is a known vector for KARMA-style attacks:
+        // an attacker broadcasts an SSID the Mac remembers, and it silently associates.
+        // The known-networks plist is only present once you've joined at least one Wi-Fi.
+        let plist = "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let networks = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        var autoJoinOpen: [String] = []
+        for (ssid, valueAny) in networks {
+            guard let entry = valueAny as? [String: Any] else { continue }
+            // "SecurityType" for open networks is typically "Open" or the field is absent.
+            let security = entry["SecurityType"] as? String ?? entry["SupportedSecurityTypes"] as? String ?? ""
+            let autoJoin = (entry["AutoJoin"] as? Bool ?? true)
+            if (security.lowercased() == "open" || security.isEmpty) && autoJoin {
+                autoJoinOpen.append(ssid)
+            }
+        }
+
+        if !autoJoinOpen.isEmpty {
+            let preview = autoJoinOpen.prefix(3).joined(separator: ", ")
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Mac auto-joins \(autoJoinOpen.count) open Wi-Fi network(s)",
+                detail: "Networks: \(preview) — an attacker within range can spoof the SSID and intercept traffic (KARMA attack)",
+                path: plist,
+                remediation: "Uncheck \"Auto-Join\" for open networks: System Settings > Wi-Fi > (network) > Details"
+            ))
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // macOS Monterey+ can act as an AirPlay Receiver, exposing an mDNS-advertised service.
+        // Historically buggy: CVE-2023-27922 (AirPlay Receiver arbitrary-code exec).
+        // If left on with "Everyone" or "Anyone on the same network", it's a persistent
+        // remote-attack surface.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "AirplayRecieverEnabled"
+        ], timeout: 5)
+        let enabled = result.success &&
+            result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        if enabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac accepts AirPlay streams over the network — an attacker on Wi-Fi can attempt to stream to you or exploit AirPlay bugs (e.g. CVE-2023-27922)",
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - macOS Auto-Install
+
+    private func checkMacOSAutoInstall(findings: inout [Finding], errors: inout [String]) {
+        // macOS Big Sur+ can auto-install full macOS updates in the background. Turning this
+        // off drops the machine into the "old, unpatched Mac" bucket where kernel/WebKit CVEs
+        // sit unfixed for months.
+        let keys = [
+            ("AutomaticallyInstallMacOSUpdates", "Full macOS updates auto-install"),
+            ("AutomaticDownload",                "Automatic downloads"),
+            ("ConfigDataInstall",                "System data files & security config"),
+        ]
+        for (key, label) in keys {
+            let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+                "read", "/Library/Preferences/com.apple.SoftwareUpdate", key
+            ], timeout: 5)
+            guard result.success else { continue }
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: key == "AutomaticallyInstallMacOSUpdates" ? .medium : .low,
+                    category: .hardening,
+                    title: "\(label) is disabled",
+                    detail: "\(key)=0 in com.apple.SoftwareUpdate — Mac may miss security patches",
+                    path: nil,
+                    remediation: "Enable: System Settings > General > Software Update > (i) > \(label)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Safari Safe Browsing
+
+    private func checkSafariSafeBrowsing(findings: inout [Finding], errors: inout [String]) {
+        // Safari's fraudulent-website warning is Google Safe Browsing under the hood.
+        // Disabling it lets phishing pages load without any warning banner.
+        // This preference lives in the user's Safari domain — read the real user's, not root's.
+        let home = ShellRunner.realUserHome
+        let plist = "\(home)/Library/Preferences/com.apple.Safari.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let props = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+        // The key is present-and-false = disabled; absent = default (enabled).
+        if let warn = props["WarnAboutFraudulentWebsites"] as? Bool, !warn {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Safari fraudulent-website warning is off",
+                detail: "Safari will load known phishing/malware URLs without warning",
+                path: plist,
+                remediation: "Enable: Safari > Settings > Security > Warn when visiting a fraudulent website"
+            ))
+        }
+    }
+
+    // MARK: - Accessory Security (USB/Thunderbolt)
+
+    private func checkAccessorySecurity(findings: inout [Finding], errors: inout [String]) {
+        // Apple Silicon Macs default to prompting the user before letting a newly-attached USB or
+        // Thunderbolt accessory communicate. This defeats juice-jacking and O.MG-cable attacks.
+        // "Allow accessories to connect: Always" bypasses that prompt and is a hardening regression.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.security", "AllowedUSBAccessories"
+        ], timeout: 5)
+
+        // "Always" mode reads as string "Always" or numeric 1 depending on macOS version.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if value == "always" || value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "USB/Thunderbolt accessories are allowed without prompt",
+                    detail: "\"Allow accessories to connect: Always\" — a malicious USB device can act as a HID keyboard the moment it's plugged in",
+                    path: nil,
+                    remediation: "Change to \"Ask Every Time\" or \"Ask For New Accessories\": System Settings > Privacy & Security > Allow accessories to connect"
                 ))
             }
         }

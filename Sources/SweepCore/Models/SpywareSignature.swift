@@ -434,6 +434,211 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS malware families
+        SpywareSignature(
+            name: "BeaverTail (Lazarus fake-interview lure)",
+            processNames: ["beavertail", "BeaverTail", "n2wov", "sqlite.chunk"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pack",
+                "/private/tmp/.hn",
+                "~/Library/Application Support/Chrome/User Data/.cache",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Lazarus stage-2)",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyscript", "wallets.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.npl",
+                "/private/tmp/.pyp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustyAttr (BlueNoroff)",
+            processNames: ["RustyAttr", "rustyattr", "TestGame", "GamePlay"],
+            bundleIdentifiers: ["com.blockchain.game"],
+            filePaths: [
+                "/private/tmp/.rusty",
+                "/private/tmp/.attr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustDoor / ThiefBucket",
+            processNames: ["rustdoor", "RustDoor", "zshrc.rs", "system_update.zsh"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/private/tmp/.rustdoor",
+                "~/.zshenv_backup",
+            ],
+            launchAgentLabels: ["com.apple.system.rd", "com.apple.system.helper"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS variant)",
+            processNames: ["OpenVPNConnect.app", "hzrat", "HZRAT", "hz_agent"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hz",
+            ],
+            launchAgentLabels: ["com.hzrat.service"]
+        ),
+        SpywareSignature(
+            name: "XLoader macOS",
+            processNames: ["OfficeNote", "OfficeNote.app", "xloader", "XLoader"],
+            bundleIdentifiers: ["com.officenote.app", "com.xloader.mac"],
+            filePaths: [
+                "~/Library/LaunchAgents/com.OfficeNote.plist",
+                "/private/tmp/.xloader",
+            ],
+            launchAgentLabels: ["com.OfficeNote", "com.xloader.agent"]
+        ),
+        SpywareSignature(
+            name: "Fickle Stealer (macOS port)",
+            processNames: ["Fickle", "fickle_stealer", "fstealer"],
+            bundleIdentifiers: ["com.fickle.stealer"],
+            filePaths: [
+                "/private/tmp/.fickle",
+                "~/Library/Application Support/.Fickle",
+            ],
+            launchAgentLabels: ["com.fickle.agent"]
+        ),
+        SpywareSignature(
+            name: "HimeraLoader",
+            processNames: ["himera", "Himera", "himeraloader"],
+            bundleIdentifiers: ["com.himera.loader"],
+            filePaths: [
+                "/private/tmp/.himera",
+                "~/Library/Application Support/.himera",
+            ],
+            launchAgentLabels: ["com.himera.service"]
+        ),
+        SpywareSignature(
+            name: "KeySteal",
+            processNames: ["KeySteal", "keysteal", "ReSignTool"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.keysteal",
+                "~/Library/Group Containers/.keysteal",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AMOS Rebrand / Nova Stealer",
+            processNames: ["Nova", "novastealer", "nova_stealer", "NovaSetup"],
+            bundleIdentifiers: ["com.nova.stealer"],
+            filePaths: [
+                "/private/tmp/.nova",
+                "~/Library/Application Support/.Nova",
+            ],
+            launchAgentLabels: ["com.nova.agent"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aphub"],
+            bundleIdentifiers: ["com.apple.processhub"],  // fake Apple ID
+            filePaths: [
+                "/private/tmp/.aphub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift (DPRK downloader)",
+            processNames: ["TodoSwift", "todoswift", "todo_swift"],
+            bundleIdentifiers: ["com.todo.swift"],
+            filePaths: [
+                "/private/tmp/.todo",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todo.swift.agent"]
+        ),
+        SpywareSignature(
+            name: "SecondEye",
+            processNames: ["SecondEye", "secondeye", "seyeagent", "seyeui"],
+            bundleIdentifiers: ["com.secondeye.agent"],
+            filePaths: [
+                "~/Library/Application Support/SecondEye",
+                "/Library/Application Support/SecondEye",
+            ],
+            launchAgentLabels: ["com.secondeye.service"]
+        ),
+        SpywareSignature(
+            name: "Cerberus Spyware (macOS)",
+            processNames: ["cerberusmac", "CerberusAgent", "cerberus_daemon"],
+            bundleIdentifiers: ["com.cerberusapp.mac"],
+            filePaths: [
+                "~/Library/Application Support/Cerberus",
+                "/Library/Application Support/Cerberus",
+            ],
+            launchAgentLabels: ["com.cerberusapp.agent"]
+        ),
+        SpywareSignature(
+            name: "OSX/Shrooms (Ferret family)",
+            processNames: ["Ferret", "ferret", "ChromeUpdate", "chrome_update"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.Ferret",
+            ],
+            launchAgentLabels: ["com.google.chrome.update"]  // fake Chrome update
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigidstealer", "MacFilterOK"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "iOSSpyder (Predator successor)",
+            processNames: ["iosspyder", "iOSSpyder", "spyder_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.spyder",
+                "~/Library/.iosspyder",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PyEnvPirate (crypto-drainer)",
+            processNames: ["pyenvpirate", "PyEnvPirate", "pypirate"],
+            bundleIdentifiers: ["com.pyenv.pirate"],
+            filePaths: [
+                "~/.pyenv/pirate",
+                "/private/tmp/.pypirate",
+            ],
+            launchAgentLabels: ["com.pyenv.pirate"]
+        ),
+        SpywareSignature(
+            name: "SwiftSlicer / Wiper",
+            processNames: ["swiftslicer", "SwiftSlicer", "slicer_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.slicer",
+                "~/Library/Caches/.slicer",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PasivRobber (Chinese surveillance)",
+            processNames: ["PasivRobber", "pasivrobber", "prb_agent", "wsdchecker"],
+            bundleIdentifiers: ["com.pasiv.robber"],
+            filePaths: [
+                "/private/tmp/.pasiv",
+                "~/Library/Application Support/.PasivRobber",
+                "/Library/PrivilegedHelperTools/wsdchecker",
+            ],
+            launchAgentLabels: ["com.wsdchecker.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +655,24 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed 2024-2025 in RustDoor, Ferret, TodoSwift, XLoader, ObjCShellz variants
+        "com.apple.system.rd",
+        "com.apple.system.helper",
+        "com.apple.processhub",
+        "com.apple.systempreferences.helper",
+        "com.apple.macshare.plist",
+    ]
+
+    /// Bundle IDs impersonating trusted third-party vendors' auto-update or helper daemons.
+    /// Real vendors' updaters use specific reverse-DNS identifiers (com.google.keystone.agent, etc.)
+    /// — the ones here mimic that pattern but were observed in RustDoor, Ferret, and XLoader payloads.
+    public static let fakeVendorBundlePatterns: Set<String> = [
+        "com.google.chrome.update",       // Real Chrome updater: com.google.keystone.*
+        "com.microsoft.update.agent",     // Real MS updater: com.microsoft.autoupdate*
+        "com.zoom.updater",               // Real Zoom updater: us.zoom.ZoomAutoUpdater
+        "com.adobe.updater.agent",        // Real Adobe updater: com.adobe.ARMDC.*
+        "com.slack.helper.updater",       // No such Slack updater
+        "com.dropbox.updater.helper",     // Real Dropbox: com.dropbox.DropboxMacUpdate
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -476,8 +699,11 @@ public struct SpywareSignature {
         "coreaudio_helper",      // Real: coreaudiod
     ]
 
-    /// Checks if a bundle ID looks like a fake Apple ID
+    /// Checks if a bundle ID looks like a fake Apple ID or a fake trusted-vendor updater ID.
     public static func isFakeAppleBundleId(_ bundleId: String) -> Bool {
+        // Third-party vendor impersonation (Chrome/Zoom/MS/Adobe updater lookalikes)
+        if fakeVendorBundlePatterns.contains(bundleId) { return true }
+
         if !bundleId.hasPrefix("com.apple.") { return false }
         // Known fake patterns
         if fakeAppleBundlePatterns.contains(bundleId) { return true }
