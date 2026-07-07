@@ -42,6 +42,10 @@ public final class SystemIntegrityScanner: Scanner {
         progress?.update("checking XProtect status")
         checkXProtectHealth(findings: &findings, errors: &errors)
 
+        // 5. NVRAM boot-args (kernel-level bypass flags survive reboot and predate SIP checks)
+        progress?.update("checking NVRAM boot-args")
+        checkBootArgs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -306,6 +310,97 @@ public final class SystemIntegrityScanner: Scanner {
                             remediation: "Update macOS: System Settings > General > Software Update"
                         ))
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - NVRAM boot-args
+
+    private func checkBootArgs(findings: inout [Finding], errors: inout [String]) {
+        // `nvram boot-args` and `nvram csr-active-config` are persistent kernel toggles that,
+        // when tampered with, disable AMFI, code-signing enforcement, kext gating, or SIP subsystems
+        // BEFORE any userland scanner can react. Rootkits and jailbreak-style malware set these to
+        // load unsigned kernel code across reboots. Values should normally be empty on Apple silicon.
+        let bootArgsResult = ShellRunner.run("/usr/sbin/nvram", arguments: ["boot-args"], timeout: 5)
+        if bootArgsResult.success {
+            let raw = bootArgsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Format is "boot-args\t<value>" — strip the key.
+            let value = raw.components(separatedBy: CharacterSet(charactersIn: "\t "))
+                .dropFirst()
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+
+            if !value.isEmpty {
+                let dangerous: [(needle: String, why: String)] = [
+                    ("amfi_get_out_of_my_way=1", "disables AppleMobileFileIntegrity — any unsigned binary can run"),
+                    ("amfi_allow_any_signature=1", "AMFI accepts arbitrary signatures — bypasses notarization"),
+                    ("cs_enforcement_disable=1", "code-signing enforcement is off — unsigned code executes"),
+                    ("kext-dev-mode=1", "unsigned kernel extensions load without user approval"),
+                    ("rootless=0", "rootless / SIP subsystem disabled via boot-args"),
+                    ("-v", "verbose boot enabled"), // informational; kept separate below
+                ]
+
+                let valueLC = value.lowercased()
+                var flaggedDangerous = false
+                for entry in dangerous {
+                    if valueLC.contains(entry.needle.lowercased()) {
+                        // "-v" alone is informational, not malicious.
+                        if entry.needle == "-v" {
+                            findings.append(Finding(
+                                severity: .low, category: .systemIntegrity,
+                                title: "Verbose boot (-v) enabled in NVRAM boot-args",
+                                detail: "boot-args: \(value) — informational; used by developers, but unusual on personal Macs",
+                                path: nil,
+                                remediation: "Clear if you didn't set it: sudo nvram boot-args=\"\""
+                            ))
+                        } else {
+                            flaggedDangerous = true
+                            findings.append(Finding(
+                                severity: .high, category: .systemIntegrity,
+                                title: "Dangerous NVRAM boot-arg set: \(entry.needle)",
+                                detail: "boot-args: \(value) — \(entry.why)",
+                                path: nil,
+                                remediation: "Reset immediately: sudo nvram -d boot-args (or sudo nvram boot-args=\"\") and reboot"
+                            ))
+                        }
+                    }
+                }
+
+                if !flaggedDangerous && !valueLC.contains("-v") {
+                    // Any non-empty, non-standard boot-args value warrants a look — most Macs have it empty.
+                    findings.append(Finding(
+                        severity: .medium, category: .systemIntegrity,
+                        title: "Custom NVRAM boot-args set",
+                        detail: "boot-args: \(value) — non-empty boot-args are unusual on production Macs and can bypass kernel protections",
+                        path: nil,
+                        remediation: "If you didn't set this, clear it: sudo nvram -d boot-args and reboot"
+                    ))
+                }
+            }
+        }
+
+        // csr-active-config is the mask that Recovery-mode `csrutil disable` writes.
+        // Normal state is either absent (fully enabled) or 0x00000000. Anything else = partial SIP disable.
+        let csrResult = ShellRunner.run("/usr/sbin/nvram", arguments: ["csr-active-config"], timeout: 5)
+        if csrResult.success {
+            let raw = csrResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !raw.isEmpty {
+                let value = raw.components(separatedBy: CharacterSet(charactersIn: "\t "))
+                    .dropFirst()
+                    .joined(separator: " ")
+                    .trimmingCharacters(in: .whitespaces)
+                // Apple stores the mask as a little-endian byte string like "%00%00%00%00" (all-enabled)
+                // or "w%08%00%00" (0x877 — full SIP disable). Anything non-zero is partial disable.
+                let nonZero = value.contains(where: { $0 != "%" && $0 != "0" && !$0.isWhitespace })
+                if nonZero {
+                    findings.append(Finding(
+                        severity: .high, category: .systemIntegrity,
+                        title: "csr-active-config is set in NVRAM (partial SIP disable)",
+                        detail: "csr-active-config: \(value) — Recovery Mode has been used to weaken SIP",
+                        path: nil,
+                        remediation: "Reboot to Recovery Mode and run: csrutil clear && csrutil enable"
+                    ))
                 }
             }
         }

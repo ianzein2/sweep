@@ -78,6 +78,9 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Task Management items")
+        scanBackgroundItems(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +678,141 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Background Task Management (BTM)
+
+    private func scanBackgroundItems(findings: inout [Finding], errors: inout [String]) {
+        // macOS 13+ replaces many legacy login-item mechanisms with SMAppService, whose registry
+        // lives in ~/Library/Application Support/com.apple.backgroundtaskmanagementagent/backgrounditems.btm.
+        // The file is a binary keyed archive; the supported way to enumerate it is `sfltool dumpbtm`.
+        // Modern macOS malware (2023+ RustBucket variants, FrostyFerret, Cthulhu Stealer) increasingly
+        // registers here instead of dropping a LaunchAgent plist, so legacy persistence scans miss it.
+        let sfltool = "/usr/bin/sfltool"
+        guard FileManager.default.fileExists(atPath: sfltool) else { return }
+
+        let result = ShellRunner.run(sfltool, arguments: ["dumpbtm"], timeout: 15)
+        guard result.success, !result.stdout.isEmpty else {
+            // sfltool prints an error on pre-Ventura systems; treat as a soft miss.
+            return
+        }
+
+        // The dumpbtm output is grouped into records. Each record spans several lines and looks like:
+        //     Name:              SomeItem
+        //     Developer Name:    Vendor
+        //     Team Identifier:   ABCDE12345
+        //     Type:              legacy (0x2)
+        //     Disposition:       [enabled, allowed, visible, notified]
+        //     Identifier:        /Applications/Example.app/Contents/MacOS/helper
+        //     URL:               file:///Applications/Example.app
+        //     Executable Path:   /Applications/Example.app/Contents/MacOS/Example
+        //     Bundle Identifier: com.example.helper
+        //
+        // Records are separated by blank lines. We split on blank lines and inspect each block.
+        // Field names differ slightly between macOS releases; we prefix-match on the label token.
+        let blocks = result.stdout.components(separatedBy: "\n\n")
+
+        // Field labels differ slightly between macOS releases. We prefix-match with explicit priority:
+        // "Bundle Identifier:" must be checked before "Identifier:", and both fields feed different slots.
+        func value(from line: String, prefix: String) -> String {
+            String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        }
+
+        for block in blocks {
+            let trimmed = block.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty { continue }
+
+            var name = ""
+            var bundleId = ""
+            var teamId = ""
+            var execPath = ""
+            var disposition = ""
+
+            for line in trimmed.split(separator: "\n") {
+                let ln = String(line).trimmingCharacters(in: .whitespaces)
+                if ln.hasPrefix("Bundle Identifier:") {
+                    bundleId = value(from: ln, prefix: "Bundle Identifier:")
+                } else if ln.hasPrefix("Team Identifier:") {
+                    teamId = value(from: ln, prefix: "Team Identifier:")
+                } else if ln.hasPrefix("Executable Path:") {
+                    execPath = value(from: ln, prefix: "Executable Path:")
+                } else if ln.hasPrefix("Disposition:") {
+                    disposition = value(from: ln, prefix: "Disposition:")
+                } else if ln.hasPrefix("Name:") {
+                    name = value(from: ln, prefix: "Name:")
+                } else if ln.hasPrefix("Identifier:") && execPath.isEmpty {
+                    // Older btm formats stored the executable path under "Identifier:".
+                    execPath = value(from: ln, prefix: "Identifier:")
+                }
+            }
+
+            // A block without any identifier fields is a header/footer — skip it.
+            if bundleId.isEmpty && execPath.isEmpty && name.isEmpty { continue }
+
+            // Known spyware match wins over everything else.
+            if !bundleId.isEmpty, let sig = SpywareSignature.match(bundleId: bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as background item: \(sig.name)",
+                    detail: "Bundle: \(bundleId), Path: \(execPath.isEmpty ? "unknown" : execPath), Disposition: \(disposition)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions, then delete the app"
+                ))
+                continue
+            }
+            if !name.isEmpty, let sig = SpywareSignature.match(processName: name) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware registered as background item: \(sig.name)",
+                    detail: "Name: \(name), Bundle: \(bundleId), Path: \(execPath.isEmpty ? "unknown" : execPath)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions, then delete the app"
+                ))
+                continue
+            }
+
+            // Fake Apple-branded bundle IDs — malware love this because Login Items UI shows the label.
+            if !bundleId.isEmpty, SpywareSignature.isFakeAppleBundleId(bundleId) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID registered as background item",
+                    detail: "Bundle: \(bundleId) — real Apple daemons do not register through SMAppService this way",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Disable in System Settings > General > Login Items & Extensions, then investigate the parent app"
+                ))
+                continue
+            }
+
+            // Skip real Apple-signed items; they carry the Apple team identifier or com.apple bundle prefix.
+            if bundleId.hasPrefix("com.apple.") { continue }
+            if teamId == "Apple" { continue }
+
+            // Executable paths under /tmp, /private/tmp, /var/tmp are never legitimate persistence.
+            let tempPrefixes = ["/tmp/", "/private/tmp/", "/var/tmp/"]
+            if !execPath.isEmpty && tempPrefixes.contains(where: { execPath.hasPrefix($0) }) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background item running from temp directory",
+                    detail: "Name: \(name.isEmpty ? bundleId : name), Path: \(execPath)",
+                    path: execPath,
+                    remediation: "Disable in System Settings > General > Login Items & Extensions and investigate the source"
+                ))
+                continue
+            }
+
+            // Ad-hoc / unsigned (no Team Identifier) items registered as background items are unusual.
+            // Apple normally rejects them but they appear on machines where Gatekeeper was bypassed.
+            let hasTeamId = !teamId.isEmpty && teamId.lowercased() != "not signed" && teamId.lowercased() != "-"
+            if !hasTeamId && !execPath.isEmpty {
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Unsigned background item registered",
+                    detail: "Name: \(name.isEmpty ? bundleId : name), Path: \(execPath), no Team Identifier",
+                    path: execPath,
+                    remediation: "Verify this login item — unsigned SMAppService registrations are a modern spyware persistence channel. Manage in System Settings > General > Login Items & Extensions."
+                ))
+            }
         }
     }
 

@@ -434,6 +434,163 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" campaign (late 2023 – 2025).
+        // Delivered via fake job interviews / recruiter tests as Node.js or Python bundles.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node-package"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.n2",
+                "~/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyp", "npayload"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.p2",
+                "~/.n2/pay",
+                "~/Library/Application Support/.pyp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "ChromeUpdate", "chromeupdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.frosty",
+                "~/Library/Application Support/.chromeupdater",
+            ],
+            launchAgentLabels: ["com.google.chromeupdater"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexferret", "com.evlpnkgac", "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.apple.chromeupdate"],
+            filePaths: [
+                "/private/tmp/.flex",
+                "~/Library/Application Support/.ChromeUpdate",
+            ],
+            launchAgentLabels: ["com.apple.chromeupdate.agent"]
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["OtterCookie", "ottercookie", "npm-check"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.otter",
+                "~/.otter",
+            ],
+            launchAgentLabels: []
+        ),
+        // FrigidStealer — Jan 2025 macOS infostealer distributed via fake browser-update prompts.
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "MacUpdater", "SafariUpdate"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "~/Library/Application Support/.SafariUpdate",
+            ],
+            launchAgentLabels: ["com.frigid.service", "com.safari.update.agent"]
+        ),
+        // HZ RAT — first macOS variant surfaced mid-2024, Chinese-speaking APT.
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["HZRat", "hzrat", "OpenVPNConnect", "hz_service"],
+            bundleIdentifiers: ["com.hz.rat"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.HZRat",
+                "/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hz.service", "com.openvpn.helper"]
+        ),
+        // RustDoor / ThiefBucket — Feb 2024, macOS backdoor tied to BlackBasta / ALPHV affiliates.
+        SpywareSignature(
+            name: "RustDoor / ThiefBucket",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "vscodeupdater", "zshrc_helper"],
+            bundleIdentifiers: ["com.visualstudio.updater"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "~/.zshrc_helper",
+            ],
+            launchAgentLabels: ["com.visualstudio.updater", "com.zshrc.helper"]
+        ),
+        // NimDoor — 2024 Nim-based backdoor (DPRK-linked), targets developers.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogleChromeHelper", "z_helper", "nim_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nim",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/LaunchAgents/com.google.chromehelper.plist",
+            ],
+            launchAgentLabels: ["com.google.chromehelper"]
+        ),
+        // RustyAttr — Nov 2024, DPRK-linked malware abusing extended attributes for staging.
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "xattr_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rusty",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        // HiddenRisk — Nov 2024, DPRK campaign against crypto industry via fake research PDFs.
+        SpywareSignature(
+            name: "HiddenRisk",
+            processNames: ["HiddenRisk", "hiddenrisk", "PDFAnalyzer", "risk_agent"],
+            bundleIdentifiers: ["com.hidden.risk"],
+            filePaths: [
+                "/private/tmp/.hiddenrisk",
+                "~/Library/Application Support/.HiddenRisk",
+            ],
+            launchAgentLabels: ["com.hidden.risk.agent", "com.pdf.analyzer"]
+        ),
+        // KeySteal — infostealer targeting keychain (variants active through 2024).
+        SpywareSignature(
+            name: "KeySteal",
+            processNames: ["KeySteal", "keysteal", "ReSignTool", "unsign"],
+            bundleIdentifiers: ["com.keysteal.agent"],
+            filePaths: [
+                "/private/tmp/.keysteal",
+                "~/Library/Application Support/.KeySteal",
+            ],
+            launchAgentLabels: ["com.keysteal.service"]
+        ),
+        // TodoSwift — 2024 macOS downloader (DPRK-linked), delivered as fake meeting/todo app.
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "SwiftLoader", "todosync"],
+            bundleIdentifiers: ["com.todoswift.agent"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.todoswift.service"]
+        ),
+        // Fickle Stealer — 2024 cross-platform infostealer with macOS builds.
+        SpywareSignature(
+            name: "Fickle Stealer",
+            processNames: ["Fickle", "fickle_stealer", "fickle"],
+            bundleIdentifiers: ["com.fickle.stealer"],
+            filePaths: [
+                "/private/tmp/.fickle",
+                "~/Library/Application Support/.Fickle",
+            ],
+            launchAgentLabels: ["com.fickle.agent"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

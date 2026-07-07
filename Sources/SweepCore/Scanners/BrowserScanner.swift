@@ -64,6 +64,11 @@ public final class BrowserScanner: Scanner {
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
 
+        // 5. Chromium native messaging hosts — extension-to-native bridge used by wallet
+        //    drainers and banking trojans to persist beyond extension uninstall.
+        progress?.update("scanning native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -382,6 +387,149 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+    }
+
+    // MARK: - Native Messaging Hosts (Chrome / Brave / Edge / Chromium)
+
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        // Native messaging hosts are JSON manifests that let a browser extension launch and talk to
+        // a native binary. The path in the manifest can point anywhere on disk. Malicious extensions
+        // (drainers, keyloggers, banking trojans) drop hosts to keep a foothold even after the
+        // extension is uninstalled — the manifest and its binary persist. Legitimate hosts almost
+        // always live under /Applications or /Library. Anything in /tmp, /var/tmp, or hidden
+        // directories, or that references a spyware-signature process, is suspicious.
+        let home = ShellRunner.realUserHome
+        let hostDirs: [(browser: String, path: String)] = [
+            ("Chrome",   "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts"),
+            ("Chrome",   "/Library/Google/Chrome/NativeMessagingHosts"),
+            ("Brave",    "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            ("Brave",    "/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            ("Edge",     "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts"),
+            ("Edge",     "/Library/Microsoft/Edge/NativeMessagingHosts"),
+            ("Chromium", "\(home)/Library/Application Support/Chromium/NativeMessagingHosts"),
+            ("Firefox",  "\(home)/Library/Application Support/Mozilla/NativeMessagingHosts"),
+            ("Firefox",  "/Library/Application Support/Mozilla/NativeMessagingHosts"),
+        ]
+
+        // Publishers whose native hosts we've verified are legitimate — password managers,
+        // Google/Microsoft first-party integrations, sync tooling.
+        let trustedHostPrefixes: Set<String> = [
+            "com.1password", "com.agilebits",
+            "com.bitwarden", "com.dashlane",
+            "com.google.chrome.native_gm", "com.google.chrome.remote_assistance",
+            "com.google.slides.screencast", "com.google.hangouts",
+            "com.microsoft.edge.singlesignon", "com.microsoft.browsercore",
+            "com.microsoft.autoupdate", "com.microsoft.identity",
+            "org.mozilla.plugin",
+            "com.logitech.optionsplus",
+            "com.zoom.zoomchromeplugin",
+        ]
+
+        let tempPrefixes = ["/tmp/", "/private/tmp/", "/var/tmp/"]
+        let fm = FileManager.default
+
+        for (browser, dir) in hostDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+
+                let name = (manifest["name"] as? String) ?? entry
+                let hostPath = (manifest["path"] as? String) ?? ""
+
+                // Skip well-known legitimate publishers.
+                if trustedHostPrefixes.contains(where: { name.hasPrefix($0) }) { continue }
+
+                // Match against the spyware DB — process names or bundle IDs mentioned in the manifest.
+                let hostBasename = (hostPath as NSString).lastPathComponent
+                if let sig = SpywareSignature.match(processName: hostBasename) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(browser) native messaging host points to known spyware: \(sig.name)",
+                        detail: "Host: \(name), Binary: \(hostPath)",
+                        path: manifestPath,
+                        remediation: "Remove the manifest and its binary: sudo rm \"\(manifestPath)\" \"\(hostPath)\""
+                    ))
+                    continue
+                }
+                if let sig = SpywareSignature.match(bundleId: name) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(browser) native messaging host matches known spyware: \(sig.name)",
+                        detail: "Host: \(name), Binary: \(hostPath)",
+                        path: manifestPath,
+                        remediation: "Remove the manifest: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Binaries in temp or hidden directories — no legitimate host does this.
+                if !hostPath.isEmpty {
+                    if tempPrefixes.contains(where: { hostPath.hasPrefix($0) }) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "\(browser) native messaging host runs binary from temp directory",
+                            detail: "Host: \(name), Binary: \(hostPath)",
+                            path: manifestPath,
+                            remediation: "Remove: rm \"\(manifestPath)\" — then delete \(hostPath)"
+                        ))
+                        continue
+                    }
+                    if hostPath.contains("/.") {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "\(browser) native messaging host binary is in a hidden path",
+                            detail: "Host: \(name), Binary: \(hostPath)",
+                            path: manifestPath,
+                            remediation: "Investigate and remove: rm \"\(manifestPath)\" and \(hostPath)"
+                        ))
+                        continue
+                    }
+                }
+
+                // Fake Apple-branded hosts.
+                if SpywareSignature.isFakeAppleBundleId(name) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(browser) native messaging host uses fake Apple name",
+                        detail: "Host: \(name), Binary: \(hostPath)",
+                        path: manifestPath,
+                        remediation: "Remove: rm \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Wildcard allowed_origins ("chrome-extension://*/*") lets any extension talk to the host.
+                let allowedOrigins = (manifest["allowed_origins"] as? [String]) ?? []
+                let hasWildcard = allowedOrigins.contains(where: {
+                    $0.contains("*/*") || $0.hasSuffix("://*")
+                })
+                if hasWildcard {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "\(browser) native messaging host accepts any extension",
+                        detail: "Host: \(name), Binary: \(hostPath) — allowed_origins uses wildcard, any extension can invoke it",
+                        path: manifestPath,
+                        remediation: "Verify this host is expected: cat \"\(manifestPath)\""
+                    ))
+                    continue
+                }
+
+                // Otherwise report as informational so the user can review unknown hosts.
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "\(browser) native messaging host installed",
+                    detail: "Host: \(name), Binary: \(hostPath)",
+                    path: manifestPath,
+                    remediation: "Review this host — it lets browser extensions execute a native binary"
+                ))
+            }
+        }
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
