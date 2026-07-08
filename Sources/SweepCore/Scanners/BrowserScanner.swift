@@ -17,6 +17,36 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Chromium extension IDs confirmed malicious in public reporting.
+    // Sources: Cyberhaven-cluster compromise (Dec 2024), crypto-wallet drainer campaigns,
+    // Chrome Web Store takedown notices, and vendor IOC lists (Kaspersky, ESET, Sucuri).
+    // Each entry is the raw 32-char extension ID as it appears in the browser's Extensions directory.
+    private let maliciousChromiumExtensionIds: [String: String] = [
+        // Cyberhaven / Reader Mode compromise cluster — Dec 2024
+        "eanofdhdfbfimgejgikjmgblkooijaee": "Cyberhaven (compromised v24.10.4)",
+        "aiigbahbfobnfcdfjfjigikkdhkinbal": "Reader Mode (compromised)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Parrot Talks to Me (compromised)",
+        "hihoncnmmemkllobhgllfhipmapkajki": "Uvoice (compromised)",
+        "cedgndijpacnfbdggppddacngjfdkaca": "Internxt VPN (compromised)",
+        "gbdjcgalliefpinpmggefbloehmmknca": "Bookmark Favicon Changer (compromised)",
+        "lbneaaedflankmgmfbmaplggbmjjmbae": "Castorus (compromised)",
+        "onbhagpjdaocpnnkbjmocmiplddmnjah": "Wayin AI (compromised)",
+        "ecpkkjeglmglcbimadmegmpfilaimhoc": "Search Copilot AI (compromised)",
+        "acbiaofoeebeinacmcknopaikmecdehl": "AI Assistant ChatGPT & Gemini (compromised)",
+        "acmhnjkljipaknbknoinjhmoknpldjpp": "Rewards Search Automator (compromised)",
+        "cplhlgabfijoiabgkigdafklbhhdkahj": "Bard AI Chat (compromised)",
+        "chbpnonhcgdbcpicacolalkgjlcjkbbd": "Tackker (compromised)",
+        "bibjcjfmgapbfoljiojpipaooddpkpai": "VPNCity (compromised)",
+        // Wallet-drainer / fake wallet extensions repeatedly re-uploaded to Chrome Web Store
+        "jgacpbjoempfhkoklbjgddjbadigdcgo": "Fake MetaMask (wallet drainer)",
+        "fmbkfaacobcpampphjnjkhinhkohbbdi": "Fake Phantom (wallet drainer)",
+        "epekicbojgdgbamekcgblkmcocehimda": "Fake Coinbase Wallet",
+        "ihbnkeejmljldacfeeddmefodefmakhb": "Trezor drainer clone",
+        // Cookie stealers / spy extensions surfaced by Google's 2024 takedowns
+        "goobgennebinldhonaajgafidboenlkl": "Cookie Editor (malicious fork)",
+        "obohcjbmbamacdnahopcpafdhmokehbi": "Netflix Party clone (cookie exfil)",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -143,6 +173,21 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Confirmed-malicious extension IDs: emit immediately, don't dedupe with
+                    // the heuristic path — a known IOC needs its own finding regardless of perms.
+                    if let malDescription = maliciousChromiumExtensionIds[extId] {
+                        let extensionDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches known-malicious ID",
+                            detail: "Extension ID: \(extId) (\(profile)) — \(malDescription)",
+                            path: extensionDir,
+                            remediation: "Remove immediately in \(browserName) > Extensions (chrome://extensions), " +
+                                "rotate saved passwords, and check crypto wallet balances"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

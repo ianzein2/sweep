@@ -434,6 +434,227 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2025 macOS threat additions
+        //
+        // North Korea "Contagious Interview" cluster: BlueNoroff / Lazarus subgroups target
+        // developers via fake job interviews and coding tests. The dropper is usually an npm
+        // package (BeaverTail) that fetches InvisibleFerret. Both persist on macOS.
+        SpywareSignature(
+            // BeaverTail runs inside node from an npm package; matching on generic names like n2n
+            // would false-positive on the legitimate p2p VPN of that name. Rely on the file paths
+            // instead — the drop directory ~/.n2/ is the specific IOC.
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["beavertail", "BeaverTail"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.n2/",
+                "~/Library/Application Support/.n2",
+                "/private/tmp/beavertail",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            // The InvisibleFerret payloads execute under python3 so process-name matching is
+            // rarely useful — the strong IOCs are the dropped script paths in ~/.n2/, ~/.npl, ~/.p2.
+            name: "InvisibleFerret (Contagious Interview)",
+            processNames: ["invisibleferret", "InvisibleFerret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.n2/bow",
+                "~/.n2/adc",
+                "~/.npl",
+                "~/.p2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "FlexibleFerret", "cameraaccess", "chromeupdate"],
+            bundleIdentifiers: ["com.apple.cameraaccess", "com.apple.chromeupdate"],
+            filePaths: [
+                "~/Library/Caches/com.apple.cameraaccess",
+                "~/.n2/",
+            ],
+            launchAgentLabels: ["com.apple.cameraaccess", "com.apple.chromeupdate"]
+        ),
+        // HZ Rat — 2024 Chinese-linked backdoor targeting WeChat / DingTalk users.
+        SpywareSignature(
+            name: "HZ Rat",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect", "SafariSync"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/OpenVPNConnect",
+                "/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.client.plist"]
+        ),
+        // JokerSpy — 2023-2024 modular backdoor with SwiftBelt post-exploitation.
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["jokerspy", "JokerSpy", "xcc", "sh.py", "shared.dat"],
+            bundleIdentifiers: ["com.apple.PrivateAgent"],
+            filePaths: [
+                "/Users/Shared/sh.py",
+                "/Users/Shared/xcc",
+                "/private/var/tmp/.jokerspy",
+                "~/Library/Preferences/com.apple.PrivateAgent.plist",
+            ],
+            launchAgentLabels: ["com.apple.PrivateAgent"]
+        ),
+        // LightSpy — modular surveillance framework; macOS variant surfaced 2024.
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "macircloader", "LightService"],
+            bundleIdentifiers: ["com.apple.WebKit.LightService"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+            ],
+            launchAgentLabels: []
+        ),
+        // RustDoor / Trellix / ThieCrocs — 2024 Rust-written macOS backdoor tied to ransomware ops.
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "Testx86_64", "Testarm64", "zshrc2",
+                           "coreloader", "rustdown"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/tmp/zshrc2",
+                "/private/tmp/.rustdoor",
+                "~/.rustdoor",
+            ],
+            launchAgentLabels: ["com.apple.finder.plist2", "com.apple.rustdown"]
+        ),
+        // Odyssey Stealer — 2024-2025 AMOS fork widely distributed via ClickFix pages.
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey", "odyssey_stealer", "OdysseyInstaller"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+                "/tmp/Odyssey_installer",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        // MacSync Stealer — 2024 stealer marketed on Russian-speaking forums.
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync", "MacSyncStealer"],
+            bundleIdentifiers: ["com.macsync.stealer"],
+            filePaths: [
+                "/private/tmp/.macsync",
+                "~/Library/Application Support/.MacSync",
+            ],
+            launchAgentLabels: ["com.macsync.agent"]
+        ),
+        // Nova Stealer — 2024 Go-based infostealer, uses `osascript` for password prompts.
+        SpywareSignature(
+            name: "Nova Stealer",
+            processNames: ["NovaStealer", "novastealer", "NovaAgent"],
+            bundleIdentifiers: ["com.nova.stealer"],
+            filePaths: [
+                "/private/tmp/.nova",
+                "~/Library/Application Support/.Nova",
+            ],
+            launchAgentLabels: ["com.nova.agent"]
+        ),
+        // Ledger Stealer — 2025 wallet-focused stealer distributed via fake dApps.
+        SpywareSignature(
+            name: "Ledger Stealer",
+            processNames: ["LedgerStealer", "ledger_stealer", "LedgerHelper"],
+            bundleIdentifiers: ["com.ledger.stealer"],
+            filePaths: [
+                "/private/tmp/.ledger_stealer",
+                "~/Library/Application Support/.LedgerHelper",
+            ],
+            launchAgentLabels: ["com.ledger.helper"]
+        ),
+        // Ferret family follow-ons — FrostyFerret / DriftingFerret / EggheadFerret (2024).
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "frostyferret", "ChromeUpdateAlert"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/ChromeUpdateAlert",
+                "/private/tmp/.frostyferret",
+            ],
+            launchAgentLabels: []
+        ),
+        // XMRig macOS cryptominer — distributed inside cracked apps (Adobe/Autodesk cracks).
+        // Not surveillance but classic Mac malware; users deserve a heads-up.
+        SpywareSignature(
+            name: "XMRig Cryptominer",
+            processNames: ["xmrig", "XMRig", "com.apple.rphelper", "spotlightd",
+                           "com.apple.WindowsServer", "com.apple.rpcsvchost"],
+            bundleIdentifiers: ["com.apple.rphelper", "com.apple.rpcsvchost"],
+            filePaths: [
+                "/Library/Application Support/com.apple.rphelper",
+                "~/Library/Application Support/com.apple.WindowsServer",
+                "/private/tmp/.xmrig",
+                "/tmp/xmrig",
+            ],
+            launchAgentLabels: ["com.apple.rphelper", "com.apple.rpcsvchost",
+                                "com.apple.WindowsServer.plist"]
+        ),
+        // TodoSwift — 2024 Lazarus dropper masquerading as todo-list PDF viewer.
+        SpywareSignature(
+            name: "TodoSwift (Lazarus)",
+            processNames: ["TodoSwift", "todoswift", "com.hnetwork.MonolithicView"],
+            bundleIdentifiers: ["com.hnetwork.MonolithicView"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: []
+        ),
+        // BlueNoroff CryptoCore / RustBucket variants (2024) — targets crypto exchange staff.
+        SpywareSignature(
+            name: "CryptoCore (BlueNoroff)",
+            processNames: ["CryptoCore", "cryptocore", "SwiftLoader", "CryptoAssetManagement"],
+            bundleIdentifiers: ["com.apple.CryptoAssetManagement"],
+            filePaths: [
+                "~/Library/Application Support/.cryptocore",
+                "/private/var/tmp/.cryptocore",
+            ],
+            launchAgentLabels: ["com.apple.CryptoAssetManagement"]
+        ),
+        // Amos / Poseidon "ClickFix" variant — dropped via clipboard-injection CAPTCHA pages.
+        // Process names like "update" and "install" alone would false-positive on many legitimate
+        // installers; we match only on the distinctive names and rely on file-path IOCs for the rest.
+        SpywareSignature(
+            name: "AMOS ClickFix Variant",
+            processNames: ["installer_script", "system_update", "MacOSHelper", "macos-update"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/update",
+                "/tmp/install",
+                "/tmp/installer_script",
+                "/tmp/system_update",
+                "/tmp/MacOSHelper",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024 "Perfctl" / Perfmon cryptojacker seen on macOS after cracked-software installs.
+        SpywareSignature(
+            name: "Perfctl Cryptojacker",
+            processNames: ["perfctl", "Perfctl", "perfmon", "sh1", "wizard"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.perf.c/",
+                "/var/tmp/.perf.c/",
+                "/usr/bin/perfctl",
+                "~/.config/cron/perfcc",
+            ],
+            launchAgentLabels: ["com.perf.plist"]
+        ),
+        // TrickMo / TrickBot macOS module (2024) — banking trojan sibling.
+        SpywareSignature(
+            name: "TrickMo (macOS)",
+            processNames: ["trickmo", "TrickMo", "com.google.androidfilehelper"],
+            bundleIdentifiers: ["com.google.androidfilehelper"],
+            filePaths: ["/private/tmp/.trickmo"],
+            launchAgentLabels: ["com.google.androidfilehelper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +671,18 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 IOCs observed in ClickFix / Ferret / RustDoor / cryptojacker campaigns
+        "com.apple.PrivateAgent",
+        "com.apple.cameraaccess",
+        "com.apple.chromeupdate",
+        "com.apple.rphelper",
+        "com.apple.rpcsvchost",
+        "com.apple.finder.plist2",
+        "com.apple.rustdown",
+        "com.apple.WebKit.LightService",
+        "com.apple.CryptoAssetManagement",
+        "com.apple.macshare.plist",
+        "com.apple.WindowsServer",   // Note: real is WindowServer (no 's')
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +707,16 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2025 additions — process names observed in current-day campaigns
+        "spotlightd",            // Real: mds (used by XMRig cryptojacker)
+        "WindowsServer",         // Real: WindowServer (used by cryptojackers)
+        "cameraaccess",          // FlexibleFerret
+        "chromeupdate",          // FlexibleFerret
+        "OpenVPNConnect",        // HZ Rat, unless it's the real OpenVPN app in /Applications
+        "SafariHelper",          // RustBucket / Lazarus
+        "SafariSync",            // HZ Rat
+        "MonolithicView",        // TodoSwift dropper
+        "MacOSHelper",           // AMOS ClickFix
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID
