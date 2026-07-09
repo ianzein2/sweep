@@ -434,6 +434,354 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" / Ferret family (SentinelOne, Nov 2024 - 2025)
+        // Fake-recruiter campaign that tricks developers into running installers during a "coding test".
+        SpywareSignature(
+            name: "FrostyFerret / FERRETPASSIVE",
+            processNames: ["FrostyFerret_UI", "FROSTYFERRET_UI", "MULTI_FROSTYFERRET_CMDCODES",
+                           "ChromeUpdate", "chromeupdate", "FERRETPASSIVE"],
+            bundleIdentifiers: ["com.frostyferret.helper"],
+            filePaths: [
+                "/private/tmp/.chromeupdate",
+                "/private/tmp/.frostyferret",
+                "~/Library/Application Support/com.frostyferret",
+            ],
+            launchAgentLabels: ["com.google.chrome.update", "com.chrome.updater"]
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret",
+            processNames: ["FriendlyFerret_secd", "friendlyferret", "FRIENDLYFERRET"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/WebKit/com.apple.WebKit.WebContent/friendly.ferret",
+                "/private/tmp/.friendlyferret",
+            ],
+            launchAgentLabels: ["com.apple.secd"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FerretUpdater", "com.zoom.installer"],
+            bundleIdentifiers: ["com.zoom.installer.helper", "com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.zoom_installer",
+                "/private/tmp/.flexibleferret",
+                "~/Library/Group Containers/.ferret",
+            ],
+            launchAgentLabels: ["com.zoom.installer", "com.apple.zoom.update"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "npmupdate", "node_module_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.n2",
+                "~/.npm-cache/.beaver",
+            ],
+            launchAgentLabels: ["com.node.helper", "com.npm.update"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "pyp", "adb.py", "brow.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisibleferret",
+                "~/Library/Python/.if_agent",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["ottercookie", "OtterCookie", "socket-node", "node-socket-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ottercookie",
+                "~/Library/Caches/.otter",
+            ],
+            launchAgentLabels: []
+        ),
+        // DPRK — NimDoor (July 2025, SentinelOne). Nim-based backdoor targeting Web3/crypto orgs;
+        // hooks SIGINT/SIGTERM so it re-launches when the user tries to kill it.
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["nimdoor", "NimDoor", "GoogIe LLC", "zoom_sdk_support",
+                           "installer_v", "coreks", "trojan_nim"],
+            bundleIdentifiers: ["com.zoom.sdksupport", "com.googie.updater"],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "/private/tmp/zoom_sdk_support.scpt",
+                "~/Library/Application Support/.nimdoor",
+                "~/Library/Group Containers/.nim",
+            ],
+            launchAgentLabels: ["com.google.updater", "com.zoom.sdksupport"]
+        ),
+        // Lazarus — RustyAttr (Nov 2024, Group-IB). Uses extended attributes to hide shellcode
+        // inside benign-looking macOS apps signed with stolen certificates.
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "TwoStepUpdater", "twostep_updater"],
+            bundleIdentifiers: ["com.twostep.updater", "com.rusty.helper"],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: ["com.twostep.updater"]
+        ),
+        // BlueNoroff — Hidden Risk (Nov 2024, SentinelOne). Fake-PDF crypto lure with a
+        // touchbar helper persistence trick via zshenv.
+        SpywareSignature(
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["HiddenRisk", "hidden_risk", "growth", "growth_extend", "growthhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hiddenrisk",
+                "~/Library/.growth",
+                "~/.zshenv",  // trojanized only — persistence signal handled elsewhere
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024-2025 macOS infostealers
+        SpywareSignature(
+            name: "AMOS v2 (Atomic Stealer)",
+            processNames: ["Update", "amos_v2", "atomic_v2", "SwiftBelt", "AmosLoader"],
+            bundleIdentifiers: ["com.atomic.stealer.v2", "com.amos.v2"],
+            filePaths: [
+                "/private/tmp/.amos2",
+                "/private/tmp/AppleScript*.scpt",
+                "~/Library/Application Support/.amos2",
+            ],
+            launchAgentLabels: ["com.atomic.v2", "com.amos.persistence"]
+        ),
+        SpywareSignature(
+            name: "PSW Stealer / Sushi",
+            processNames: ["Sushi", "sushi", "sushi_stealer", "PSWStealer"],
+            bundleIdentifiers: ["com.sushi.stealer"],
+            filePaths: [
+                "/private/tmp/.sushi",
+                "~/Library/Application Support/.sushi",
+            ],
+            launchAgentLabels: ["com.sushi.helper"]
+        ),
+        SpywareSignature(
+            name: "SparkCat / SparkKitty",
+            processNames: ["SparkCat", "sparkcat", "SparkKitty", "sparkkitty", "GmailSparkKit"],
+            bundleIdentifiers: ["com.sparkcat.agent", "com.sparkkitty.helper"],
+            filePaths: [
+                "/private/tmp/.sparkcat",
+                "~/Library/Application Support/.sparkkitty",
+            ],
+            launchAgentLabels: ["com.sparkcat.helper"]
+        ),
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync", "macsyncd", "macsync_daemon"],
+            bundleIdentifiers: ["com.macsync.stealer"],
+            filePaths: [
+                "/private/tmp/.macsync",
+                "~/Library/Application Support/.MacSync",
+            ],
+            launchAgentLabels: ["com.macsync.service"]
+        ),
+        SpywareSignature(
+            name: "Realst v2",
+            processNames: ["realst_v2", "RealstV2", "GameInstaller", "InstallHelper"],
+            bundleIdentifiers: ["com.realst.v2", "com.game.installer"],
+            filePaths: [
+                "/private/tmp/.realst2",
+                "~/Library/Application Support/.Realst2",
+            ],
+            launchAgentLabels: ["com.realst.updater", "com.game.installhelper"]
+        ),
+        SpywareSignature(
+            name: "PurpleStealer",
+            processNames: ["PurpleStealer", "purplestealer", "purple_agent"],
+            bundleIdentifiers: ["com.purplestealer.agent"],
+            filePaths: ["/private/tmp/.purple"],
+            launchAgentLabels: ["com.purple.agent"]
+        ),
+        SpywareSignature(
+            name: "TrickMo (macOS variant)",
+            processNames: ["trickmo", "TrickMo", "trickmo_agent"],
+            bundleIdentifiers: ["com.trickmo.agent"],
+            filePaths: ["/private/tmp/.trickmo"],
+            launchAgentLabels: ["com.trickmo.service"]
+        ),
+        // XCSSET refresh (Microsoft Threat Intelligence, Feb 2025) — updated payload with
+        // new obfuscation, LaunchDaemon persistence, and clipboard-hijacking for crypto.
+        SpywareSignature(
+            name: "XCSSET v2025",
+            processNames: ["xcsset2025", "XCSSETUpdater", "xcode_helper", "xchelperd",
+                           "com.apple.macos.updater"],
+            bundleIdentifiers: ["com.apple.macos.updater", "com.apple.xcodehelper"],
+            filePaths: [
+                "~/Library/Group Containers/.xcode2025",
+                "~/Library/Caches/com.apple.xcode.helper",
+                "/private/var/tmp/.xchelper",
+            ],
+            launchAgentLabels: ["com.apple.xcode.helper", "com.apple.macos.updater"]
+        ),
+        // 2024 — JokerSpy re-emergence
+        SpywareSignature(
+            name: "JokerSpy v2",
+            processNames: ["xcc", "sh.py", "jokerspy", "swiftbelt"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/xcc",
+                "/private/tmp/.jokerspy",
+            ],
+            launchAgentLabels: []
+        ),
+        // Charming Kitten / APT35 macOS extension (2025 activity)
+        SpywareSignature(
+            name: "CharmingKitten (APT35 macOS)",
+            processNames: ["charming", "CharmingKitten", "kittenagent", "PhosphorusHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.charmingkitten",
+                "~/Library/Application Support/.phosphorus",
+            ],
+            launchAgentLabels: []
+        ),
+        // TA453 / Mint Sandstorm macOS backdoor
+        SpywareSignature(
+            name: "MischiefTut (TA453)",
+            processNames: ["mischieftut", "MischiefTut", "TutorialHelper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.mischief"],
+            launchAgentLabels: []
+        ),
+        // macMa v2 / CDDS (Daggerfly) — Symantec Aug 2024 report
+        SpywareSignature(
+            name: "macMa v2 / CDDS",
+            processNames: ["macma", "MacMa", "cdds", "helperprocess", "systemUpdater"],
+            bundleIdentifiers: ["com.apple.systemUpdater"],
+            filePaths: [
+                "/private/tmp/.cdds",
+                "~/Library/Preferences/.macma",
+            ],
+            launchAgentLabels: ["com.apple.systemUpdater", "com.apple.helperprocess"]
+        ),
+        // Redline & similar Windows stealers ported to macOS (2024-2025 reports)
+        SpywareSignature(
+            name: "RedLine (macOS port)",
+            processNames: ["redline", "RedLine", "redline_mac", "RLStealer"],
+            bundleIdentifiers: ["com.redline.stealer"],
+            filePaths: [
+                "/private/tmp/.redline",
+                "~/Library/Application Support/.redline",
+            ],
+            launchAgentLabels: ["com.redline.service"]
+        ),
+        // TodoSwift (Kandykorn variant, 2024)
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "todo_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Group Containers/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        // Adload / MaxOfferDeal (still active family, 2024-2025 variants)
+        SpywareSignature(
+            name: "Adload / MaxOfferDeal",
+            processNames: ["MaxOfferDeal", "OperativeMachine", "SkilledObject",
+                           "InitialProgram", "ElementaryTyped", "TypicalConfig"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/MaxOfferDeal",
+                "~/Library/Application Support/.adload",
+            ],
+            launchAgentLabels: []
+        ),
+        // Shlayer & Bundlore (still current 2024-2025)
+        SpywareSignature(
+            name: "Shlayer",
+            processNames: ["Player", "Flash Player", "Adobe Flash Player", "shlayer", "ShlayerAgent"],
+            bundleIdentifiers: ["com.adobe.flashplayer.installer"],
+            filePaths: [
+                "/private/tmp/Player.app",
+                "/private/tmp/.shlayer",
+            ],
+            launchAgentLabels: ["com.adobe.flashplayer"]
+        ),
+        SpywareSignature(
+            name: "Bundlore",
+            processNames: ["Bundlore", "bundlore", "installMac", "InstallerHelper"],
+            bundleIdentifiers: ["com.bundlore.agent"],
+            filePaths: [
+                "~/Library/Application Support/.bundlore",
+                "/private/tmp/.bundlore",
+            ],
+            launchAgentLabels: ["com.bundlore.helper"]
+        ),
+        // "TrollStealer" / SunSpin family (2025)
+        SpywareSignature(
+            name: "TrollStealer",
+            processNames: ["TrollStealer", "trollstealer", "troll_agent"],
+            bundleIdentifiers: ["com.trollstealer.agent"],
+            filePaths: [
+                "/private/tmp/.troll",
+                "~/Library/Application Support/.TrollStealer",
+            ],
+            launchAgentLabels: ["com.troll.agent"]
+        ),
+        // "HZ RAT" macOS port (2024, Kaspersky)
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["hzrat", "HZRAT", "OpenVPNConnect", "openvpn_connect"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.openvpn-connect",
+            ],
+            launchAgentLabels: []
+        ),
+        // Cthulhu Stealer v2 (2024 refresh)
+        SpywareSignature(
+            name: "Cthulhu v2",
+            processNames: ["Cthulhu2", "cthulhu_v2", "cthulhu_mac_v2"],
+            bundleIdentifiers: ["com.cthulhu.v2"],
+            filePaths: [
+                "/private/tmp/.cthulhu2",
+                "~/Library/Application Support/.Cthulhu2",
+            ],
+            launchAgentLabels: ["com.cthulhu.v2"]
+        ),
+        // Predator (Intellexa/Cytrox) refresh
+        SpywareSignature(
+            name: "Predator v2 (Intellexa)",
+            processNames: ["predator_v2", "cytrox_v2", "IntellexaHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.predator2",
+                "/private/var/tmp/.intellexa",
+            ],
+            launchAgentLabels: []
+        ),
+        // "Banshee 2.0" (Kaspersky Jan 2025, English-locale evasion removed)
+        SpywareSignature(
+            name: "Banshee 2.0",
+            processNames: ["Banshee2", "banshee2", "banshee_v2", "BnshV2"],
+            bundleIdentifiers: ["com.banshee.v2"],
+            filePaths: [
+                "/private/tmp/.banshee2",
+                "~/Library/Application Support/.Banshee2",
+            ],
+            launchAgentLabels: ["com.banshee.v2"]
+        ),
+        // Poseidon Stealer (Rodrigo4) — active 2024
+        SpywareSignature(
+            name: "Poseidon v2",
+            processNames: ["poseidon_v2", "PoseidonV2", "Rodrigo4"],
+            bundleIdentifiers: ["com.poseidon.v2"],
+            filePaths: [
+                "/private/tmp/.poseidon2",
+                "~/Library/Application Support/.Poseidon2",
+            ],
+            launchAgentLabels: ["com.poseidon.v2"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +798,14 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Seen in 2024-2025 macOS malware (Ferret, NimDoor, XCSSET refresh, macMa v2)
+        "com.apple.macos.updater",
+        "com.apple.xcodehelper",
+        "com.apple.systemUpdater",
+        "com.apple.helperprocess",
+        "com.apple.secd.helper",
+        "com.apple.zoom.update",
+        "com.google.chrome.update",  // real Google Chrome uses different label
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +830,19 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Recent (2024-2025) impersonation patterns
+        "ChromeUpdate",          // Real Chrome updater is GoogleUpdater / KeystoneAgent
+        "chromeupdate",          // Ferret family lure
+        "GoogIe LLC",            // NimDoor — capital-i-for-l typosquat
+        "ZoomInstaller",         // Not the real Zoom binary
+        "zoom_sdk_support",      // NimDoor lure
+        "installer_v",           // NimDoor payload
+        "TwoStepUpdater",        // RustyAttr lure
+        "OpenVPNConnect",        // Real: openvpn (HZ RAT decoy name)
+        "growthhelper",          // HiddenRisk / BlueNoroff
+        "sysUpdater",            // Impersonates softwareupdated
+        "MacOSUpdater",          // Not a real Apple process
+        "SafariUpdate",          // Safari updates ride along with system updates
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

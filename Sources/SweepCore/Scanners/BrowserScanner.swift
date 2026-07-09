@@ -17,6 +17,59 @@ public final class BrowserScanner: Scanner {
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
     ]
 
+    // Confirmed malicious Chrome/Edge/Brave extensions from public IOCs. Presence = HIGH.
+    // Sources: Cyberhaven supply-chain compromise (Dec 2024), MalwareBytes / Palo Alto Unit42
+    // takedown reports 2024-2025. Extensions here were confirmed to inject credential/session
+    // exfiltration code — even if since removed from the Chrome Web Store, they may still be
+    // installed and continue to phone home.
+    private let knownMaliciousExtIds: Set<String> = [
+        // Cyberhaven supply-chain compromise wave (Dec 2024 / early 2025)
+        "nnpnnpemnckcfdebeekibpiijlicmpom", // Cyberhaven (v24.10.4/24.10.5 were injected)
+        "llimhhconnjiflfimocjggfjdlmlhblm", // Reader Mode
+        "acmfnomgphggonodopogfbmkneepfgnh", // Bookmark Favicon Changer
+        "cedgndijpacnfbdggppddacngjfdkaca", // Castorus
+        "bibjgkidgpfbblifamdlkdlhgihmfohh", // Wayin AI
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji", // Search Copilot AI Assistant
+        "iebpjdmgckacbodjpijphcplhebcmeop", // VPNCity (compromised)
+        "acbiaofoeebeinacmcknopaikmecdehl", // ParrotTalks
+        "mnhffkhmpnefgklngfmlndmkimimbphc", // Uvoice
+        "gejiddohjgogedgjnonbofjigllpkmbf", // Internxt VPN (compromised build)
+        "ndlbedplllcgconngcnfmkadhokfaaln", // Search Manager
+        "epikoohpebngmakjinphfiagogjcnddm", // Vidnoz Flex - Video recorder
+        "acgpcpjbmpldjkiaiofjjaocajldbjjm", // AI Assistant - ChatGPT for Google
+        "cplhlgabfijoiabgkigdafklbhhdkahj", // Bard AI Chat Extension
+        "cbfcpigffnckpfacnedmiibinjmkjkab", // GraphQL Network Inspector (compromised build)
+        "epmegnoealnhlfehanbhfciolbnkgpml", // Rewards Search Automator (Bing rewards farmer)
+        "obcgnlnijchbcfoicaphpecpckabbggd", // TinaMind
+        // 2023-2024 confirmed malicious / removed from Web Store
+        "eanofdhdfbcalhflpbdipkjjkoimeeod", // Nano Adblocker (fake clone)
+        "jiofmdifioeejeilfkpegipdjiopiekl", // "HistoryBlock" backdoor (2024)
+        // Extensions that ship known cookie/session hijack code
+        "jajilbjjinjmgcibalaakngmkilboiep", // "The Great Suspender" (rewritten to malicious in 2020, still installed)
+    ]
+
+    // Crypto wallet stealers frequently masquerade as (or ship inside) fake wallet extensions.
+    // Legitimate wallet extension IDs; anything else claiming to be MetaMask/Phantom/etc. is suspicious.
+    private let legitimateWalletExtIds: Set<String> = [
+        "nkbihfbeogaeaoehlefnkodbefgpgknn", // MetaMask
+        "bfnaelmomeimhlpmgjnjophhpkkoljpa", // Phantom (Solana)
+        "hnfanknocfeofbddgcijnmhnfnkdnaad", // Coinbase Wallet
+        "egjidjbpglichdcondbcbdnbeeppgdph", // Trust Wallet
+        "fhbohimaelbohpjbbldcngcnapndodjp", // BNB Chain Wallet
+        "efbglgofoippbgcjepnhiblaibcnclgk", // Rabby Wallet
+        "aholpfdialjgjfhomihkjbmgjidlcdno", // Exodus Web3
+        "lpfcbjknijpeeillifnkikgncikgfhdo", // OKX Wallet
+        "aeachknmefphepccionboohckonoeemg", // Coin98 Wallet
+        "hcflpincpppdclinealmandijcmnkbgn", // KuCoin Wallet
+        "cnmamaachppnkjgnildpdmkaakejnhae", // Argent X (Starknet)
+    ]
+
+    // Known-crypto brands — extensions that name-drop these but use a non-official ID are suspicious.
+    private let cryptoWalletBrands: [String] = [
+        "metamask", "phantom", "coinbase wallet", "trust wallet", "rabby",
+        "exodus", "trezor", "ledger", "keplr", "petra", "solflare",
+    ]
+
     // Extensions that are well-known and safe
     private let trustedExtensionIds: Set<String> = [
         // Password managers
@@ -197,6 +250,33 @@ public final class BrowserScanner: Scanner {
             let profileNote = ext.profiles.count > 1
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
+
+            // Confirmed malicious extension (published IOC list)
+            if knownMaliciousExtIds.contains(ext.extId) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension is on the known-compromised list",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — matches a public IOC list of compromised extensions (Cyberhaven supply-chain wave and related takedowns)",
+                    path: ext.extDir,
+                    remediation: "Remove immediately, then rotate any browser-stored credentials, session cookies, and OAuth tokens: chrome://extensions"
+                ))
+                continue
+            }
+
+            // Wallet impersonation: the extension name mentions a well-known crypto wallet
+            // brand but the extension ID is not the official one — canonical drainer pattern.
+            let nameLC = ext.name.lowercased()
+            if let brand = cryptoWalletBrands.first(where: { nameLC.contains($0) }),
+               !legitimateWalletExtIds.contains(ext.extId) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension impersonates a crypto wallet",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — mentions \"\(brand)\" but is not the official extension ID for that wallet",
+                    path: ext.extDir,
+                    remediation: "Remove immediately. If you entered a seed phrase into this extension, move funds to a new wallet on a clean device."
+                ))
+                continue
+            }
 
             if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(
