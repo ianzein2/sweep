@@ -40,6 +40,13 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // 2024-2025 additions — recurring C2 ports across NimDoor, ReaderUpdate,
+        // BeaverTail/InvisibleFerret, HZ Rat, and Cobalt Strike Malleable macOS profiles.
+        4499, 4545, 4646, 4747,
+        6606, 7707, 8808,                      // "AsyncRAT" / "DcRAT" defaults, seen ported to macOS
+        50050,                                 // Cobalt Strike default team-server port
+        1604, 6001, 6002,                      // Poseidon2 exfil ports (Objective-See 2025 report)
+        1521, 1433,                            // DB ports rarely exposed from a Mac
     ]
 
     private let blockedAppleDomains: Set<String> = [

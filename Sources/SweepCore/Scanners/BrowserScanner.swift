@@ -11,10 +11,26 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 additions — publisher / package IOCs from ReversingLabs / Datadog reports.
+        // These are the recurring names used across multiple malicious VSCode marketplace pulls.
+        "solidity-language", "solidity-vscode", "prettiervscode",
+        "discord-vscode-", "sourcegraph-python-",
+        "playwright-installer", "vscode-material-icons-",
+        "cursor-ai-helper-", "gpt-copilot-installer",
+        "coplotai", "solabs.solidity", "solaibot",
+        "ethlint-solidity", "eth-wallet-connector",
+        "openai-gpt-vscode", "chatgpt-easy-focus",
+        "kim.chatgpt-vscode", "quill-formatter",
+        "nomic-hardhat-plus", "hardhat-solidity-tools",
+        "pretty-formatter-vscode", "python-styler-plus",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2025 patterns — increasingly seen in npm supply-chain / malicious extension bundles
+        "wallet-drainer", "wallet-siphon", "seed-phrase",
+        "credential-harvest", "cookie-siphon", "keychain-dump",
+        "clipboard-monitor", "session-hijack", "aws-cred-steal",
     ]
 
     // Extensions that are well-known and safe

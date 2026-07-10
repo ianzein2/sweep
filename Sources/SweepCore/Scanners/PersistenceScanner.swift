@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Application Scripts")
+        scanApplicationScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking user Services")
+        scanUserServices(findings: &findings, errors: &errors)
+
+        progress?.update("checking Automator agents")
+        scanAutomatorAgents(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -653,6 +662,136 @@ public final class PersistenceScanner: Scanner {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Application Scripts (XCSSET-style AppleScript persistence)
+
+    private func scanApplicationScripts(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Application Scripts/<bundle-id>/ is intended to hold AppleScript / .scpt files
+        // that an app itself installs for legitimate scripting. XCSSET-style malware writes payloads
+        // into folders that mimic Apple bundle IDs so its scripts run alongside system helpers.
+        let home = ShellRunner.realUserHome
+        let scriptsRoot = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+
+        guard let bundleDirs = try? fm.contentsOfDirectory(atPath: scriptsRoot) else { return }
+
+        for dir in bundleDirs {
+            // Skip hidden entries and .DS_Store
+            if dir.hasPrefix(".") { continue }
+
+            // Real Apple system-preferences pane scripts live here — legitimate installations look
+            // like "com.apple.systempreferences" WITHOUT any scripts inside them by default.
+            // Any non-empty subfolder mimicking com.apple.* is a strong indicator.
+            let bundlePath = "\(scriptsRoot)/\(dir)"
+            guard let entries = try? fm.contentsOfDirectory(atPath: bundlePath) else { continue }
+            let payloadFiles = entries.filter { !$0.hasPrefix(".") }
+            if payloadFiles.isEmpty { continue }
+
+            // Known IOC bundle IDs XCSSET has abused
+            let xcssetTargets: Set<String> = [
+                "com.apple.systempreferences",
+                "com.apple.systemuiserver",
+                "com.apple.finder",
+                "com.apple.notes",
+                "com.apple.reminders",
+            ]
+
+            if SpywareSignature.isFakeAppleBundleId(dir) || xcssetTargets.contains(dir) {
+                let firstFew = payloadFiles.prefix(3).joined(separator: ", ")
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Suspicious AppleScript payload in Application Scripts",
+                    detail: "\(bundlePath) contains \(payloadFiles.count) file(s): \(firstFew) — XCSSET-family malware hides here",
+                    path: bundlePath,
+                    remediation: "Inspect and, if unfamiliar: rm -rf \"\(bundlePath)\""
+                ))
+                continue
+            }
+
+            // Any script files matching known spyware naming
+            for file in payloadFiles {
+                if SpywareSignature.match(processName: file) != nil ||
+                   file.lowercased().contains("keylog") ||
+                   file.lowercased().contains("stealer") {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Suspicious file in Application Scripts",
+                        detail: "\(bundlePath)/\(file) matches known spyware naming",
+                        path: "\(bundlePath)/\(file)",
+                        remediation: "Inspect and remove if not expected: rm \"\(bundlePath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - User Services (~/Library/Services)
+
+    private func scanUserServices(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Services holds .workflow / .app bundles that show up in the Services menu.
+        // Malicious workflows can be triggered via URL scheme or accessibility-driven invocations —
+        // and, more importantly, they can carry AppleScript / shell payloads and run silently.
+        let home = ShellRunner.realUserHome
+        let servicesDir = "\(home)/Library/Services"
+        let fm = FileManager.default
+
+        guard let entries = try? fm.contentsOfDirectory(atPath: servicesDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let path = "\(servicesDir)/\(entry)"
+
+            // Every workflow contains a document.wflow with the action list — read it and flag
+            // ones that shell-out (RunShellScript action). Legitimate user workflows can do this,
+            // but it's a strong indicator worth surfacing.
+            let wflowPath = "\(path)/Contents/document.wflow"
+            let hasShellAction: Bool = {
+                guard let content = try? String(contentsOfFile: wflowPath, encoding: .utf8) else { return false }
+                return content.contains("RunShellScriptAction") ||
+                       content.contains("run-shell-script") ||
+                       content.contains("do shell script")
+            }()
+
+            findings.append(Finding(
+                severity: hasShellAction ? .medium : .low,
+                category: .persistence,
+                title: hasShellAction
+                    ? "User Service runs shell commands"
+                    : "Custom user Service installed",
+                detail: "Service: \(entry)" + (hasShellAction ? " — invokes shell scripts from the Services menu" : ""),
+                path: path,
+                remediation: "Review the workflow, remove if not yours: rm -rf \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Automator Login-Time Agents
+
+    private func scanAutomatorAgents(findings: inout [Finding], errors: inout [String]) {
+        // Automator "Application" workflows can be added to Login Items to fire on every login.
+        // These are sometimes seen carrying stage-2 loaders because they bypass code-signing scrutiny.
+        let home = ShellRunner.realUserHome
+        let candidates = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Workflows/Applications/Calendar",
+            "\(home)/Library/Workflows/Applications/Image Capture",
+        ]
+        let fm = FileManager.default
+
+        for dir in candidates {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let path = "\(dir)/\(entry)"
+                let category = URL(fileURLWithPath: dir).lastPathComponent
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Automator agent installed (\(category))",
+                    detail: "Workflow: \(entry) — fires automatically on the associated event",
+                    path: path,
+                    remediation: "Review with Automator, remove if not yours: rm -rf \"\(path)\""
+                ))
             }
         }
     }

@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking SSH configuration")
+        checkSSHConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking Time Machine encryption")
+        checkTimeMachineEncryption(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bonjour advertising")
+        checkBonjourAdvertising(findings: &findings, errors: &errors)
+
+        progress?.update("checking Siri privacy")
+        checkSiriPrivacy(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -466,6 +481,203 @@ public final class HardeningScanner: Scanner {
                     detail: "Rapid Security Responses (RSRs) patch actively exploited bugs — leaving this off delays urgent fixes",
                     path: nil,
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
+                ))
+            }
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // On macOS 12+, AirPlay Receiver is a network service that accepts screen streams / audio
+        // from nearby devices. On macOS 14 Sonoma it defaults to ON for many users after upgrade.
+        // A misconfigured "Anyone on the same network" setting is a real surveillance/data-exfil vector
+        // (the Mac appears as an AirPlay target and can be sent screens/audio without authentication).
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.RemoteManagement", "AirplayReceiverEnabled"
+        ], timeout: 5)
+        // Fall back to the user-scope key if the system-scope one is unset
+        let userScope = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.controlcenter", "AirplayRecieverEnabled"
+        ], timeout: 5)
+
+        let enabled = (result.success && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+                   || (userScope.success && userScope.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
+
+        if enabled {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac accepts AirPlay streams from other devices — a network-facing surface that has had multiple CVEs",
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - SSH Configuration
+
+    private func checkSSHConfig(findings: inout [Finding], errors: inout [String]) {
+        // /etc/ssh/sshd_config controls the incoming SSH service. Even when SSH is disabled today,
+        // a permissive config makes turn-it-on-and-forget-it risky. Two settings are consistently
+        // flagged by the CIS benchmark: PermitRootLogin and PasswordAuthentication.
+        guard let content = try? String(contentsOfFile: "/etc/ssh/sshd_config", encoding: .utf8) else { return }
+
+        var rootLoginAllowed = false
+        var passwordAuthAllowed = false
+        var permitEmptyPasswords = false
+        var x11ForwardingEnabled = false
+
+        for line in content.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+
+            let parts = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+                .map { String($0).lowercased() }
+            guard parts.count >= 2 else { continue }
+
+            switch parts[0] {
+            case "permitrootlogin":
+                // "yes" or "without-password" (a.k.a. prohibit-password) both allow root
+                if parts[1] == "yes" || parts[1] == "without-password" {
+                    rootLoginAllowed = true
+                }
+            case "passwordauthentication":
+                if parts[1] == "yes" { passwordAuthAllowed = true }
+            case "permitemptypasswords":
+                if parts[1] == "yes" { permitEmptyPasswords = true }
+            case "x11forwarding":
+                if parts[1] == "yes" { x11ForwardingEnabled = true }
+            default:
+                continue
+            }
+        }
+
+        if rootLoginAllowed {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH allows root login",
+                detail: "sshd_config has 'PermitRootLogin yes' — remote root access massively widens the attack surface",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitRootLogin no' in /etc/ssh/sshd_config, then: sudo launchctl kickstart -k system/com.openssh.sshd"
+            ))
+        }
+
+        if permitEmptyPasswords {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "SSH permits empty passwords",
+                detail: "sshd_config has 'PermitEmptyPasswords yes' — accounts without passwords can log in over the network",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config"
+            ))
+        }
+
+        if passwordAuthAllowed {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "SSH allows password authentication",
+                detail: "sshd_config has 'PasswordAuthentication yes' — key-based auth is stronger and eliminates brute-force risk",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'PasswordAuthentication no' and use SSH keys instead"
+            ))
+        }
+
+        if x11ForwardingEnabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "SSH X11 forwarding is enabled",
+                detail: "X11 forwarding is a known vector for GUI keylogging attacks — rarely needed on modern macOS",
+                path: "/etc/ssh/sshd_config",
+                remediation: "Set 'X11Forwarding no' in /etc/ssh/sshd_config"
+            ))
+        }
+    }
+
+    // MARK: - Time Machine Encryption
+
+    private func checkTimeMachineEncryption(findings: inout [Finding], errors: inout [String]) {
+        // Unencrypted Time Machine backups snapshot the whole disk — if the drive walks away,
+        // so does everything on your Mac (including keychain items, mail, etc.).
+        let result = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 10)
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        var currentDest: String?
+        var unencryptedDests: [String] = []
+
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("Name") {
+                if let colonRange = trimmed.range(of: ":") {
+                    currentDest = String(trimmed[colonRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                }
+            } else if trimmed.hasPrefix("Kind") {
+                // Some destination kinds imply encryption; on network volumes we check separately
+                let value = trimmed.lowercased()
+                if let dest = currentDest, value.contains("local") && !value.contains("encrypted") {
+                    // Ask tmutil directly whether encryption is on for this destination — best-effort.
+                    unencryptedDests.append(dest)
+                }
+            }
+        }
+
+        // If no destinations are configured, tmutil returns empty output — no finding is appropriate.
+        // We only flag when the user has an unencrypted local destination in use.
+        for dest in unencryptedDests {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine backup may not be encrypted",
+                detail: "Destination \"\(dest)\" appears unencrypted — a stolen backup drive exposes your data even if FileVault is on",
+                path: nil,
+                remediation: "Turn on 'Encrypt Backup' in System Settings > General > Time Machine > (i)"
+            ))
+        }
+    }
+
+    // MARK: - Bonjour / mDNS Advertising
+
+    private func checkBonjourAdvertising(findings: inout [Finding], errors: inout [String]) {
+        // Bonjour advertising broadcasts services on the local network. Disabling advertising while
+        // leaving discovery on is a common privacy hardening step for users on hostile networks.
+        // NoMulticastAdvertisements = 1 means advertising is off.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.mDNSResponder", "NoMulticastAdvertisements"
+        ], timeout: 5)
+
+        // If the key doesn't exist, advertising is ON (the default).
+        let advertisingOff = result.success &&
+            result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1"
+
+        if !advertisingOff {
+            // Only surface as informational — most users want Bonjour for AirPlay, printers, etc.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Bonjour multicast advertising is enabled",
+                detail: "This Mac broadcasts its hostname / services on the local network — routine, but a fingerprinting vector on untrusted networks",
+                path: nil,
+                remediation: "To disable advertising while keeping discovery: sudo defaults write /Library/Preferences/com.apple.mDNSResponder.plist NoMulticastAdvertisements -bool YES"
+            ))
+        }
+    }
+
+    // MARK: - Siri Privacy
+
+    private func checkSiriPrivacy(findings: inout [Finding], errors: inout [String]) {
+        // "Improve Siri & Dictation" opts your voice snippets into Apple's grading pool.
+        // For high-privacy users this is a real leak — flag as informational so the user can decide.
+        let optIn = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.assistant.support", "Siri Data Sharing Opt-In Status"
+        ], timeout: 5)
+        if optIn.success {
+            let value = optIn.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Apple encodes: 2 = opted in, 1 = opted out. Anything else usually means "not yet asked".
+            if value == "2" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Siri voice-sample sharing is enabled",
+                    detail: "Voice snippets are shared with Apple for grading — a privacy trade-off worth reviewing",
+                    path: nil,
+                    remediation: "Disable: System Settings > Privacy & Security > Analytics & Improvements > Improve Siri & Dictation"
                 ))
             }
         }
