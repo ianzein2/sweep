@@ -434,6 +434,230 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" campaign (2023-2026) — attackers pose as recruiters and
+        // trick developers into running malicious JS/Python packages during a fake interview.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "livechat", "chat-widget", "video-sdk"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/Library/Application Support/.npl",
+                "~/Downloads/nvidia.py",
+                "~/Downloads/update.py",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "InvisibleFerret", "ssh_login", "pay", "pay32",
+                           "mlip", "adb32", "bow"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.n2/bow",
+                "~/.n2/mlip",
+                "~/.n2/adb32",
+                "/private/tmp/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrostyFerret",
+            processNames: ["FrostyFerret", "ChromeUpdateAlert", "chromeupdatealert"],
+            bundleIdentifiers: ["com.google.chromeupdatealert"],
+            filePaths: [
+                "/private/tmp/.frosty",
+                "~/Library/Application Support/.chromeupdatealert",
+            ],
+            launchAgentLabels: ["com.google.chromeupdatealert"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "FROSTYFERRET_UI", "ChromeUpdate"],
+            bundleIdentifiers: ["com.zoom.zoomupdate", "com.apple.system.chromeupdate"],
+            filePaths: [
+                "/private/tmp/.pu",
+                "~/Library/Application Support/.chromeupdate",
+            ],
+            launchAgentLabels: ["com.zoom.zoomupdate"]
+        ),
+        SpywareSignature(
+            name: "DevPopper",
+            processNames: ["DevPopper", "devpopper", "npm-init", "beavertail-v2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/Downloads/npm-init.js",
+                "~/Downloads/nvidia-drivers.py",
+            ],
+            launchAgentLabels: []
+        ),
+        // Chinese-linked macOS threats (2024-2025)
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "wsserver", "airportd_bg"],
+            bundleIdentifiers: ["com.apple.airportd_bg"],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.lightspy",
+                "/Library/LaunchDaemons/.com.apple.wsserver.plist",
+            ],
+            launchAgentLabels: ["com.apple.wsserver", "com.apple.airportd.bg"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["hzrat", "HZRAT", "OpenVPNConnect_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzr",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        SpywareSignature(
+            name: "MacMa (CDDS)",
+            processNames: ["MacMa", "cdds", "UserAgent", "airportpaird"],
+            bundleIdentifiers: ["com.apple.airportpaird"],
+            filePaths: [
+                "/private/tmp/.cdds",
+                "~/Library/Preferences/.airportpaird.plist",
+            ],
+            launchAgentLabels: ["com.apple.airportpaird"]
+        ),
+        // Newer AMOS variants and knock-offs (2024-2026)
+        SpywareSignature(
+            name: "AMOS v3 / Amos.NextGen",
+            processNames: ["amos3", "amos_ng", "amos_stealer_v3", "atomicMacosStealerV3"],
+            bundleIdentifiers: ["com.atomic.stealer.v3", "com.amosng.agent"],
+            filePaths: [
+                "/private/tmp/.amos3",
+                "/private/tmp/.amos_ng",
+                "~/Library/Application Support/.amos_ng",
+            ],
+            launchAgentLabels: ["com.amos.ng"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odysseyStealer", "odyssey_mac"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        SpywareSignature(
+            name: "Ledger Stealer (RustyDoor variant)",
+            processNames: ["LedgerLive_bg", "ledgerHelper", "ledger_stealer"],
+            bundleIdentifiers: ["com.ledger.live.helper"],
+            filePaths: [
+                "/private/tmp/.ledger_stealer",
+                "~/Library/Application Support/.ledger_bg",
+            ],
+            launchAgentLabels: ["com.ledger.live.helper"]
+        ),
+        SpywareSignature(
+            name: "RustDoor / Trellix ThiefQuest2",
+            processNames: ["Rustdoor", "rustdoor", "Zoom_launcher", "VisualStudioUpdater"],
+            bundleIdentifiers: ["com.zoom.launcher.helper"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.VisualStudioUpdater",
+                "/private/var/tmp/.tst",
+            ],
+            launchAgentLabels: ["com.zoom.launcher.helper", "com.microsoft.visualstudio.updater"]
+        ),
+        // ClickFix / FakeCAPTCHA loaders (2024-2026) — victim is tricked into pasting shell
+        // commands from a "verify you're human" prompt. Payloads observed include AMOS clones
+        // and custom Go/Rust downloaders.
+        SpywareSignature(
+            name: "ClickFix Loader (macOS)",
+            processNames: ["clickfix", "capchafix", "webshell.sh", "verify_human", "captcha_verify"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/verify_human",
+                "/private/tmp/captcha_verify",
+                "/private/tmp/.clickfix",
+                "~/Library/Application Support/.clickfix",
+            ],
+            launchAgentLabels: []
+        ),
+        // Long-standing DPRK crypto-targeting family, still active
+        SpywareSignature(
+            name: "AppleJeus",
+            processNames: ["applejeus", "AppleJeus", "JMTTrader", "CoinGoTrade",
+                           "UnionCryptoTrader", "WBTC-Manager"],
+            bundleIdentifiers: [
+                "com.jmttrading.jmttrader",
+                "com.coingotrade.coingotrade",
+                "com.wbtc.manager",
+            ],
+            filePaths: [
+                "/Library/JMTTrader",
+                "/Library/CoinGoTrade",
+                "/Library/UnionCryptoTraderUpdater",
+            ],
+            launchAgentLabels: [
+                "com.jmttrading.jmttrader",
+                "com.coingotrade.mac.updater",
+                "com.unioncrypto.mac.updater",
+            ]
+        ),
+        // 2025 additions observed in the wild
+        SpywareSignature(
+            name: "iSpy Stealer",
+            processNames: ["ispy_stealer", "iSpyStealer", "ispymacsteal"],
+            bundleIdentifiers: ["com.ispy.stealer"],
+            filePaths: [
+                "/private/tmp/.ispy",
+                "~/Library/Application Support/.ispy",
+            ],
+            launchAgentLabels: ["com.ispy.service"]
+        ),
+        SpywareSignature(
+            name: "Fickle Stealer (macOS)",
+            processNames: ["Fickle", "fickle_stealer", "fickle-mac"],
+            bundleIdentifiers: ["com.fickle.stealer"],
+            filePaths: [
+                "/private/tmp/.fickle",
+                "~/Library/Application Support/.Fickle",
+            ],
+            launchAgentLabels: ["com.fickle.stealer"]
+        ),
+        // Espionage-grade backdoors (2024-2026)
+        SpywareSignature(
+            name: "BOLDMOVE (Fortinet targeting)",
+            processNames: ["boldmove", "BOLDMOVE", "fgt_updater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.boldmove",
+                "/private/tmp/fgt_updater",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TrollStealer (Kimsuky)",
+            processNames: ["TrollStealer", "trollstealer", "trollmac"],
+            bundleIdentifiers: ["com.troll.stealer"],
+            filePaths: [
+                "/private/tmp/.trollstealer",
+                "~/Library/Application Support/.TrollStealer",
+            ],
+            launchAgentLabels: ["com.troll.stealer"]
+        ),
+        // Cobalt Strike Mach-O beacons (increasingly ported to macOS in 2025)
+        SpywareSignature(
+            name: "Cobalt Strike (macOS beacon)",
+            processNames: ["beacon_mac", "cs_beacon", "GeacomAgent", "geacon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.geacon",
+                "/private/tmp/.beacon_mac",
+                "~/Library/Application Support/.geacon",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +674,17 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2026 spyware disguises
+        "com.apple.airportd_bg",
+        "com.apple.airportpaird",
+        "com.apple.wsserver",
+        "com.apple.system.chromeupdate",
+        "com.apple.spotlightd.helper",
+        "com.apple.mdworker.helper",
+        "com.apple.icloud.helper",
+        "com.apple.xprotect.helper",
+        "com.apple.gatekeeper.helper",
+        "com.apple.timemachine.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

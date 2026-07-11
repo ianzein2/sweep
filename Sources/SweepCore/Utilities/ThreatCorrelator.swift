@@ -129,6 +129,25 @@ public enum ThreatCorrelator {
             ))
         }
 
+        // Pattern 6: ClickFix paste + unusual persistence = compromise-in-progress.
+        // A curl-piped-to-shell entry in history alone is a bright red flag, but paired with
+        // a fresh LaunchAgent it means the paste succeeded and installed something durable.
+        let clickFixHit = results.first(where: { $0.scannerName == "Shell History Scan" })?
+            .findings.contains { $0.severity == .high } ?? false
+        let recentPersistenceCount = results.first(where: { $0.scannerName == "Persistence Scan" })?
+            .findings.filter { $0.severity == .high }.count ?? 0
+
+        if clickFixHit && recentPersistenceCount > 0 {
+            findings.append(Finding(
+                severity: .high,
+                category: .suspiciousProcess,
+                title: "ClickFix paste + high-severity persistence detected",
+                detail: "Shell history contains a paste-and-run pattern (\(clickFixHit ? "curl|sh, base64 payload, or fake CAPTCHA marker" : "n/a")) and the persistence scanner flagged \(recentPersistenceCount) HIGH item(s) — the paste likely installed a durable payload",
+                path: nil,
+                remediation: "Treat this Mac as potentially compromised: isolate from network, rotate every credential entered in the last 24h, then investigate the flagged persistence items"
+            ))
+        }
+
         return ScanResult(
             scannerName: "Threat Correlation",
             findings: findings,

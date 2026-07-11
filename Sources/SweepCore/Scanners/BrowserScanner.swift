@@ -4,17 +4,51 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
-    // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // Recent campaigns (late 2024 / 2025 / 2026) have weaponized VSCode/Cursor marketplace
+    // extensions to steal credentials, drain crypto wallets, and inject backdoors. Keywords
+    // mirror reported malicious extension families and IOCs, plus specific publisher.name
+    // strings called out in vendor writeups.
     private let suspiciousEditorExtKeywords: [String] = [
+        // Function-suggestive names — these are almost never legitimate
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // Named malicious families reported in 2024-2025 research (ReversingLabs, Aqua, ExtensionTotal)
+        "ahban.shrimp", "ahban.cychelloworld",              // crypto-miner families
+        "kodinger.tavis",                                   // 2024 backdoor
+        "solidityai.solidity",                              // typo-squat of solidity-vscode
+        "juanfranblanco.solidity-visual-auditor-plus",      // fake fork
+        "prettier-code-formatter", "prettier-plus",         // Prettier typo-squats
+        "material-theme-dark-official",                     // Material Theme typo-squat
+        "vscode-typescript-python",                          // known Contagious Interview drop
+        "starcode-ai-code",                                  // 2025 stealer family
+        "envfile-decoder",                                   // pretends to decode .env files
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+    ]
+
+    // Chrome/Chromium extension IDs known to have been compromised or intentionally malicious
+    // in publicly reported 2024-2026 campaigns. These IDs may still be installed even after
+    // a takedown — the store removes the listing but the local copy on disk sticks around
+    // until the user manually uninstalls.
+    private let knownMaliciousExtensionIds: [String: String] = [
+        // Cyberhaven supply-chain compromise (Dec 2024) — attacker pushed a trojanized
+        // v24.10.4 that stole cookies and identity data from users on facebook.com
+        // and other high-value domains.
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (compromised Dec 2024)",
+        "dpccngbcgpnbfnkjfgobebgjhinaphce": "Reader Mode (compromised Dec 2024)",
+        "bkoemgcojidgjpobnfnhkkbmnbbaigmb": "Search Copilot AI (compromised Dec 2024)",
+        "apibdadghlnaeglnbfmbfjaphghhkegl": "VidHelper (compromised Dec 2024)",
+        "hpjkkcgbojejcefkbfmoccmhklalabjm": "AI Assistant ChatGPT/Gemini (compromised Dec 2024)",
+        "ekpkdmohpdnebfedjjfklhpefgpgaaji": "Uvoice (compromised Dec 2024)",
+        "acmfnomgphggnndenpankbnaajoljmdb": "Rewards Search Automator (compromised Dec 2024)",
+        "acbiaofoeebeinacmcknopaikmecdehl": "Tackker – online keylogger tool (malicious)",
+        // 2024-2026 spyware-adjacent extensions flagged by researchers
+        "cocgbbhkmgnnjahhidaaehefpehmemhk": "Search Manager (malicious)",
+        "gomekmidlodglbbmalcneegieacbdmki": "Everclue Search (typo-squat)",
+        "jjkchpdmjjdmalgembblgafllbpcjlei": "Local PDF Editor (data exfiltration)",
     ]
 
     // Extensions that are well-known and safe
@@ -143,6 +177,20 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Fast path: known-malicious ID. Emit a HIGH finding immediately and skip
+                    // the manifest walk — we want to alert even if the manifest looks clean now.
+                    if let iocLabel = knownMaliciousExtensionIds[extId] {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension matches a known-malicious ID",
+                            detail: "Extension ID \(extId) — \(iocLabel). Store listings may already be pulled, but the local files remain until you uninstall.",
+                            path: extDir,
+                            remediation: "Remove immediately: \(browserName) > Extensions (chrome://extensions) — then rotate any credentials used in this browser profile"
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

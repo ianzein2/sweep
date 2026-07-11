@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version currency")
+        checkMacOSVersionCurrency(findings: &findings, errors: &errors)
+
+        progress?.update("checking Signed System Volume")
+        checkSignedSystemVolume(findings: &findings, errors: &errors)
+
+        progress?.update("checking Advanced Data Protection")
+        checkAdvancedDataProtection(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +477,118 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version Currency
+
+    /// Rough currency check: Apple ships one major macOS release per year in the fall and
+    /// stops shipping security updates for versions >2 releases behind. Running an
+    /// unsupported major version means known-exploited bugs will never be patched — that's
+    /// a strictly worse security posture than any single misconfiguration.
+    ///
+    /// This uses the runtime OS version rather than a hard-coded "current" version so the
+    /// check keeps working after Sweep's binary ages. The reference table below only needs
+    /// updating when Apple's support horizon shifts.
+    private func checkMacOSVersionCurrency(findings: inout [Finding], errors: inout [String]) {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        let major = version.majorVersion
+
+        // Support horizon (as of mid-2026, three most-recent majors get security updates):
+        //   26 = Tahoe (current)      supported
+        //   15 = Sequoia               supported
+        //   14 = Sonoma                supported (final year)
+        //   ≤13 = Ventura and older   no longer receives security updates
+        //
+        // Apple's numbering jumped from macOS 15 (Sequoia) to macOS 26 (Tahoe) in fall 2025.
+        // Both are represented explicitly so a Sequoia box isn't mistakenly flagged as ancient.
+        let currentMajor = 26
+        let lastSupportedMajor = 14
+
+        if major < lastSupportedMajor {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(major) is no longer receiving security updates",
+                detail: "Running macOS \(major).\(version.minorVersion).\(version.patchVersion) — Apple stopped shipping security updates for this major version. Known-exploited bugs will not be patched.",
+                path: nil,
+                remediation: "Upgrade to macOS \(currentMajor): System Settings > General > Software Update"
+            ))
+        } else if major == lastSupportedMajor {
+            // Still supported, but in the final year of updates — worth surfacing.
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "macOS \(major) is in its final year of security updates",
+                detail: "Running macOS \(major).\(version.minorVersion).\(version.patchVersion) — plan the upgrade before support ends",
+                path: nil,
+                remediation: "Consider upgrading to macOS \(currentMajor): System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Signed System Volume (SSV)
+
+    /// The Signed System Volume is the read-only, cryptographically sealed root volume that
+    /// backs macOS Big Sur+. A "not sealed" state means a jailbreak / bootstrap tool has
+    /// broken the seal — one of the loudest indicators that this Mac is not running stock macOS.
+    private func checkSignedSystemVolume(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/diskutil", arguments: ["apfs", "list"], timeout: 8)
+        guard result.success else { return }
+
+        // The output includes "Sealed: Yes" for a healthy SSV. "Sealed: Broken" or "No"
+        // means the seal has been intentionally lifted (usually to mount root writable).
+        let lower = result.stdout.lowercased()
+        guard lower.contains("sealed") else { return }  // no sealed indicator — pre-Big Sur, nothing to check
+
+        // Look at each "Sealed: …" line specifically — the string "sealed" also appears in
+        // headers and mount options, so we can't just check for "sealed: no" in the whole blob.
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces).lowercased()
+            guard trimmed.hasPrefix("sealed:") else { continue }
+            if trimmed.contains("broken") || trimmed.contains("no") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Signed System Volume seal is broken",
+                    detail: "The system volume no longer verifies against Apple's cryptographic seal — someone has modified the read-only root, typically via a jailbreak or bootstrap tool",
+                    path: nil,
+                    remediation: "Reinstall macOS from Recovery Mode to restore the sealed system volume"
+                ))
+                return  // one finding is enough
+            }
+        }
+    }
+
+    // MARK: - Advanced Data Protection
+
+    /// Advanced Data Protection (ADP) enables end-to-end encryption for the majority of
+    /// iCloud data. Without ADP, iCloud Backup, iCloud Drive, Photos, Notes, and more are
+    /// encrypted only with Apple-held keys — a nation-state can compel Apple to disclose
+    /// them. We surface ADP status as informational (LOW) rather than a hard failure since
+    /// enabling ADP has real UX tradeoffs (device-based recovery only).
+    private func checkAdvancedDataProtection(findings: inout [Finding], errors: inout [String]) {
+        // ADP status is user-scoped and stored in the user's iCloud preferences. `defaults`
+        // can read it under com.apple.iCloud when logged in.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "MobileMeAccounts"
+        ], timeout: 5)
+
+        // If the user isn't signed into iCloud we simply can't check.
+        guard result.success, !result.stdout.isEmpty else { return }
+
+        // The plist blob contains "AdvancedDataProtection" = 0/1 when the account has been
+        // migrated. Absence of the key means ADP is off (Apple's default).
+        let hasKey = result.stdout.contains("AdvancedDataProtection")
+        let isEnabled = hasKey &&
+            (result.stdout.contains("AdvancedDataProtection = 1") ||
+             result.stdout.contains("\"AdvancedDataProtection\" = 1"))
+
+        if hasKey && !isEnabled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Advanced Data Protection is not enabled",
+                detail: "Without ADP, most iCloud data (Photos, Drive, Notes, Backup) is encrypted with keys Apple holds. Enabling ADP moves encryption keys onto your trusted devices only — but requires setting up an account recovery method first.",
+                path: nil,
+                remediation: "Enable: System Settings > [Your Name] > iCloud > Advanced Data Protection"
+            ))
         }
     }
 }
