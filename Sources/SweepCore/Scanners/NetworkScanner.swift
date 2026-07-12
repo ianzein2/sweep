@@ -40,6 +40,15 @@ public final class NetworkScanner: Scanner {
         4443, 8443,                            // Alt HTTPS often used by C2
         6667, 6668, 6669, 6697,               // IRC (used by some botnets)
         3127, 12345, 65535,                    // Known trojan ports
+        // Observed in 2024-2025 macOS infostealer / RAT C2 traffic
+        50050,                                 // Cobalt Strike default team-server port
+        4433, 4434, 4435,                      // Cobalt Strike / Meterpreter HTTPS defaults
+        8081, 8090, 8091,                      // Sliver / Havoc listener defaults (uncommon)
+        9001, 9030,                            // Tor OR/DirPort
+        2222, 2323,                            // Alt SSH/Telnet used by botnets
+        4488, 4489,                            // NimDoor C2 (reported)
+        5900, 5901, 5902,                      // VNC — exposed screen-share (info-leak)
+        13337, 51820,                          // Newer trojan-family ports
     ]
 
     private let blockedAppleDomains: Set<String> = [

@@ -11,10 +11,21 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 supply-chain families reported across VSCode/Cursor/Windsurf marketplaces
+        "solidity-vscode-support", "vscode-solidity-extended", "solidity-linter",
+        "prettify-solidity", "solidity-enhance", "solidity-prettier-helper",
+        "ai-genie-support", "code-copilot-plus", "gpt-copilot-helper",
+        "clipboard-history-plus", "pull-request-helper-plus",
+        "chat-gpt-helper-vscode", "gemini-vscode-plus", "claude-helper-plus",
+        "material-icon-theme-plus", "python-refactor-helper",
+        "juan-blanco.solidity-extended", "juan-blanco-solidity",
+        "code-snippet-utils", "prettier-vscode-official-plus",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        "cookie-dump", "cookie-steal", "creds-dump", "clipper", "cryptojack",
+        "wallet-drain", "drainer", "backdoor", "rat-agent",
     ]
 
     // Extensions that are well-known and safe
@@ -370,9 +381,20 @@ public final class BrowserScanner: Scanner {
                         title: "\(editorName) extension runs shell commands / remote code",
                         detail: "Extension: \(displayName) (\(extId))" +
                             (scriptResult.hasRemoteExec ? " — downloads and executes remote code" : "") +
-                            (scriptResult.hasShellExec ? " — spawns child_process commands" : ""),
+                            (scriptResult.hasShellExec ? " — spawns child_process commands" : "") +
+                            (scriptResult.hasExfilChannel ? " — also references a known exfil channel" : ""),
                         path: extPath,
                         remediation: "Review \(packagePath) and the extension's JS files. Remove if unexpected."
+                    ))
+                } else if scriptResult.hasExfilChannel {
+                    // Exfil channel URLs alone are suspicious in a marketplace extension.
+                    findings.append(Finding(
+                        severity: .medium,
+                        category: .suspiciousFile,
+                        title: "\(editorName) extension references a known exfiltration channel",
+                        detail: "Extension: \(displayName) (\(extId)) — code references Telegram bot, Discord webhook, IPFS gateway, or paste-site URL",
+                        path: extPath,
+                        remediation: "Review the extension. Marketplace extensions rarely need Telegram/Discord/pastebin URLs."
                     ))
                 }
             }
@@ -382,6 +404,7 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+        let hasExfilChannel: Bool
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {
@@ -390,6 +413,7 @@ public final class BrowserScanner: Scanner {
         let fm = FileManager.default
         var hasRemoteExec = false
         var hasShellExec = false
+        var hasExfilChannel = false
 
         let candidatePaths = [
             "\(extPath)/extension.js",
@@ -415,8 +439,24 @@ public final class BrowserScanner: Scanner {
                (lower.contains("eval(") || lower.contains("new function(") || lower.contains("vm.runin")) {
                 hasRemoteExec = true
             }
+            // 2025 supply-chain crews frequently exfil through Telegram/Discord/IPFS/pastebin. These
+            // aren't inherently malicious in isolation, but combined with any shell/exec path they
+            // reliably surface the stealer variants seen in-the-wild.
+            let exfilChannels = [
+                "api.telegram.org/bot", "discord.com/api/webhooks", "discordapp.com/api/webhooks",
+                "ipfs.io/ipfs/", "cloudflare-ipfs.com/ipfs/", "gateway.pinata.cloud",
+                "pastebin.com/raw", "hastebin.com/raw", "ghostbin.com/paste",
+                "transfer.sh/", "file.io/", "0x0.st/",
+            ]
+            if exfilChannels.contains(where: { lower.contains($0) }) {
+                hasExfilChannel = true
+            }
         }
 
-        return EditorScriptScan(hasRemoteExec: hasRemoteExec, hasShellExec: hasShellExec)
+        return EditorScriptScan(
+            hasRemoteExec: hasRemoteExec,
+            hasShellExec: hasShellExec,
+            hasExfilChannel: hasExfilChannel
+        )
     }
 }
