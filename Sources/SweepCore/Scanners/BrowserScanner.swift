@@ -144,6 +144,20 @@ public final class BrowserScanner: Scanner {
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
 
+                    // Hard blocklist: extension IDs already publicly attributed to malware.
+                    // Emit immediately — no need to load the manifest to be confident.
+                    if ThreatIntel.maliciousChromiumExtensionIDs.contains(extId) {
+                        let extDir = "\(extPath)/\(extId)"
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension on public malware blocklist",
+                            detail: "Extension ID \(extId) matches a family attributed to credential-theft or crypto-clipping (see ThreatIntel.maliciousChromiumExtensionIDs).",
+                            path: extDir,
+                            remediation: "Remove immediately in \(browserName) > Extensions and rotate any credentials the browser saved."
+                        ))
+                        continue
+                    }
+
                     let dedupeKey = "\(browserName):\(extId)"
 
                     // If already seen, just add the profile name

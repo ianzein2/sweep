@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking for DPRK Contagious Interview payloads")
+        scanContagiousInterviewPayloads(findings: &findings, errors: &errors)
+
+        progress?.update("checking for Shai-Hulud npm worm artifacts")
+        scanShaiHuludArtifacts(findings: &findings, errors: &errors)
+
+        progress?.update("checking for lookalike vendor folders")
+        scanLookalikeVendorFolders(findings: &findings, errors: &errors)
+
+        progress?.update("checking Background Task Management (login items)")
+        scanBackgroundTaskManagement(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +687,177 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Contagious Interview (BeaverTail / InvisibleFerret / OtterCookie)
+
+    /// The DPRK "recruiter" campaign that plants malicious npm packages drops second-stage
+    /// payloads into a fixed set of hidden directories under the developer's home. These
+    /// directories should not exist on a clean Mac; presence is high-confidence.
+    private func scanContagiousInterviewPayloads(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let payloadDirs = ["\(home)/.npl", "\(home)/.pyp", "\(home)/.n2"]
+        let fm = FileManager.default
+
+        for dir in payloadDirs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { continue }
+
+            let contents = (try? fm.contentsOfDirectory(atPath: dir)) ?? []
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "DPRK Contagious Interview staging directory present",
+                detail: "\(dir) exists with \(contents.count) entries — BeaverTail / InvisibleFerret / OtterCookie use this path for second-stage payloads.",
+                path: dir,
+                remediation: "Investigate the developer's recent npm installs, then remove: rm -rf \"\(dir)\""
+            ))
+        }
+
+        // A malicious npm package name in the developer's package.json or npm cache is the
+        // supply-chain half of the same campaign.
+        let packageJson = "\(home)/package.json"
+        if let content = try? String(contentsOfFile: packageJson, encoding: .utf8) {
+            for pkg in ThreatIntel.maliciousNpmPackages where content.contains("\"\(pkg)\"") {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Malicious npm package listed in package.json: \(pkg)",
+                    detail: "This package name has been publicly attributed to DPRK Contagious Interview loaders.",
+                    path: packageJson,
+                    remediation: "Remove the dependency, wipe node_modules, and rotate any secrets the machine has access to."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Shai-Hulud npm worm
+
+    /// Shai-Hulud infects other npm packages and exfiltrates dev secrets by planting a
+    /// GitHub Actions workflow named `shai-hulud-workflow.yml` in every repo it can reach.
+    /// The file's presence in ANY `.github/workflows/` under the developer's home is a
+    /// clear IOC (SentinelOne, Wiz, Sep-Nov 2025).
+    private func scanShaiHuludArtifacts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // Bounded search — we're looking for one specific filename, so `find` is faster
+        // than walking every repo on disk in Swift.
+        let result = ShellRunner.run("/usr/bin/find", arguments: [
+            home,
+            "-maxdepth", "6",
+            "-type", "f",
+            "-name", "shai-hulud-workflow.yml",
+            "-not", "-path", "*/node_modules/*",
+        ], timeout: 20)
+
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        for line in result.stdout.split(separator: "\n") {
+            let path = String(line).trimmingCharacters(in: .whitespaces)
+            guard !path.isEmpty else { continue }
+            findings.append(Finding(
+                severity: .high, category: .persistence,
+                title: "Shai-Hulud npm worm workflow present",
+                detail: "File \(path) exfiltrates repo secrets via GitHub Actions when the repo is pushed.",
+                path: path,
+                remediation: "Remove the file, rotate every credential the repo has access to (npm, GitHub, cloud), and audit recent commits: git log -- .github/workflows/"
+            ))
+        }
+    }
+
+    // MARK: - Lookalike vendor folders
+
+    /// NimDoor (2025) hid its Nim binary under `~/Library/Application Support/Google LLC/GoogIe LLC`
+    /// — a capital-I lookalike for "Google". Same technique is used by Zoom/Adobe/Microsoft
+    /// impersonators. A folder with a visually identical name but different bytes is spoofing.
+    private func scanLookalikeVendorFolders(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let roots = [
+            "\(home)/Library/Application Support",
+            "\(home)/Library/LaunchAgents",
+            "/Library/Application Support",
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
+        ]
+        let fm = FileManager.default
+
+        for root in roots {
+            guard let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for entry in entries where SpywareSignature.isLookalikeBrandName(entry) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Vendor-lookalike folder in \(URL(fileURLWithPath: root).lastPathComponent)",
+                    detail: "\(entry) visually mimics a real vendor name (capital-I for lowercase-l, or a non-ASCII homoglyph). NimDoor and Sapphire Sleet use this exact technique.",
+                    path: "\(root)/\(entry)",
+                    remediation: "Inspect contents, then remove if not created by you: rm -rf \"\(root)/\(entry)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Background Task Management (login items)
+
+    /// macOS 13+ moved login items into the Background Task Management service.
+    /// `sfltool dumpbtm` prints every registered item. Anything from an unsigned or
+    /// non-Apple, non-App-Store bundle is worth surfacing — 2025-2026 malware
+    /// increasingly hides here to dodge LaunchAgent-focused scanners.
+    private func scanBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 15)
+        // Requires Full Disk Access on some macOS builds; a failure here is expected in
+        // unelevated scans, not a bug.
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // sfltool prints one item per record separated by blank lines. Fields we care
+        // about: "Name", "Developer Name", "Team Identifier", "Disposition", "URL".
+        let records = result.stdout.components(separatedBy: "\n\n")
+        for record in records {
+            var name = "unknown"
+            var team = ""
+            var url = ""
+            var disposition = ""
+            for line in record.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("Name:") {
+                    name = trimmed.replacingOccurrences(of: "Name:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if trimmed.hasPrefix("Developer Name:") {
+                    let dev = trimmed.replacingOccurrences(of: "Developer Name:", with: "").trimmingCharacters(in: .whitespaces)
+                    if team.isEmpty { team = dev }
+                } else if trimmed.hasPrefix("Team Identifier:") {
+                    let tid = trimmed.replacingOccurrences(of: "Team Identifier:", with: "").trimmingCharacters(in: .whitespaces)
+                    if !tid.isEmpty && tid != "(null)" { team = tid }
+                } else if trimmed.hasPrefix("URL:") {
+                    url = trimmed.replacingOccurrences(of: "URL:", with: "").trimmingCharacters(in: .whitespaces)
+                } else if trimmed.hasPrefix("Disposition:") {
+                    disposition = trimmed.replacingOccurrences(of: "Disposition:", with: "").trimmingCharacters(in: .whitespaces)
+                }
+            }
+            if name == "unknown" && url.isEmpty { continue }
+
+            // Team ID pinned to a family we know signs malware — surface with high severity.
+            if ThreatIntel.untrustedAppleTeamIDs.contains(team) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login item signed by an untrusted Apple Team ID",
+                    detail: "Item \"\(name)\" is registered as a login item and signed by team \(team) — this team has been observed signing 2025-2026 macOS stealer/backdoor bundles.",
+                    path: url.isEmpty ? nil : url,
+                    remediation: "Remove in System Settings > General > Login Items, then delete the associated app."
+                ))
+                continue
+            }
+
+            // An enabled login item pointing at /tmp or a hidden path is not something
+            // legitimate installers do.
+            let target = url.lowercased()
+            let isHidden = target.contains("/.")
+            let isTemp = target.contains("/tmp/") || target.contains("/private/tmp/") || target.contains("/var/tmp/")
+            let isEnabled = disposition.lowercased().contains("enabled")
+            if isEnabled && (isHidden || isTemp) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login item points to a hidden or temp path",
+                    detail: "Item \"\(name)\" (team: \(team.isEmpty ? "none" : team)) is registered as a login item and launches: \(url)",
+                    path: url.isEmpty ? nil : url,
+                    remediation: "Remove in System Settings > General > Login Items."
+                ))
+            }
         }
     }
 

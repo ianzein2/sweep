@@ -178,6 +178,42 @@ public final class NetworkScanner: Scanner {
                 }
             }
 
+            // Known-bad remote endpoints (2025-2026 macOS C2 infrastructure).
+            // lsof prints the connection as "local->remote:port"; both a bare IP and a
+            // reverse-resolved hostname can appear on the right side.
+            for conn in connections {
+                let connLower = conn.connection.lowercased()
+                for domain in ThreatIntel.knownC2Domains {
+                    // Match "->host.domain:port" and ".domain:port" but not a substring of an unrelated hostname.
+                    if connLower.contains("->" + domain) ||
+                       connLower.contains("." + domain + ":") ||
+                       connLower.hasSuffix(domain) ||
+                       connLower.contains("->" + domain + ":") {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "Process connecting to known malware C2 domain",
+                            detail: "Process: \(command) (PID \(pid)) → \(domain) (see ThreatIntel.knownC2Domains)",
+                            path: nil,
+                            remediation: "Kill this process, capture the binary, and reset any credentials it could access."
+                        ))
+                        break
+                    }
+                }
+                for ip in ThreatIntel.knownC2IPs {
+                    // IPs get a literal match — beware of substrings (10.0.0.1 vs 110.0.0.1)
+                    if connLower.contains("->" + ip + ":") || connLower.contains("->" + ip + " ") {
+                        findings.append(Finding(
+                            severity: .high, category: .networkActivity,
+                            title: "Process connecting to known malware C2 IP",
+                            detail: "Process: \(command) (PID \(pid)) → \(ip) (see ThreatIntel.knownC2IPs)",
+                            path: nil,
+                            remediation: "Kill this process, capture the binary, and reset any credentials it could access."
+                        ))
+                        break
+                    }
+                }
+            }
+
             // Check for unsigned processes with outbound connections
             let establishedConns = connections.filter { $0.isEstablished }
             if !establishedConns.isEmpty {
@@ -266,6 +302,20 @@ public final class NetworkScanner: Scanner {
                         detail: "Domain: \(domain) → \(ip) — blocks macOS security checks",
                         path: "/etc/hosts",
                         remediation: "Remove this line from /etc/hosts: sudo nano /etc/hosts"
+                    ))
+                }
+            }
+
+            // A known-bad C2 domain pinned in /etc/hosts is unusual — either an analyst's
+            // sinkhole (fine) or attacker infrastructure caching (bad). Either way, surface it.
+            for domain in ThreatIntel.knownC2Domains {
+                if lineStr.lowercased().contains(domain) {
+                    findings.append(Finding(
+                        severity: .medium, category: .networkActivity,
+                        title: "Known malware C2 domain pinned in /etc/hosts",
+                        detail: "Line references \(domain) → \(ip). Verify whether this is your sinkhole or attacker persistence.",
+                        path: "/etc/hosts",
+                        remediation: "If unexpected, remove: sudo nano /etc/hosts"
                     ))
                 }
             }

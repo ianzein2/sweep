@@ -55,6 +55,12 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking macOS version against publicly-known CVEs")
+        checkMacOSVersionAgainstCVEs(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo version against CVE-2025-32463")
+        checkSudoVersion(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +452,95 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - macOS Version vs. CVE Table
+
+    /// Parse `sw_vers -productVersion` and match it against ThreatIntel's per-train
+    /// minimum-safe versions. Old macOS = exposure to at least one publicly-disclosed
+    /// critical CVE (kernel RCE, root privesc, Wi-Fi bug, or CVE-2026-39118 EDR bypass).
+    private func checkMacOSVersionAgainstCVEs(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sw_vers", arguments: ["-productVersion"], timeout: 5)
+        guard result.success else { return }
+
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = raw.split(separator: ".").compactMap { Int($0) }
+        guard let major = parts.first else { return }
+        let minor = parts.count > 1 ? parts[1] : 0
+        let patch = parts.count > 2 ? parts[2] : 0
+        let running = ThreatIntel.MacOSVersion(major, minor, patch)
+
+        // Find the train whose major matches. If none matches (very old macOS < 14 or a
+        // future major), report a general "unsupported" finding.
+        let matched = ThreatIntel.macOSMinimumSafeVersions.first { $0.minimum.major == major }
+        guard let entry = matched else {
+            if major < 14 {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "macOS \(raw) is no longer receiving security updates",
+                    detail: "Only macOS Sonoma (14), Sequoia (15), and Tahoe (26) receive security patches from Apple.",
+                    path: nil,
+                    remediation: "Upgrade to a supported macOS version."
+                ))
+            }
+            return
+        }
+
+        if running.isOlderThan(entry.minimum) {
+            let safeStr = "\(entry.minimum.major).\(entry.minimum.minor).\(entry.minimum.patch)"
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "macOS \(entry.train) \(raw) is missing critical security updates",
+                detail: "Apple's latest \(entry.train) build is \(safeStr) — this Mac is exposed to at least one publicly-disclosed kernel-RCE, root-privesc, or Wi-Fi CVE. See ThreatIntel.macOSMinimumSafeVersions for the tracking list.",
+                path: nil,
+                remediation: "Install: System Settings > General > Software Update."
+            ))
+        }
+    }
+
+    // MARK: - sudo (CVE-2025-32463)
+
+    /// CVE-2025-32463 (sudo chroot local root) fixed in sudo 1.9.17p1. macOS 15.6 shipped
+    /// a vulnerable sudo. If the binary is still on-disk and below the fix version,
+    /// surface it.
+    private func checkSudoVersion(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/sudo", arguments: ["--version"], timeout: 5)
+        guard result.success else { return }
+
+        // First line of output: "Sudo version 1.9.14"
+        guard let firstLine = result.stdout.split(separator: "\n").first else { return }
+        // Extract "1.9.14" style token
+        let tokens = firstLine.split(separator: " ")
+        guard let versionToken = tokens.last else { return }
+        let versionStr = String(versionToken)
+
+        // Parse major.minor.patch, treating "p1"/"p2" as patch suffix.
+        // Anything below 1.9.17p1 is vulnerable.
+        let base = versionStr.split(separator: "p").first.map(String.init) ?? versionStr
+        let parts = base.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 3 else { return }
+        // Named locally rather than `(maj, min, pat)` to avoid shadowing Swift.min.
+        let maj = parts[0]
+        let minorVer = parts[1]
+        let pat = parts[2]
+
+        // Vulnerable if < 1.9.17, OR == 1.9.17 with no "p" suffix (1.9.17 without a
+        // patch tag is pre-fix).
+        let hasPatchSuffix = versionStr.contains("p")
+        let vulnerable = maj < 1 ||
+            (maj == 1 && minorVer < 9) ||
+            (maj == 1 && minorVer == 9 && pat < 17) ||
+            (maj == 1 && minorVer == 9 && pat == 17 && !hasPatchSuffix)
+
+        if vulnerable {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "sudo \(versionStr) is vulnerable to CVE-2025-32463 (local root)",
+                detail: "sudo's chroot option lets a local user gain root. Fixed in sudo 1.9.17p1.",
+                path: "/usr/bin/sudo",
+                remediation: "Install the latest macOS security update, or install a patched sudo via Homebrew and adjust PATH."
+            ))
         }
     }
 

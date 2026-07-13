@@ -434,6 +434,158 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // Contemporary DPRK / APT (2025-2026)
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            // NimDoor's second stage is a Nim binary named "CoreKitAgent"; first-stage bash
+            // droppers are dumped as short filenames in /private/var/tmp.
+            processNames: ["CoreKitAgent", "netchk", "zoom_sdk_support"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/a",
+                "/private/var/tmp/installer",
+                "/private/var/tmp/netchk",
+                "~/Library/Application Support/Google LLC/GoogIe LLC",  // lookalike I-vs-l
+                "/private/tmp/zoom_sdk_support.scpt",
+            ],
+            // Real Google Chrome uses com.google.keystone.agent; NimDoor squats
+            // com.google.update as a decoy label.
+            launchAgentLabels: ["com.google.update"]
+        ),
+        SpywareSignature(
+            name: "Sapphire Sleet (DPRK)",
+            processNames: ["icloudz", "com.apple.cli"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/iCloud/icloudz",
+            ],
+            launchAgentLabels: ["com.apple.cli"]
+        ),
+        SpywareSignature(
+            name: "SHub Reaper / SHub Stealer",
+            processNames: ["shub_helper", "shub_update", "GoogleUpdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/helper",
+                "/tmp/update",
+                "/tmp/shub_",  // /tmp/shub_<random>/
+                "~/Library/Application Support/Google/GoogleUpdate.app/Contents/MacOS/GoogleUpdate",
+            ],
+            // Reaper mints per-victim random labels; the finder helper label is stable.
+            launchAgentLabels: ["com.finder.helper", "com.google.keystone.agent.helper"]
+        ),
+        SpywareSignature(
+            name: "MacSync Stealer (Mac.c rebrand)",
+            processNames: ["UserSyncWorker", "runner"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/runner",
+                "~/Library/Logs/UserSyncWorker.log",
+                "~/Library/Application Support/UserSyncWorker",
+                "~/Library/Application Support/UserSyncWorker/last_up",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Gaslight (DPRK)",
+            // Rust binary that ships an AI prompt-injection blob to derail human-in-the-loop analysts.
+            processNames: ["gaslight"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: ["com.apple.system.services.activity"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["libsystd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/libsystd.dylib",
+                "/private/tmp/libsystd.dylib",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "DigitStealer",
+            // Delivered as a fake "DynamicLake" menu-bar app; payload is JXA/osascript stages.
+            processNames: ["DynamicLake"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Volumes/DynamicLake",
+                "~/Downloads/DynamicLake.dmg",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrigidStealer (TA2727)",
+            processNames: ["FrigidStealer", "frigid"],
+            bundleIdentifiers: [],
+            // FrigidStealer arrives via fake-browser-update lures — the DMG typically has a
+            // generic "update"/"install" name and asks for the login password via osascript.
+            filePaths: [
+                "~/Downloads/Update.dmg",
+                "~/Downloads/BrowserUpdate.dmg",
+                "~/Downloads/SafariUpdate.dmg",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer (ex-Poseidon)",
+            // Poseidon was resold and rebranded to Odyssey; the on-disk state file is stable.
+            processNames: ["odyssey", "Odyssey"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.botid",  // Odyssey's persistent bot-identifier file
+                "/Users/Shared/NW",  // Cthulhu 2025 repack drop directory
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "CHILLYHELL",
+            // Apple-notarized backdoor unnoticed since 2021; persists by appending to shell rc files.
+            processNames: ["chillyhell", "ChillyHell"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Covid backdoor (Sliver + MacDriver)",
+            processNames: ["covid"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.androids",  // hidden staging directory
+            ],
+            // Squats the Apple software-update label but drops into ~/Library/LaunchAgents
+            // (the real com.apple.softwareupdate is a system-wide daemon under /System/Library).
+            launchAgentLabels: ["com.apple.softwareupdate"]
+        ),
+        SpywareSignature(
+            name: "Cuckoo Stealer (fake Homebrew)",
+            processNames: ["cuckoo_helper"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Contagious Interview (BeaverTail / InvisibleFerret / OtterCookie)",
+            // DPRK "recruiter" campaign delivered via npm packages; second-stage payload directories
+            // are the strongest on-disk IOC — these paths should never exist on a clean Mac.
+            processNames: ["beavertail", "invisibleferret", "ottercookie", "n2", "npl"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.npl",
+                "~/.pyp",
+                "~/.n2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Shai-Hulud npm worm",
+            // Worm that infects other npm packages and exfiltrates dev secrets via a GitHub Actions workflow it plants.
+            processNames: [],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +602,14 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Recent 2025-2026 stealer & DPRK LaunchAgent labels that collide with com.apple.*
+        "com.apple.system.services.activity",  // Gaslight (DPRK, 2026)
+        "com.apple.cli",                       // Sapphire Sleet (DPRK, 2026)
+        "com.apple.qtop",                      // 2025 sample seen in wild
+        "com.apple.softwareupdate",            // "covid" Sliver backdoor (2025) — real Apple label is com.apple.softwareupdated
+        "com.apple.macshare",                  // SpectralBlur variant
+        "com.apple.macshare.plist",
+        "com.apple.systempreferences.helper",  // RustBucket (kept explicit here — heuristic below already covers .helper suffix but this is a known IOC)
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -495,6 +655,70 @@ public struct SpywareSignature {
     /// Checks if a process name is mimicking a system process
     public static func isSuspiciousSystemName(_ name: String) -> Bool {
         return suspiciousSystemNames.contains(name)
+    }
+
+    /// Canonical vendor / brand names that macOS malware routinely spoofs with visually
+    /// similar characters — capital-I for lowercase-l, Cyrillic а/е/о, digit 0 for O, etc.
+    /// Any Application Support / LaunchAgents folder that "looks like" one of these but
+    /// isn't a byte-for-byte match is treated as impersonation.
+    /// NimDoor (2025) used "GoogIe LLC" (capital-I) to shadow "Google LLC".
+    public static let impersonatedBrandNames: [String] = [
+        "Apple", "Google", "Google LLC", "Microsoft", "Microsoft Corporation",
+        "iCloud", "Adobe", "Zoom", "Zoom Video Communications",
+        "Dropbox", "Slack", "Telegram", "Discord",
+    ]
+
+    /// True when `candidate` visually resembles one of `impersonatedBrandNames` but
+    /// isn't an exact match — the hallmark IOC of the 2025-2026 DPRK loaders.
+    public static func isLookalikeBrandName(_ candidate: String) -> Bool {
+        // Skip exact and case-insensitive-exact matches — those are the real names, not spoofs.
+        for real in impersonatedBrandNames {
+            if candidate == real { return false }
+            if candidate.lowercased() == real.lowercased() { return false }
+        }
+        // Normalize the candidate: strip common lookalike substitutions and compare.
+        for real in impersonatedBrandNames {
+            if normalizeLookalike(candidate).lowercased() == real.lowercased() {
+                return true
+            }
+        }
+        // Any non-ASCII in what should be a plain ASCII vendor name is suspect
+        // (Cyrillic а/е/о, Greek ο, fullwidth Latin, etc.).
+        for real in impersonatedBrandNames {
+            if candidate.count == real.count &&
+               candidate.contains(where: { !$0.isASCII }) &&
+               normalizeLookalike(candidate).lowercased() == real.lowercased() {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Fold visually similar characters to their ASCII counterparts so lookalikes collapse to the real name.
+    private static func normalizeLookalike(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        for ch in s {
+            switch ch {
+            // Capital-I / lowercase-L / digit-1 all render nearly identically in most fonts.
+            case "I": out.append("l")
+            case "1": out.append("l")
+            // Common Cyrillic / Greek homoglyphs used in 2024-2026 lures.
+            case "а", "α", "Α": out.append("a")
+            case "е", "ε", "Ε": out.append("e")
+            case "о", "ο", "Ο": out.append("o")
+            case "р", "ρ", "Ρ": out.append("p")
+            case "с", "ϲ": out.append("c")
+            case "х", "χ": out.append("x")
+            case "у": out.append("y")
+            case "і": out.append("i")
+            case "ѕ": out.append("s")
+            case "К", "κ", "Κ": out.append("k")
+            case "0": out.append("o")
+            default: out.append(ch)
+            }
+        }
+        return out
     }
 
     // MARK: - Match Methods

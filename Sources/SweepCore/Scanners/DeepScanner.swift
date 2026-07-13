@@ -37,6 +37,18 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check shell history for ClickFix "curl … | bash" installs and typosquat
+        //    domains (fake Homebrew, fake browser updates). This catches the moment of
+        //    infection even if the payload has already been deleted from disk.
+        progress?.update("checking shell history for ClickFix / typosquat traces")
+        scanShellHistoryForClickFix(findings: &findings, errors: &errors)
+
+        // 7. Check running processes for signatures signed by untrusted Apple Team IDs.
+        //    Modern stealers (MacSync 2025) ship signed & notarized — notarization is no
+        //    longer sufficient. We match against a curated revoked-team list.
+        progress?.update("checking process code signatures against team blocklist")
+        scanRunningProcessesForBlockedTeamIDs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +289,99 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Shell History (ClickFix / Typosquat Detection)
+
+    /// Grep the user's shell history for the exact patterns used by 2025-2026 ClickFix
+    /// / fake-Homebrew campaigns. History files are unprivileged reads so this works
+    /// without root. We're looking for the *moment of infection*, not the payload — even
+    /// if the dropped binary is long gone, the history entry survives.
+    private func scanShellHistoryForClickFix(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Extended regex-friendly patterns. Any hit here is worth surfacing — none of these
+        // are things a well-meaning user runs by accident.
+        let clickFixPatterns: [(pattern: String, why: String)] = [
+            ("curl -fsSL", "ClickFix loaders use `curl -fsSL … | bash` as the canonical one-liner"),
+            ("curl -s ", "silent-mode curl piped into a shell is the ClickFix signature"),
+            ("hdiutil attach -nobrowse", "silent DMG mount used by 2026 ClickFix chains to avoid Finder"),
+            ("osascript -e do shell script", "AppleScript privilege prompt used by every AMOS-family installer"),
+        ]
+
+        for historyPath in historyFiles {
+            guard let content = try? String(contentsOfFile: historyPath, encoding: .utf8) else { continue }
+            let lowered = content.lowercased()
+
+            for pattern in clickFixPatterns where lowered.contains(pattern.pattern.lowercased()) {
+                findings.append(Finding(
+                    severity: .medium, category: .suspiciousProcess,
+                    title: "ClickFix / stealer-installer trace in \(URL(fileURLWithPath: historyPath).lastPathComponent)",
+                    detail: "History contains `\(pattern.pattern)` — \(pattern.why). Verify the source of the command.",
+                    path: historyPath,
+                    remediation: "Open \(historyPath) and confirm you ran the command intentionally. If not, treat the machine as potentially compromised."
+                ))
+            }
+
+            // Typosquat domains — hard match, high confidence.
+            for domain in ThreatIntel.homebrewTyposquatDomains where lowered.contains(domain) {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousProcess,
+                    title: "Homebrew typosquat domain in shell history",
+                    detail: "History references \(domain), a documented fake-Homebrew Cuckoo Stealer lure. If this ran, Cuckoo Stealer likely executed with your login credentials.",
+                    path: historyPath,
+                    remediation: "Rotate browser-saved passwords and wallet seed phrases immediately, then investigate."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Signed-but-Bad Team IDs
+
+    /// A signed & notarized binary from a team ID we've catalogued as malicious. This
+    /// closes the "signed therefore safe" gap that MacSync (2025) and CHILLYHELL (2021)
+    /// exploited. We only shell out to `codesign` for non-Apple, non-Homebrew paths so
+    /// this stays cheap on a normal desktop.
+    private func scanRunningProcessesForBlockedTeamIDs(findings: inout [Finding], errors: inout [String]) {
+        // `codesign -dv` prints "TeamIdentifier=XXXXXXXXXX" on one line. Faster than
+        // opening every binary with SecStaticCode.
+        let psResult = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm"], timeout: 5)
+        guard psResult.success else { return }
+
+        let untrustedPaths = ["/System/", "/usr/", "/bin/", "/sbin/", "/Library/Apple/"]
+
+        for line in psResult.stdout.split(separator: "\n").dropFirst() {  // skip header
+            let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard parts.count == 2, let pid = Int32(parts[0]) else { continue }
+
+            guard let path = ShellRunner.processPath(for: pid) else { continue }
+            // Skip anything in Apple-owned paths — they're system-signed and the team
+            // ID lookup is expensive.
+            if untrustedPaths.contains(where: { path.hasPrefix($0) }) { continue }
+
+            let cs = ShellRunner.run("/usr/bin/codesign", arguments: ["-dv", path], timeout: 3)
+            // codesign writes team info to stderr, not stdout.
+            let combined = cs.stderr + "\n" + cs.stdout
+            for teamLine in combined.split(separator: "\n") {
+                let s = String(teamLine).trimmingCharacters(in: .whitespaces)
+                guard s.hasPrefix("TeamIdentifier=") else { continue }
+                let team = String(s.dropFirst("TeamIdentifier=".count))
+                if ThreatIntel.untrustedAppleTeamIDs.contains(team) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Running process signed by an untrusted Apple Team ID",
+                        detail: "\(parts[1]) (PID \(pid), team: \(team)) matches ThreatIntel.untrustedAppleTeamIDs — signed & notarized but publicly attributed to malware.",
+                        path: path,
+                        remediation: "Kill immediately (kill \(pid)), quarantine the binary, and rotate credentials it could access."
+                    ))
+                }
+            }
         }
     }
 

@@ -60,6 +60,16 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Fake .app bundles named after built-in system apps but living in /tmp — an
+        //    XCSSET 2025 IOC that also fits any UI-spoofing dropper.
+        progress?.update("checking for spoofed system app bundles in /tmp")
+        scanForSpoofedSystemApps(findings: &findings, errors: &errors)
+
+        // 8. Filenames/paths that recent 2025-2026 stealers stage in /tmp — Odyssey's
+        //    ~/.botid, SHub's /tmp/helper, MacSync's /tmp/runner, etc.
+        progress?.update("checking for known stealer staging paths")
+        scanForKnownStealerStaging(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -430,22 +440,25 @@ public final class EvidenceScanner: Scanner {
 
     // MARK: - Credential / Crypto Wallet Theft
 
-    /// Filenames/paths that modern macOS infostealers (AMOS, Banshee, Poseidon, Realst, etc.)
-    /// explicitly target. Finding copies of these files staged in /tmp or hidden directories
-    /// is strong evidence of an active stealer campaign on the machine.
-    private let walletFingerprints: [(label: String, marker: String)] = [
-        ("MetaMask", "nkbihfbeogaeaoehlefnkodbefgpgknn"),   // Chromium extension dir
-        ("Phantom",  "bfnaelmomeimhlpmgjnjophhpkkoljpa"),
-        ("Coinbase Wallet", "hnfanknocfeofbddgcijnmhnfnkdnaad"),
-        ("Ronin",    "fnjhmkhhmkbjkkabndcnnogagogbneec"),
-        ("TronLink", "ibnejdfjmmkpcnlpebklmnkoeoihofec"),
-        ("Exodus",   "Exodus"),
-        ("Electrum", ".electrum"),
-        ("Atomic Wallet", "Atomic"),
-        ("Ledger Live", "Ledger Live"),
-        ("Trezor Suite", "@trezor"),
-        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
-    ]
+    /// Filenames/paths that modern macOS infostealers (AMOS, Banshee, Poseidon, Realst,
+    /// SHub, Odyssey, etc.) explicitly target. Finding copies of these files staged in
+    /// /tmp or hidden directories is strong evidence of an active stealer campaign on the
+    /// machine. Chromium extension IDs come from ThreatIntel so all IOC lists live together.
+    private var walletFingerprints: [(label: String, marker: String)] {
+        var list: [(label: String, marker: String)] = [
+            ("Exodus",       "Exodus"),
+            ("Electrum",     ".electrum"),
+            ("Atomic Wallet", "Atomic"),
+            ("Ledger Live",  "Ledger Live"),
+            ("Trezor Suite", "@trezor"),
+        ]
+        // Pull the extension-ID list from ThreatIntel — one place to update as new
+        // wallets are added to stealer target lists.
+        for wallet in ThreatIntel.cryptoWalletExtensionIDs {
+            list.append((wallet.label, wallet.id))
+        }
+        return list
+    }
 
     /// Browser credential stores AMOS-family stealers copy.
     private let browserCredStoreNames: Set<String> = [
@@ -550,6 +563,76 @@ public final class EvidenceScanner: Scanner {
                     ))
                 }
             }
+        }
+    }
+
+    // MARK: - Spoofed System App Bundles in /tmp
+
+    /// Real macOS system apps live under /System/Applications (or /Applications). A bundle
+    /// with one of these canonical names living in /tmp, /private/tmp, or /var/tmp is
+    /// almost certainly a decoy — XCSSET 2025 dropped `/tmp/System Settings.app` to trick
+    /// users into granting Accessibility permissions to an attacker-controlled binary.
+    private func scanForSpoofedSystemApps(findings: inout [Finding], errors: inout [String]) {
+        let spoofedNames: Set<String> = [
+            "System Settings.app", "System Preferences.app",
+            "Terminal.app", "Finder.app", "Safari.app",
+            "Notes.app", "Reminders.app", "Contacts.app", "Calendar.app",
+            "Xcode.app", "AppStore.app", "App Store.app",
+            "Keychain Access.app", "Software Update.app",
+            "iCloud.app", "iCloud Drive.app",
+        ]
+        let tempRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+                         "/Users/Shared"]
+        let fm = FileManager.default
+
+        for root in tempRoots {
+            guard fm.fileExists(atPath: root),
+                  let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            for entry in entries where spoofedNames.contains(entry) {
+                let path = "\(root)/\(entry)"
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Spoofed system app bundle in temp directory",
+                    detail: "\"\(entry)\" is a canonical macOS system app but is present in \(root). XCSSET 2025 used this exact trick to lure users into granting Accessibility to an attacker binary.",
+                    path: path,
+                    remediation: "Do NOT open it. Inspect first (spctl -a -vvv \"\(path)\"), then remove: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Known Stealer Staging Paths (2025-2026)
+
+    /// Fast exact-path hits for artifacts that have no legitimate reason to exist. If any
+    /// of these files/dirs are on disk, the scanner should say so immediately without
+    /// waiting for a broader enumeration to draw the same conclusion.
+    private func scanForKnownStealerStaging(home: String, findings: inout [Finding], errors: inout [String]) {
+        let iocs: [(family: String, path: String)] = [
+            ("Odyssey Stealer",              "\(home)/.botid"),
+            ("Odyssey / Cthulhu 2025",       "/Users/Shared/NW"),
+            ("Covid backdoor",               "\(home)/.androids"),
+            ("SHub Reaper",                  "/tmp/helper"),
+            ("SHub Reaper",                  "/tmp/update"),
+            ("MacSync Stealer",              "/tmp/runner"),
+            ("MacSync Stealer",              "\(home)/Library/Logs/UserSyncWorker.log"),
+            ("MacSync Stealer",              "\(home)/Library/Application Support/UserSyncWorker"),
+            ("AppleProcessHub Stealer",      "/tmp/libsystd.dylib"),
+            ("AppleProcessHub Stealer",      "/private/tmp/libsystd.dylib"),
+            ("NimDoor (DPRK)",               "/private/var/tmp/netchk"),
+            ("NimDoor (DPRK)",               "/private/tmp/zoom_sdk_support.scpt"),
+            ("Sapphire Sleet (DPRK)",        "\(home)/Library/Application Support/iCloud/icloudz"),
+        ]
+
+        let fm = FileManager.default
+        for ioc in iocs where fm.fileExists(atPath: ioc.path) {
+            findings.append(Finding(
+                severity: .high, category: .suspiciousFile,
+                title: "Known 2025-2026 stealer artifact present: \(ioc.family)",
+                detail: "Path \(ioc.path) is a documented IOC for \(ioc.family). See SpywareSignature and ThreatIntel for the campaign context.",
+                path: ioc.path,
+                remediation: "Isolate the machine, capture the file for triage, then remove: rm -rf \"\(ioc.path)\""
+            ))
         }
     }
 
