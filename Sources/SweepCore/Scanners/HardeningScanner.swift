@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Time Machine backups")
+        checkTimeMachine(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment")
+        checkGatekeeperStrictMode(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect signature freshness")
+        checkXProtectFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking macOS analytics sharing")
+        checkAnalyticsSharing(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -468,6 +480,160 @@ public final class HardeningScanner: Scanner {
                     remediation: "Enable: System Settings > General > Software Update > (i) > Install Security Responses and system files"
                 ))
             }
+        }
+    }
+
+    // MARK: - Time Machine (ransomware defense)
+
+    private func checkTimeMachine(findings: inout [Finding], errors: inout [String]) {
+        // Modern macOS ransomware and wipers explicitly target Time Machine snapshots (via `tmutil
+        // deletelocalsnapshots /`) before encrypting so recovery is impossible. An absent or stale
+        // backup means there's nothing to roll back to.
+        let destResult = ShellRunner.run("/usr/bin/tmutil", arguments: ["destinationinfo"], timeout: 5)
+        let hasDestination = destResult.success &&
+            destResult.stdout.contains("Name") &&
+            !destResult.stdout.contains("No destinations configured")
+
+        if !hasDestination {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "No Time Machine backup destination configured",
+                detail: "Without backups, recovery from ransomware, disk failure, or accidental deletion isn't possible",
+                path: nil,
+                remediation: "Configure a backup: System Settings > General > Time Machine > Add Backup Disk"
+            ))
+            return
+        }
+
+        // Age of the most recent backup. `tmutil latestbackup` returns the snapshot path whose
+        // trailing component is a timestamp like "2025-07-14-142301".
+        let latestResult = ShellRunner.run("/usr/bin/tmutil", arguments: ["latestbackup"], timeout: 5)
+        let raw = latestResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !latestResult.success || raw.isEmpty {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Time Machine has never completed a backup",
+                detail: "A destination is set but no backup snapshot exists yet",
+                path: nil,
+                remediation: "Run a first backup: tmutil startbackup, or Time Machine menu bar icon > Back Up Now"
+            ))
+            return
+        }
+
+        // Parse the timestamp out of the last path component
+        let timestamp = URL(fileURLWithPath: raw).lastPathComponent
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd-HHmmss"
+        formatter.timeZone = TimeZone.current
+        guard let backupDate = formatter.date(from: timestamp) else { return }
+
+        let ageDays = -backupDate.timeIntervalSinceNow / 86400
+        if ageDays > 30 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Latest Time Machine backup is \(Int(ageDays)) days old",
+                detail: "Backup: \(timestamp) — old backups mean recent work isn't recoverable",
+                path: nil,
+                remediation: "Reconnect your backup disk, or run: tmutil startbackup"
+            ))
+        } else if ageDays > 7 {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Time Machine backup is \(Int(ageDays)) days old",
+                detail: "Latest backup: \(timestamp)",
+                path: nil,
+                remediation: "Consider running: tmutil startbackup"
+            ))
+        }
+    }
+
+    // MARK: - Gatekeeper strict mode
+
+    private func checkGatekeeperStrictMode(findings: inout [Finding], errors: inout [String]) {
+        // Gatekeeper checks that downloaded apps are signed and (ideally) notarized. Disabling
+        // assessments (`spctl --master-disable`) is a common step for malware installers and for
+        // users who ran into signing prompts and disabled the check permanently.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        guard result.success else { return }
+
+        let text = result.stdout.lowercased()
+        if text.contains("assessments disabled") {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Gatekeeper is disabled",
+                detail: "spctl reports 'assessments disabled' — macOS is not blocking unsigned or unnotarized apps",
+                path: nil,
+                remediation: "Re-enable: sudo spctl --master-enable"
+            ))
+        }
+    }
+
+    // MARK: - XProtect signature freshness
+
+    private func checkXProtectFreshness(findings: inout [Finding], errors: inout [String]) {
+        // XProtect is macOS's built-in malware signature scanner. Signatures are pushed silently
+        // by Apple, but a machine that hasn't checked in for weeks (broken software update, MDM
+        // block, tampering) misses coverage for new stealer families that ship almost weekly.
+        let plistCandidates = [
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist",
+            "/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist",
+        ]
+
+        var checkedPath: String?
+        var version: String?
+        var modDate: Date?
+
+        for path in plistCandidates {
+            let fm = FileManager.default
+            guard fm.fileExists(atPath: path) else { continue }
+            checkedPath = path
+            if let attrs = try? fm.attributesOfItem(atPath: path) {
+                modDate = attrs[.modificationDate] as? Date
+            }
+            if let data = fm.contents(atPath: path),
+               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                version = plist["CFBundleShortVersionString"] as? String
+                    ?? plist["CFBundleVersion"] as? String
+            }
+            break
+        }
+
+        guard let date = modDate else { return }
+        let ageDays = -date.timeIntervalSinceNow / 86400
+        // Apple usually pushes XProtect updates every 1-4 weeks. 45+ days = clearly stale.
+        if ageDays > 45 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect signatures are \(Int(ageDays)) days old",
+                detail: "Version: \(version ?? "unknown") — signature updates protect against new malware families released by Apple",
+                path: checkedPath,
+                remediation: "Force an update: sudo softwareupdate --background, and verify System Settings > General > Software Update is enabled"
+            ))
+        }
+    }
+
+    // MARK: - macOS Analytics / Diagnostic Sharing
+
+    private func checkAnalyticsSharing(findings: inout [Finding], errors: inout [String]) {
+        // Not a compromise per se, but many users are unaware they're auto-uploading crash reports
+        // and app usage to Apple (and to app developers). Surface it as a low-severity privacy note.
+        let plist = "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist"
+        guard let data = FileManager.default.contents(atPath: plist),
+              let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        let autoSubmit = (dict["AutoSubmit"] as? Bool ?? false) || ((dict["AutoSubmit"] as? Int ?? 0) == 1)
+        let thirdParty = (dict["ThirdPartyDataSubmit"] as? Bool ?? false) || ((dict["ThirdPartyDataSubmit"] as? Int ?? 0) == 1)
+
+        if autoSubmit && thirdParty {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Diagnostics and usage data are being shared with Apple and app developers",
+                detail: "AutoSubmit and ThirdPartyDataSubmit are both enabled — crash reports and analytics are uploaded",
+                path: plist,
+                remediation: "Disable if desired: System Settings > Privacy & Security > Analytics & Improvements"
+            ))
         }
     }
 }

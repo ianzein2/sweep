@@ -97,6 +97,35 @@ public final class PersistenceScanner: Scanner {
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
 
+        // A launchd plist that seeds DYLD_INSERT_LIBRARIES for its child process is a
+        // persistent dylib-injection primitive — malware uses this to hijack every launch
+        // of the target binary without touching the binary itself.
+        if let env = plist["EnvironmentVariables"] as? [String: Any] {
+            let injectionKeys = ["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
+                                 "DYLD_LIBRARY_PATH", "DYLD_FRAMEWORK_PATH"]
+            let matched = injectionKeys.filter { env[$0] != nil }
+            if !matched.isEmpty {
+                let primary = (env["DYLD_INSERT_LIBRARIES"] as? String) ?? ""
+                let dylibValue: String
+                if !primary.isEmpty {
+                    dylibValue = primary
+                } else if let other = env.first(where: { matched.contains($0.key) })?.value as? String {
+                    dylibValue = other
+                } else {
+                    dylibValue = ""
+                }
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent/Daemon injects a dylib into its child process",
+                    detail: "Label: \(label), keys: \(matched.joined(separator: ", "))" +
+                        (dylibValue.isEmpty ? "" : ", dylib: \(dylibValue)"),
+                    path: path,
+                    remediation: "Verify the dylib and plist are legitimate. If not, remove: sudo rm \"\(path)\""
+                ))
+                return
+            }
+        }
+
         // Get executable path
         var executablePath: String?
         if let program = plist["Program"] as? String {

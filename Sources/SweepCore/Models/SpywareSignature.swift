@@ -434,6 +434,157 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024 DPRK / BlueNoroff activity — Rust and Nim-based backdoors targeting crypto industry
+        SpywareSignature(
+            name: "RustDoor (BlueNoroff)",
+            processNames: ["rustdoor", "RustDoor", "zshrc_updater", "zoom_sdk_helper", "VisualStudioUpdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustdoor",
+                "~/Library/Application Support/.rustdoor",
+                "~/Library/VisualStudioUpdater",
+            ],
+            launchAgentLabels: [
+                "com.zoom.us.helper",
+                "com.microsoft.visualstudio.updater",
+                "com.apple.systemd",
+            ]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["hzrat", "HZRAT", "OpenVPNConnect", "WeChatUpdate"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/var/tmp/.hz",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightSpy", "LightSpy", "lightspy_agent", "irc_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Preferences/.lightspy",
+                "~/Library/Application Support/.ls_data",
+            ],
+            launchAgentLabels: ["com.apple.macos.lightSpy"]
+        ),
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["xcc", "sh.py", "shared.dat", "xcc_debug", "swiftbelt"],
+            bundleIdentifiers: ["com.xcc.updater"],
+            filePaths: [
+                "/private/var/tmp/.xcc",
+                "~/Library/Preferences/.xcc",
+                "~/Library/Application Support/.jspy",
+            ],
+            launchAgentLabels: ["com.apple.xcc"]
+        ),
+        SpywareSignature(
+            name: "Silver Sparrow",
+            processNames: ["agent.sh", "verx", "installer_updater"],
+            bundleIdentifiers: ["com.pplauncher.plist"],
+            filePaths: [
+                "/tmp/agent.sh",
+                "/tmp/version.plist",
+                "/tmp/version.json",
+                "~/Library/Application Support/verx_updater",
+            ],
+            launchAgentLabels: [
+                "init_verx",
+                "agent.plist",
+                "com.pplauncher.plist",
+            ]
+        ),
+        SpywareSignature(
+            name: "Gimmick (Storm Cloud)",
+            processNames: ["Gimmick", "gimmick", "PLIST", "com.apple.softwareupdatechecker"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Preferences/com.apple.softwareupdatechecker.plist",
+                "/private/var/tmp/.gimmick",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdatechecker"]
+        ),
+        SpywareSignature(
+            name: "CookieMiner",
+            processNames: ["cookieminer", "CookieMiner", "empyre_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.cookieminer",
+                "/private/var/tmp/.cm_agent",
+            ],
+            launchAgentLabels: ["com.proxy.initialize"]
+        ),
+        SpywareSignature(
+            name: "KeySteal",
+            processNames: ["keysteal", "KeySteal", "kbagent"],
+            bundleIdentifiers: ["com.keysteal.agent"],
+            filePaths: ["~/Library/Application Support/.keysteal"],
+            launchAgentLabels: ["com.apple.keychain.helper"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigidhelper"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_agent"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub.agent"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odyssey_installer"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "Nomad Stealer",
+            processNames: ["Nomad", "nomad_stealer", "nomadhelper"],
+            bundleIdentifiers: ["com.nomad.stealer"],
+            filePaths: [
+                "/private/tmp/.nomad",
+                "~/Library/Application Support/.Nomad",
+            ],
+            launchAgentLabels: ["com.nomad.service"]
+        ),
+        SpywareSignature(
+            name: "PSW Stealer (macOS)",
+            processNames: ["pswstealer", "PSWStealer", "psw_agent"],
+            bundleIdentifiers: ["com.psw.stealer"],
+            filePaths: [
+                "/private/tmp/.psw",
+                "~/Library/Application Support/.PSW",
+            ],
+            launchAgentLabels: ["com.psw.agent"]
+        ),
+        SpywareSignature(
+            name: "Fruity Trojan",
+            processNames: ["Fruity", "fruity_trojan", "fruity_helper"],
+            bundleIdentifiers: ["com.fruity.trojan"],
+            filePaths: [
+                "/private/tmp/.fruity",
+                "~/Library/Application Support/.Fruity",
+            ],
+            launchAgentLabels: ["com.fruity.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +601,16 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 BlueNoroff / RustDoor / Gimmick / JokerSpy impersonations
+        "com.apple.softwareupdatechecker",
+        "com.apple.macos.lightSpy",
+        "com.apple.processhub.agent",
+        "com.apple.xcc",
+        "com.apple.keychain.helper",
+        "com.apple.launchassistant",
+        "com.apple.installer.helper",
+        "com.apple.iCloudSync.agent",
+        "com.apple.autoupdate.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

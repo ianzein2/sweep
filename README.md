@@ -72,8 +72,8 @@ sudo sweep --json
 |---------|-------------|
 | **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, SSH keys, sudoers, PAM, emond rules, and **plists that seed `DYLD_INSERT_LIBRARIES`** for dylib-injection persistence |
+| **Evidence** | Looks for stored screenshots, keystroke logs, recording artifacts, staged crypto-wallet/credential files, **ClickFix pastejack traces in shell history**, and **exposed developer cloud credentials** (AWS/GCP/GitHub/SSH) |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
@@ -82,7 +82,7 @@ sudo sweep --json
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
 | **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
 | **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, **Time Machine backup freshness** (ransomware defense), **Gatekeeper strict mode**, **XProtect signature freshness**, and analytics/diagnostics sharing |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
 

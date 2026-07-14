@@ -60,6 +60,17 @@ public final class EvidenceScanner: Scanner {
         progress?.update("checking crypto wallet / credential theft")
         scanForCredentialTheft(home: home, findings: &findings, errors: &errors)
 
+        // 7. Check for "ClickFix" / pastejacking attacks — a top 2024-2025 macOS delivery
+        //    vector where fake CAPTCHA/error pages instruct users to paste curl|bash into
+        //    Terminal, which then installs an AMOS/Poseidon/Cuckoo stealer.
+        progress?.update("checking shell history for pastejack attacks")
+        scanShellHistoryForClickFix(home: home, findings: &findings, errors: &errors)
+
+        // 8. Check for developer cloud credential exposure — modern stealers specifically
+        //    exfiltrate ~/.aws, ~/.config/gcloud, ~/.docker, GitHub tokens.
+        progress?.update("checking exposed developer credentials")
+        scanForDeveloperCredentialExposure(home: home, findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -547,6 +558,189 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - ClickFix / Pastejacking Shell History Scan
+
+    /// Patterns that indicate a shell command was pasted straight from a malicious "fix this
+    /// error" web prompt. The user thinks they're solving a CAPTCHA or repairing an install;
+    /// what actually runs is a stealer dropper. This attack chain was responsible for the
+    /// majority of AMOS/Poseidon/Cuckoo installs observed in 2024-2025.
+    private struct ClickFixPattern {
+        let regex: String
+        let reason: String
+    }
+
+    private func scanShellHistoryForClickFix(home: String, findings: inout [Finding], errors: inout [String]) {
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.history",
+        ]
+
+        // NSRegularExpression uses ICU regex — patterns are case-insensitive via options below.
+        let patterns: [ClickFixPattern] = [
+            ClickFixPattern(regex: #"curl\s+[^|;]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh)\b"#,
+                            reason: "pipes curl output straight into a shell"),
+            ClickFixPattern(regex: #"wget\s+[^|;]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh)\b"#,
+                            reason: "pipes wget output straight into a shell"),
+            ClickFixPattern(regex: #"bash\s+-c\s+["'`]?\$\(\s*curl"#,
+                            reason: "bash -c \"$(curl ...)\" — classic pastejack dropper"),
+            ClickFixPattern(regex: #"sh\s+-c\s+["'`]?\$\(\s*curl"#,
+                            reason: "sh -c \"$(curl ...)\" — pastejack dropper"),
+            ClickFixPattern(regex: #"osascript\s+-e\s+["'`]?do\s+shell\s+script"#,
+                            reason: "osascript spawning a shell — AMOS-family installer pattern"),
+            ClickFixPattern(regex: #"echo\s+["'`]?[A-Za-z0-9+/]{80,}=*["'`]?\s*\|\s*base64\s+(?:-D|--decode|-d)\s*\|\s*(?:bash|sh)"#,
+                            reason: "base64 blob decoded straight into a shell"),
+            ClickFixPattern(regex: #"printf\s+["'`]?[A-Za-z0-9+/]{80,}=*["'`]?\s*\|\s*base64\s+(?:-D|--decode|-d)\s*\|\s*(?:bash|sh)"#,
+                            reason: "base64 blob decoded straight into a shell"),
+            ClickFixPattern(regex: #"eval\s+["'`]?\$\(\s*(?:curl|wget)"#,
+                            reason: "eval $(curl|wget) — remote code executed in-shell"),
+        ]
+
+        let compiled: [(NSRegularExpression, String)] = patterns.compactMap { p in
+            guard let rx = try? NSRegularExpression(pattern: p.regex,
+                                                    options: [.caseInsensitive]) else { return nil }
+            return (rx, p.reason)
+        }
+
+        for historyPath in historyFiles {
+            guard FileManager.default.fileExists(atPath: historyPath),
+                  let content = try? String(contentsOfFile: historyPath, encoding: .utf8) else { continue }
+
+            // Look at the last 500 lines — this is where a recent pastejack would appear, and
+            // avoids re-flagging old commands the user has already remediated.
+            let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+            let recent = lines.suffix(500)
+
+            for line in recent {
+                let raw = String(line)
+                // zsh history uses ": <timestamp>:<duration>;<command>" — strip the metadata prefix
+                let command: String = {
+                    if raw.hasPrefix(":"), let semi = raw.firstIndex(of: ";") {
+                        return String(raw[raw.index(after: semi)...])
+                    }
+                    return raw
+                }().trimmingCharacters(in: .whitespaces)
+
+                if command.isEmpty || command.hasPrefix("#") { continue }
+                let range = NSRange(command.startIndex..<command.endIndex, in: command)
+
+                for (rx, reason) in compiled {
+                    if rx.firstMatch(in: command, options: [], range: range) != nil {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousProcess,
+                            title: "Shell history contains a paste-and-run installer command",
+                            detail: "\(reason). Command: \(String(command.prefix(160)))",
+                            path: historyPath,
+                            remediation: "If you don't remember pasting this, treat the Mac as compromised: rotate passwords, revoke tokens, and investigate what the command downloaded."
+                        ))
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Developer Credential Exposure
+
+    /// Modern infostealers (AMOS, Banshee, Cuckoo, Poseidon) explicitly enumerate the developer's
+    /// home directory for cloud CLI credentials. Anyone whose Mac is compromised typically loses
+    /// their AWS/GCP/GitHub/npm access before any user-visible sign of infection.
+    private struct DevCredential {
+        let filename: String
+        let label: String
+        let severity: Severity
+    }
+
+    private let devCredentialFingerprints: [DevCredential] = [
+        DevCredential(filename: "application_default_credentials.json", label: "GCP application default credentials", severity: .high),
+        DevCredential(filename: ".npmrc", label: "npm auth token file", severity: .high),
+        DevCredential(filename: ".pypirc", label: "PyPI upload credentials", severity: .high),
+        DevCredential(filename: "id_rsa", label: "SSH private key", severity: .high),
+        DevCredential(filename: "id_ed25519", label: "SSH private key", severity: .high),
+        DevCredential(filename: "id_ecdsa", label: "SSH private key", severity: .high),
+        DevCredential(filename: "id_dsa", label: "SSH private key", severity: .high),
+        DevCredential(filename: "kubeconfig", label: "Kubernetes cluster credentials", severity: .high),
+        // .env is common in dev — flag only when copied to a staging path
+        DevCredential(filename: ".env", label: "environment file (may contain API keys)", severity: .medium),
+        DevCredential(filename: ".env.local", label: "environment file", severity: .medium),
+        DevCredential(filename: ".env.production", label: "production environment file", severity: .high),
+    ]
+
+    private func scanForDeveloperCredentialExposure(home: String, findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        // Staging areas — where these files should NEVER end up. Anything here is either a
+        // mistake or an exfiltration staging directory.
+        let stagingRoots = [
+            "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp",
+            "\(home)/.cache/.stage", "\(home)/.local/share/.stage",
+        ]
+
+        // Legit locations we should NOT flag (used to determine if credentials appeared elsewhere).
+        let legitPrefixes = [
+            "\(home)/.aws/", "\(home)/.ssh/", "\(home)/.config/gcloud/",
+            "\(home)/.docker/", "\(home)/.config/gh/", "\(home)/.kube/",
+        ]
+
+        // (a) Any credential-shaped file living in a staging directory is high-signal evidence.
+        for root in stagingRoots {
+            guard fm.fileExists(atPath: root) else { continue }
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 4 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let filename = url.lastPathComponent
+                guard let cred = devCredentialFingerprints.first(where: { $0.filename == filename }) else { continue }
+
+                // Skip anything that clearly lives in a legit tree that was symlinked/mounted here.
+                if legitPrefixes.contains(where: { url.path.hasPrefix($0) }) { continue }
+
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+                guard size > 0 else { continue }
+
+                findings.append(Finding(
+                    severity: cred.severity, category: .suspiciousFile,
+                    title: "Developer credential staged in temp/staging directory",
+                    detail: "\(cred.label) found at \(url.path) — this location is a common exfiltration staging path",
+                    path: url.path,
+                    remediation: "Rotate the credential immediately (change AWS keys, revoke GitHub tokens, rotate SSH keys) and investigate the process that put it here."
+                ))
+            }
+        }
+
+        // (b) SSH private keys with world- or group-readable permissions are exposed even without
+        //     an attacker running code on the box — anyone who obtains a routine file backup or
+        //     shared directory can steal them.
+        let sshDir = "\(home)/.ssh"
+        if let entries = try? fm.contentsOfDirectory(atPath: sshDir) {
+            for entry in entries {
+                let looksLikeKey = entry.hasPrefix("id_") && !entry.hasSuffix(".pub")
+                guard looksLikeKey else { continue }
+                let path = "\(sshDir)/\(entry)"
+                guard let attrs = try? fm.attributesOfItem(atPath: path),
+                      let perms = attrs[.posixPermissions] as? Int else { continue }
+                // Bits: 0o077 = group/other rwx. Any of these means the key file is readable
+                // beyond the owner — SSH itself will refuse to use such a key, and it's an easy grab.
+                if (perms & 0o077) != 0 {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "SSH private key has overly permissive mode",
+                        detail: "\(entry) mode is 0\(String(perms, radix: 8)) — group or others can read the key",
+                        path: path,
+                        remediation: "Restrict: chmod 600 \"\(path)\", then rotate the key if you suspect it was read."
                     ))
                 }
             }
