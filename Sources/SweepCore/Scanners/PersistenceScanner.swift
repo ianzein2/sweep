@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Folder Actions / Automator agents")
+        scanFolderActionsAndAutomator(findings: &findings, errors: &errors)
+
+        progress?.update("checking package manager postinstall scripts")
+        scanPackageManagerHooks(findings: &findings, errors: &errors)
+
+        progress?.update("checking XPC helper tools")
+        scanPrivilegedHelperTools(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +684,261 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Folder Actions & Automator agents
+
+    /// Folder Actions attach AppleScript / Automator workflows to a directory: whenever
+    /// a file lands there, the workflow runs. Attackers use "~/Downloads" for this because
+    /// it's the first place a phishing-delivered payload arrives.
+    ///
+    /// Automator Application Scripts (~/Library/Workflows/Applications) also survive login
+    /// via a plist entry and are rarely inspected — a stealth win for the attacker.
+    private func scanFolderActionsAndAutomator(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // 1. Folder Actions dispatcher preferences — enumerating attached scripts.
+        let folderActionsPlist = "\(home)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: folderActionsPlist),
+           let data = fm.contents(atPath: folderActionsPlist),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            // The plist stores an array under "FolderActions"; each entry pairs a folder path
+            // with one or more script paths.
+            if let actions = plist["FolderActions"] as? [[String: Any]], !actions.isEmpty {
+                for action in actions {
+                    let folder = (action["path"] as? String) ?? "?"
+                    let scripts = (action["scripts"] as? [[String: Any]])?.compactMap { $0["scriptName"] as? String } ?? []
+                    let scriptList = scripts.isEmpty ? "unknown" : scripts.joined(separator: ", ")
+
+                    // Downloads is a canonical attacker target — flag it high.
+                    let isDownloads = folder.hasSuffix("/Downloads") || folder.contains("/Downloads/")
+                    findings.append(Finding(
+                        severity: isDownloads ? .high : .medium,
+                        category: .persistence,
+                        title: "Folder Action attached to \(URL(fileURLWithPath: folder).lastPathComponent)",
+                        detail: "Folder: \(folder), Script(s): \(scriptList) — runs whenever items appear in this folder",
+                        path: folderActionsPlist,
+                        remediation: "Open Automator, remove unwanted Folder Actions. Downloads/Desktop actions are a known malware persistence trick."
+                    ))
+                }
+            }
+        }
+
+        // 2. Automator Applications (~/Library/Workflows/Applications/Folder Actions)
+        // Each .workflow bundle is an AppleScript/JavaScript runner. Real users rarely
+        // have any of these — the dir is empty by default.
+        let workflowDirs = [
+            "\(home)/Library/Workflows/Applications/Folder Actions",
+            "\(home)/Library/Scripts/Folder Action Scripts",
+            "/Library/Scripts/Folder Action Scripts",
+        ]
+        for dir in workflowDirs {
+            guard fm.fileExists(atPath: dir),
+                  let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in contents where !entry.hasPrefix(".") {
+                let entryPath = "\(dir)/\(entry)"
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action workflow present",
+                    detail: "Workflow: \(entry) — Folder Actions run automatically on file events",
+                    path: entryPath,
+                    remediation: "Inspect the workflow in Automator, then delete if not expected: rm -rf \"\(entryPath)\""
+                ))
+            }
+        }
+
+        // 3. Login items registered via SMAppService (macOS 13+). The manifests live under
+        // ~/Library/LaunchAgents-style paths but the modern UI hides them; enumerate directly.
+        let loginItemsDir = "\(home)/Library/Application Support/com.apple.backgroundtaskmanagementagent"
+        if fm.fileExists(atPath: loginItemsDir) {
+            let listing = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 5)
+            if listing.success && !listing.stdout.isEmpty {
+                // sfltool output lists each Background Task Manager entry — a few dev tools
+                // (Docker, Rectangle, etc.) are normal, but unknown "SMAppService" entries
+                // pointing to hidden or /tmp paths are suspicious. Only flag those.
+                let lines = listing.stdout.split(separator: "\n")
+                var pendingEntry: [String] = []
+                for line in lines {
+                    let s = String(line).trimmingCharacters(in: .whitespaces)
+                    if s.isEmpty {
+                        checkBTMEntry(pendingEntry, findings: &findings)
+                        pendingEntry.removeAll()
+                    } else {
+                        pendingEntry.append(s)
+                    }
+                }
+                checkBTMEntry(pendingEntry, findings: &findings)
+            }
+        }
+    }
+
+    private func checkBTMEntry(_ lines: [String], findings: inout [Finding]) {
+        guard !lines.isEmpty else { return }
+        let joined = lines.joined(separator: " ")
+        // Only interesting BTM records: those referencing hidden paths or temp dirs.
+        let interesting =
+            joined.contains("/tmp/") ||
+            joined.contains("/private/tmp/") ||
+            joined.contains("/var/tmp/") ||
+            joined.contains("/.") ||   // hidden dir component
+            joined.range(of: "path = .*/\\.", options: .regularExpression) != nil
+        guard interesting else { return }
+
+        // Extract the URL/path field if present for the finding detail.
+        let pathLine = lines.first(where: { $0.hasPrefix("URL") || $0.hasPrefix("Path") || $0.contains("path =") })
+            ?? lines.first ?? ""
+        findings.append(Finding(
+            severity: .high, category: .persistence,
+            title: "Background Task Manager entry from hidden/temp path",
+            detail: String(pathLine.prefix(200)),
+            path: nil,
+            remediation: "Review with: sfltool dumpbtm — then remove the app / login item in System Settings > General > Login Items"
+        ))
+    }
+
+    // MARK: - Package manager hooks (npm postinstall, pip auto-run, malicious taps)
+
+    /// Malicious npm packages routinely use "scripts.postinstall" to run arbitrary
+    /// commands the moment `npm install` completes. A postinstall living in the user's
+    /// home root (or Downloads / Desktop) — outside a project — is almost always a
+    /// social-engineered dropper. Also flags npm .npmrc pointing to non-registry hosts.
+    private func scanPackageManagerHooks(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // 1. package.json in unusual top-level locations. Legit projects live under repos,
+        // not directly in $HOME.
+        let suspiciousRoots = [home, "\(home)/Downloads", "\(home)/Desktop"]
+        for root in suspiciousRoots {
+            let pkgPath = "\(root)/package.json"
+            guard let data = fm.contents(atPath: pkgPath),
+                  let pkg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            let scripts = (pkg["scripts"] as? [String: Any]) ?? [:]
+            let hookNames = ["preinstall", "install", "postinstall", "prepublish", "prepare"]
+            let hookHits = hookNames.compactMap { name -> (String, String)? in
+                guard let cmd = scripts[name] as? String, !cmd.isEmpty else { return nil }
+                return (name, cmd)
+            }
+            guard !hookHits.isEmpty else { continue }
+
+            for (hookName, cmd) in hookHits {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "npm \(hookName) hook in package.json at \(root)",
+                    detail: "Hook fires on `npm install`. Command: \(String(cmd.prefix(160)))",
+                    path: pkgPath,
+                    remediation: "package.json in \(root) is unusual — real projects live in repos. Inspect and delete if unexpected."
+                ))
+            }
+        }
+
+        // 2. .npmrc pointing at a non-registry host. Attackers set "registry=" to a
+        // hosted look-alike to serve trojaned packages transparently.
+        let npmrcPath = "\(home)/.npmrc"
+        if let content = try? String(contentsOfFile: npmrcPath, encoding: .utf8) {
+            for line in content.split(separator: "\n") {
+                let s = line.trimmingCharacters(in: .whitespaces)
+                if s.hasPrefix("#") || s.isEmpty { continue }
+                // registry=https://... or //hostname/:_authToken=... — flag anything that isn't npmjs.org / GitHub.
+                if s.lowercased().hasPrefix("registry=") || s.lowercased().hasPrefix("//") && s.contains(":_authToken=") {
+                    let known = ["registry.npmjs.org", "npm.pkg.github.com", "registry.yarnpkg.com",
+                                 "npm.jfrog.io", "artifactory", "azure.com", "aws.com", "cloudfront.net",
+                                 "verdaccio", "cloudsmith", "gitlab"]
+                    let isKnown = known.contains(where: { s.lowercased().contains($0) })
+                    if !isKnown {
+                        findings.append(Finding(
+                            severity: .medium, category: .persistence,
+                            title: "Custom npm registry in .npmrc",
+                            detail: "Line: \(s.prefix(120)) — non-standard npm registry",
+                            path: npmrcPath,
+                            remediation: "Verify this registry is your company's — attackers redirect npm to serve trojaned packages."
+                        ))
+                    }
+                }
+            }
+        }
+
+        // 3. Third-party Homebrew taps. Official taps live under homebrew/homebrew-core
+        // and homebrew/homebrew-cask; anything else is user-added and worth surfacing.
+        let tapRoots = ["/opt/homebrew/Library/Taps", "/usr/local/Homebrew/Library/Taps"]
+        for tapRoot in tapRoots {
+            guard let owners = try? fm.contentsOfDirectory(atPath: tapRoot) else { continue }
+            for owner in owners where owner != "homebrew" && !owner.hasPrefix(".") {
+                let ownerPath = "\(tapRoot)/\(owner)"
+                guard let taps = try? fm.contentsOfDirectory(atPath: ownerPath) else { continue }
+                for tap in taps where !tap.hasPrefix(".") {
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Third-party Homebrew tap: \(owner)/\(tap)",
+                        detail: "Non-official taps can ship arbitrary formulae — verify the tap's source",
+                        path: "\(ownerPath)/\(tap)",
+                        remediation: "Review: brew tap-info \(owner)/\(tap.replacingOccurrences(of: "homebrew-", with: "")) — remove with brew untap if unexpected"
+                    ))
+                }
+            }
+        }
+
+        // 4. Python pip user-install with startup hooks (~/.pth files auto-import on any
+        // Python invocation — silent persistence). Any custom .pth in the user site-packages
+        // that isn't from a well-known package is worth surfacing.
+        let userSitePython = ShellRunner.run("/usr/bin/python3", arguments: [
+            "-c", "import site; print(site.getusersitepackages())"
+        ], timeout: 3)
+        if userSitePython.success {
+            let userSite = userSitePython.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !userSite.isEmpty, let entries = try? fm.contentsOfDirectory(atPath: userSite) {
+                for entry in entries where entry.hasSuffix(".pth") {
+                    let pthPath = "\(userSite)/\(entry)"
+                    guard let content = try? String(contentsOfFile: pthPath, encoding: .utf8) else { continue }
+                    // .pth files with 'import' lines are executed on interpreter startup.
+                    if content.contains("import ") {
+                        findings.append(Finding(
+                            severity: .medium, category: .persistence,
+                            title: "Python .pth file executes code on interpreter startup",
+                            detail: "File: \(entry) — .pth entries containing 'import' run before your script does",
+                            path: pthPath,
+                            remediation: "Inspect: cat \"\(pthPath)\" — remove if you don't recognize the package."
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Privileged helper tools
+
+    /// /Library/PrivilegedHelperTools/ is where SMJobBless-installed helpers land. Real
+    /// helpers are code-signed by well-known vendors; attackers occasionally drop ad-hoc
+    /// or unsigned binaries here for root-level persistence.
+    private func scanPrivilegedHelperTools(findings: inout [Finding], errors: inout [String]) {
+        let dir = "/Library/PrivilegedHelperTools"
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: dir),
+              let entries = try? fm.contentsOfDirectory(atPath: dir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let path = "\(dir)/\(entry)"
+            // Skip if not a Mach-O (some helpers ship as scripts, uncommon but possible)
+            guard let fh = FileHandle(forReadingAtPath: path) else { continue }
+            let header = fh.readData(ofLength: 4)
+            fh.closeFile()
+            guard header.count == 4 else { continue }
+            let magic = header.withUnsafeBytes { $0.load(as: UInt32.self) }
+            let machoMagics: Set<UInt32> = [0xFEEDFACF, 0xFEEDFACE, 0xBEBAFECA, 0xCAFEBABE]
+            guard machoMagics.contains(magic) else { continue }
+
+            if !checkIsSigned(path: path) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Unsigned privileged helper tool",
+                    detail: "Root-level helper: \(entry) — real vendors always sign these binaries",
+                    path: path,
+                    remediation: "Verify origin. Remove with: sudo rm \"\(path)\" and remove its matching /Library/LaunchDaemons plist"
+                ))
+            }
         }
     }
 

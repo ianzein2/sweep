@@ -434,6 +434,171 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025 threat landscape — North Korean "Contagious Interview" campaign
+        // (BeaverTail JS dropper → InvisibleFerret Python backdoor → Ferret family).
+        // Persistence typically hides under ~/.n2/, ~/.npl, or ~/Library/Caches/.
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["MiroTalk", "FCCall", "beavertail", "chromeupdate"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2",
+                "~/.npl",
+                "/private/tmp/.beaver",
+            ],
+            launchAgentLabels: ["com.chromeupdate.helper"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "pyp", "npl_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.npl/payload",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FRIENDLYFERRET",
+            processNames: ["friendlyferret", "FRIENDLYFERRET", "com.apple.iCloud.service"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ff",
+                "~/Library/Application Support/.friendlyferret",
+            ],
+            launchAgentLabels: ["com.apple.iCloud.service"]
+        ),
+        SpywareSignature(
+            name: "FROSTYFERRET",
+            processNames: ["FROSTYFERRET_UI", "frostyferret", "ChromeUpdateAlert"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.frostyferret"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "zoom_sdk_support"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.flexferret",
+                "~/Library/Application Support/.zoomupdater",
+            ],
+            launchAgentLabels: ["com.zoom.us.updater"]
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogleChromeUpdater", "zoom_shared", "zoom_ipc_agent", "installer_ext"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.google.keystone.plist",
+                "~/.googl",
+                "~/.zoom_ipc",
+                "/private/var/tmp/.nim",
+            ],
+            launchAgentLabels: ["com.google.keystone", "com.zoom.us.shared"]
+        ),
+        // 2025 infostealer families (successors / variants of AMOS)
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey", "OdysseyStealer", "odyssey_installer"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "GraphicConverter", "Frigid_Installer"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.frigid",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "apple_proc", "app_hub"],
+            bundleIdentifiers: ["com.appleprocess.hub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.aph",
+            ],
+            launchAgentLabels: ["com.apple.process.hub"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["hz_rat", "hzrat", "HzRat", "system_helper", "OpenVPNConnect_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hz",
+                "~/Library/OpenVPN/config_helper",
+            ],
+            launchAgentLabels: ["com.openvpn.helper"]
+        ),
+        SpywareSignature(
+            name: "SparkKitty",
+            processNames: ["SparkKitty", "sparkkitty", "spark_kitty", "AppSocket"],
+            bundleIdentifiers: ["com.spark.kitty", "com.sparkkitty.agent"],
+            filePaths: [
+                "/private/tmp/.spark",
+                "~/Library/Application Support/.sparkkitty",
+            ],
+            launchAgentLabels: ["com.sparkkitty.agent"]
+        ),
+        SpywareSignature(
+            name: "FinalDraft",
+            processNames: ["FinalDraft", "finaldraft_agent", "final_draft_svc"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.finaldraft",
+                "~/Library/Application Support/.finaldraft",
+            ],
+            launchAgentLabels: ["com.finaldraft.service"]
+        ),
+        SpywareSignature(
+            name: "OSX.ZuRu",
+            processNames: ["ZuRu", "zuru", "libcrypto.2.dylib.zuru", "iTermServer-zuru"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.iterm2_zuru",
+                "/private/tmp/.zuru",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "GhostSpy",
+            processNames: ["GhostSpy", "ghostspy", "ghost_agent", "ghost_svc"],
+            bundleIdentifiers: ["com.ghostspy.agent"],
+            filePaths: [
+                "~/Library/Application Support/.GhostSpy",
+                "/private/tmp/.ghostspy",
+            ],
+            launchAgentLabels: ["com.ghostspy.service"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr", "xattr_worker"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todo_svc"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +615,14 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2025 malware families disguising as Apple services
+        "com.apple.iCloud.service",
+        "com.apple.process.hub",
+        "com.apple.WebKit.Networking.helper",
+        "com.apple.spotlight.helper",
+        "com.apple.systempreferences.helper",
+        "com.apple.locationd.helper",
+        "com.apple.airportd.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

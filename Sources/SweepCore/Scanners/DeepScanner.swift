@@ -37,6 +37,13 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Check shell history for ClickFix/FileFix "paste-into-Terminal" attacks —
+        //    the dominant macOS infection vector in 2024–2025. A fake CAPTCHA / "fix
+        //    your browser" page tells the victim to paste a curl|bash / osascript
+        //    payload; the command lands in bash_history or zsh_history verbatim.
+        progress?.update("checking shell history for paste-run attacks")
+        scanShellHistory(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +284,74 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Shell History (ClickFix / FileFix / paste-run attacks)
+
+    /// Scan bash/zsh history files for the "paste this in Terminal" attack pattern.
+    /// A single hit here is usually enough to explain a fresh compromise — the victim
+    /// pasted the command themselves, so nothing else in the scan may look wrong yet.
+    private func scanShellHistory(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let historyFiles = [
+            "\(home)/.zsh_history",
+            "\(home)/.bash_history",
+            "\(home)/.local/share/fish/fish_history",
+        ]
+
+        // Each pattern is a substring (case-insensitive) that describes an attacker
+        // handoff into the shell. We deliberately match on structure, not on domains:
+        // ClickFix/FileFix rotate hosts constantly, but the shape of the payload is stable.
+        let patterns: [(needle: String, why: String, severity: Severity)] = [
+            ("curl -fsSL", "curl -fsSL is the canonical fetch used in paste-run payloads", .medium),
+            ("| bash", "pipes remote output straight into bash — a paste-run pattern", .high),
+            ("| sh", "pipes remote output straight into sh — a paste-run pattern", .high),
+            ("| zsh", "pipes remote output straight into zsh — a paste-run pattern", .high),
+            ("| /bin/bash", "pipes remote output into /bin/bash — a paste-run pattern", .high),
+            ("| /bin/sh", "pipes remote output into /bin/sh — a paste-run pattern", .high),
+            ("do shell script", "osascript 'do shell script' — a common AppleScript stager", .high),
+            ("base64 -d | sh", "base64-decoded shell payload — classic obfuscated dropper", .high),
+            ("base64 --decode | sh", "base64-decoded shell payload — classic obfuscated dropper", .high),
+            ("echo \"y\" | curl", "auto-answered curl download — paste-run automation", .medium),
+            ("chmod +x /tmp/", "chmod on a /tmp download — a stager preparing to run", .high),
+            ("chmod 777 /tmp/", "world-writable chmod on /tmp payload — stager pattern", .high),
+            ("xattr -c /tmp/", "clearing quarantine on /tmp download — Gatekeeper bypass", .high),
+            ("xattr -d com.apple.quarantine", "Gatekeeper quarantine strip — bypass pattern", .high),
+            ("sudo spctl --master-disable", "disables Gatekeeper — a strong compromise indicator", .high),
+        ]
+
+        for path in historyFiles {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            let fileName = URL(fileURLWithPath: path).lastPathComponent
+            let lower = content.lowercased()
+
+            // De-dup so a history full of similar lines produces one finding per pattern.
+            var reported = Set<String>()
+
+            for (needle, why, sev) in patterns {
+                guard lower.contains(needle.lowercased()) else { continue }
+                if !reported.insert(needle).inserted { continue }
+
+                // Pull the first matching line for context; zsh history has ": <ts>:<dur>;<cmd>" format.
+                let lines = content.split(separator: "\n")
+                let firstMatch = lines.first { $0.lowercased().contains(needle.lowercased()) }
+                let snippet = firstMatch.map { line -> String in
+                    let s = String(line)
+                    if let semi = s.firstIndex(of: ";") {
+                        return String(s[s.index(after: semi)...])
+                    }
+                    return s
+                }?.trimmingCharacters(in: .whitespaces) ?? ""
+
+                findings.append(Finding(
+                    severity: sev, category: .suspiciousProcess,
+                    title: "Paste-run pattern in \(fileName)",
+                    detail: "\(why). Command: \(String(snippet.prefix(140)))",
+                    path: path,
+                    remediation: "Inspect \(path) — if you don't remember running this, treat the Mac as compromised: rotate passwords, browser cookies, and crypto-wallet seeds, then re-scan."
+                ))
+            }
         }
     }
 
