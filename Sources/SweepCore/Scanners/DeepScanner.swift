@@ -287,8 +287,12 @@ public final class DeepScanner: Scanner {
         let result = ShellRunner.run("/bin/ps", arguments: ["eww", "-o", "pid,command"], timeout: 5)
         guard result.success else { return }
 
-        let dangerousEnvVars = ["DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
-                                "CFNETWORK_DIAGNOSTICS", "MallocStackLogging"]
+        let dangerousEnvVars = [
+            "DYLD_INSERT_LIBRARIES", "DYLD_FORCE_FLAT_NAMESPACE",
+            "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH",
+            "CFNETWORK_DIAGNOSTICS", "MallocStackLogging",
+        ]
 
         let lines = result.stdout.split(separator: "\n")
         for line in lines {

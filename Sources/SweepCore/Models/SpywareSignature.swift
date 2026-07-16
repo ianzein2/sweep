@@ -434,6 +434,306 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK Contagious Interview campaign (2024-2025)
+        // Fake job-interview lures targeting developers; Node.js/Python multi-stage
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "n2n", "p2p", "car.node"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/p2.py",
+                "/private/tmp/beaver",
+                "~/.n2/npm",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "invisible_ferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pay",
+                "/private/tmp/.bow",
+                "~/.n2/pay",
+                "/private/tmp/mlip",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["ottercookie", "otter_cookie", "cookie_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ottercookie",
+                "~/.n2/ottercookie",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["flexibleferret", "FlexibleFerret", "FerretUpdater", "ChromeUpdate", "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.zoom.us.updater"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: ["com.apple.ChromeUpdateAlert"]
+        ),
+        // NimDoor — DPRK Nim-based backdoor, disclosed 2025
+        // Signal-based persistence, masquerades as Google Keystone / CoreKit
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogleKeystoneAgent", "googlekeystoneagent",
+                          "CoreKitAgent", "corekitagent", "trojan_nim"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.google.keystone.agent.plist",
+                "~/Library/Application Support/GoogleKeystone",
+                "/private/tmp/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.keystone.agent", "com.apple.corekit.agent"]
+        ),
+        // FrigidStealer — 2025, distributed via SmartApeSG / TA569 fake browser updates
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "MacBrowserUpdate", "SafariUpdate"],
+            bundleIdentifiers: ["com.macupdate.frigid", "com.safari.update.helper"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.macupdate.frigid"]
+        ),
+        // HZ Rat for macOS — Chinese-linked, disclosed Aug 2024 (Kaspersky)
+        // Targets WeChat/DingTalk credentials
+        SpywareSignature(
+            name: "HZ Rat (macOS)",
+            processNames: ["hzrat", "HZRat", "OpenVPNConnect.app", "hz_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/airportpaird",
+                "/Users/Shared/.hzrat",
+                "~/Library/Application Support/.hzrat",
+            ],
+            launchAgentLabels: ["com.hz.agent"]
+        ),
+        // LightSpy for macOS — modular surveillance framework, disclosed 2024
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "macircloader", "coredump_helper"],
+            bundleIdentifiers: ["com.apple.macos.softwareupdate"],
+            filePaths: [
+                "/private/var/db/.lightspy",
+                "~/Library/Caches/.lightspy",
+                "/Library/LaunchDaemons/com.apple.softwareupdate.plist.helper",
+            ],
+            launchAgentLabels: ["com.apple.macos.softwareupdate"]
+        ),
+        // RustDoor / GateDoor — ALPHV-linked, disclosed Feb 2024
+        SpywareSignature(
+            name: "RustDoor",
+            processNames: ["rustdoor", "RustDoor", "Visual Studio Updater", "zshrc_updater",
+                          "VisualStudioUpdater"],
+            bundleIdentifiers: ["com.microsoft.vs.updater"],
+            filePaths: [
+                "~/Library/Application Support/mysqlserver.plist",
+                "~/Library/LaunchAgents/com.microsoft.vs.updater.plist",
+                "/tmp/.test",
+            ],
+            launchAgentLabels: ["com.microsoft.vs.updater"]
+        ),
+        SpywareSignature(
+            name: "GateDoor",
+            processNames: ["gatedoor", "GateDoor", "go_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/.gatedoor"],
+            launchAgentLabels: []
+        ),
+        // JokerSpy — Python-based RAT, disclosed 2023, active in 2024
+        SpywareSignature(
+            name: "JokerSpy",
+            processNames: ["JokerSpy", "jokerspy", "xcc", "sh.py", "shared.dat"],
+            bundleIdentifiers: ["com.apple.xcc", "com.apple.security.check"],
+            filePaths: [
+                "/Users/Shared/xcc",
+                "/Users/Shared/shared.dat",
+                "~/Public/Safari/sh.py",
+            ],
+            launchAgentLabels: []
+        ),
+        // TodoSwift / GreenDorm — DPRK BlueNoroff, disclosed Aug 2024
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todo_swift", "GreenDorm"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.todoswift",
+            ],
+            launchAgentLabels: []
+        ),
+        // BlueNoroff HiddenRisk — disclosed Nov 2024
+        SpywareSignature(
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["hiddenrisk", "HiddenRisk", "growth", "GrowthProxy"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.google.growth.plist",
+                "~/.Growth",
+            ],
+            launchAgentLabels: ["com.google.growth"]
+        ),
+        // PondRAT — DPRK Citrine Sleet / Gleaming Pisces, Sep 2024 (Palo Alto Unit 42)
+        // Poisoned Python packages (real-ip, jsonpickle-fastify, coloredlogs-jsonpickle)
+        SpywareSignature(
+            name: "PondRAT",
+            processNames: ["pondrat", "PondRAT", "python_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.pond",
+                "~/.pondrat",
+            ],
+            launchAgentLabels: []
+        ),
+        // KrustyLoader — DPRK Andariel, 2024, Ivanti Connect Secure delivery chain
+        SpywareSignature(
+            name: "KrustyLoader",
+            processNames: ["krustyloader", "KrustyLoader", "rust_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.k",
+                "/tmp/.krusty",
+            ],
+            launchAgentLabels: []
+        ),
+        // NotLockBit — macOS ransomware, disclosed Oct 2024 (Trend Micro / SentinelOne)
+        // Impersonates LockBit branding; Go-based, exfil to Amazon S3
+        SpywareSignature(
+            name: "NotLockBit",
+            processNames: ["NotLockBit", "notlockbit", "not_lockbit", "lockbit_mac"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.notlockbit",
+                "~/Desktop/NotLockBitReadMeForVictim.txt",
+            ],
+            launchAgentLabels: []
+        ),
+        // RustyAttr — 2024, DPRK, abuses extended attributes to hide payloads
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["rustyattr", "RustyAttr", "xattr_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.rustyattr",
+                "~/Library/Application Support/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        // CherryPie / FullHouse.Doored — Aug 2024, DPRK Citrine Sleet
+        SpywareSignature(
+            name: "FullHouse.Doored",
+            processNames: ["FullHouse", "fullhouse", "cherrypie", "CherryPie", "FrostyFerret"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.fullhouse"],
+            launchAgentLabels: []
+        ),
+        // CoreWarrior — 2024
+        SpywareSignature(
+            name: "CoreWarrior",
+            processNames: ["corewarrior", "CoreWarrior", "core_warrior"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/.corewarrior"],
+            launchAgentLabels: []
+        ),
+        // MacMa (OSX.CDDS) — Chinese-linked, ongoing 2024-2025 updates
+        SpywareSignature(
+            name: "MacMa (OSX.CDDS)",
+            processNames: ["macma", "MacMa", "CDDS", "UserAgent", "AudioComponentRegistrar"],
+            bundleIdentifiers: ["com.apple.audiocomponent.registrar", "com.apple.UserAgent"],
+            filePaths: [
+                "~/Library/UserAgent",
+                "~/Library/Preferences/com.apple.UserAgent.plist",
+                "/tmp/.macma",
+            ],
+            launchAgentLabels: ["com.apple.UserAgent"]
+        ),
+        // XLoader for macOS — infostealer, 2023-2025 active variants
+        SpywareSignature(
+            name: "XLoader (macOS)",
+            processNames: ["xloader", "XLoader", "OfficeNote", "OfficeNote.app"],
+            bundleIdentifiers: ["com.microsoft.officenote"],
+            filePaths: [
+                "/Applications/OfficeNote.app",
+                "~/Library/Application Support/.xloader",
+            ],
+            launchAgentLabels: []
+        ),
+        // Turtle ransomware — Nov 2023, Go-based, cross-platform
+        SpywareSignature(
+            name: "Turtle Ransomware",
+            processNames: ["turtle", "Turtle", "turtle_ransomware"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.turtle",
+                "~/Desktop/READ_ME_TURTLE.txt",
+            ],
+            launchAgentLabels: []
+        ),
+        // CrossLock ransomware — 2024, Rust-based
+        SpywareSignature(
+            name: "CrossLock",
+            processNames: ["crosslock", "CrossLock", "cross_lock"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.crosslock",
+                "~/Desktop/CrossLock_ReadMe.txt",
+            ],
+            launchAgentLabels: []
+        ),
+        // Adload — long-lived adware family with modern 2024-2025 variants (Podcastarter, Mainstresk, etc.)
+        // Uses random 8-char lowercase names in ~/Library/Application Support/<name>/<name>
+        SpywareSignature(
+            name: "Adload",
+            processNames: ["Podcastarter", "podcastarter", "Mainstresk", "mainstresk",
+                          "CleanParameterD", "cleanparameterd", "Genieo", "genieo",
+                          "PremierOpinion", "premieropinion"],
+            bundleIdentifiers: ["com.Genieo.Genieo", "com.premieropinion"],
+            filePaths: [
+                "~/Library/Application Support/Genieo",
+                "~/Library/LaunchAgents/com.Genieo.completer.download.plist",
+                "~/Library/LaunchAgents/com.Genieo.engine.plist",
+            ],
+            launchAgentLabels: [
+                "com.Genieo.completer.download",
+                "com.Genieo.engine",
+                "com.Genieo.macextension.client",
+            ]
+        ),
+        // Shlayer — Apple's most detected macOS threat 2020-2024, still active
+        SpywareSignature(
+            name: "Shlayer",
+            processNames: ["shlayer", "Shlayer", "Player.app", "AdobeFlashPlayer",
+                          "installer.sh", "installer.dmg"],
+            bundleIdentifiers: ["com.adobe.flashplayer.installer.fake"],
+            filePaths: [
+                "/private/tmp/Player.app",
+                "/private/tmp/.shlayer",
+                "~/Library/Application Support/.shlayer",
+            ],
+            launchAgentLabels: []
+        ),
+        // Fickle Stealer — Rust-based infostealer, 2024
+        SpywareSignature(
+            name: "Fickle Stealer",
+            processNames: ["fickle", "Fickle", "FickleStealer", "fickle_stealer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.fickle",
+                "~/Library/Application Support/.Fickle",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +750,16 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed in 2024-2025 macOS malware masquerading as Apple services
+        "com.apple.corekit.agent",              // NimDoor
+        "com.apple.macos.softwareupdate",       // LightSpy for macOS
+        "com.apple.systempreferences.helper",   // RustBucket JADESNOW/JADENEEDLE variants
+        "com.apple.audiocomponent.registrar",   // MacMa / OSX.CDDS
+        "com.apple.UserAgent",                  // MacMa
+        "com.apple.macshare.plist",             // SpectralBlur
+        "com.apple.ChromeUpdateAlert",          // FlexibleFerret
+        "com.apple.xcc",                        // JokerSpy
+        "com.apple.security.check",             // JokerSpy
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +784,20 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // Observed in 2024-2025 malware masquerading as Apple/vendor daemons
+        "CoreKitAgent",          // NimDoor — no such Apple daemon exists
+        "corekitagent",          // NimDoor (lowercase variant)
+        "coredump_helper",       // LightSpy — no such Apple daemon
+        "AudioComponentRegistrar", // MacMa — real is coreaudiod / audiocomponentd (helper)
+        "macircloader",          // LightSpy loader
+        "SafariUpdate",          // FrigidStealer — Safari updates via Software Update, not a standalone
+        "MacBrowserUpdate",      // FrigidStealer
+        "ChromeUpdateAlert",     // FlexibleFerret — real Chrome is GoogleUpdater/Keystone (no "Alert" suffix)
+        "SafariHelper",          // RustBucket — real is com.apple.Safari.SafeBrowsing.Service
+        "VisualStudioUpdater",   // RustDoor — real Microsoft VS auto-updates in-app
+        "zshrc_updater",         // RustDoor — nothing legitimately named this
+        "IphoneInternalService", // mSpy — not a real service
+        "GrowthProxy",           // BlueNoroff HiddenRisk masquerade
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

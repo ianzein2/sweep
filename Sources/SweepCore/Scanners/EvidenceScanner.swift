@@ -445,6 +445,17 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // Added — 2024/2025 stealer target lists (AMOS 3.0, Banshee 2.0, Poseidon, Cthulhu)
+        ("OKX Wallet",   "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Xverse",       "idnnbdplmphpflfnlkomgpfbpcgelopg"),
+        ("Backpack",     "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Rabby",        "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Solflare",     "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Wasabi Wallet", "WalletWasabi"),
+        ("Sparrow Wallet", "Sparrow"),
+        ("Coinomi",      "Coinomi"),
+        ("Guarda",       "Guarda"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -547,6 +558,39 @@ public final class EvidenceScanner: Scanner {
                         detail: "Active: \(String(lineStr.prefix(160)))",
                         path: nil,
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
+                    ))
+                }
+
+                // AMOS / Banshee / Cthulhu / Poseidon / PureLand initial-access pattern:
+                // osascript prompting for the login password via `display dialog ... hidden answer`
+                // is the single most common technique 2024-2025 macOS stealers use to escalate
+                // beyond the sandbox. Legitimate apps request auth via the real system prompt.
+                if lineStr.contains("osascript") &&
+                   lineStr.contains("display dialog") &&
+                   lineStr.contains("hidden answer") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "osascript prompting for password (infostealer pattern)",
+                        detail: "Active: \(String(lineStr.prefix(200))) — 2024-2025 macOS stealers use `display dialog ... hidden answer` to phish the login password",
+                        path: nil,
+                        remediation: "DO NOT enter your password. Kill the process and identify what launched it: ps aux | grep osascript"
+                    ))
+                }
+
+                // Live process reading a Chromium `Login Data` or Firefox `logins.json` file
+                // outside a browser context — another infostealer hallmark.
+                if (lineStr.contains("Login Data") || lineStr.contains("logins.json") ||
+                    lineStr.contains("cookies.sqlite")) &&
+                   !lineStr.contains("Google Chrome") && !lineStr.contains("Brave Browser") &&
+                   !lineStr.contains("Microsoft Edge") && !lineStr.contains("firefox") &&
+                   !lineStr.contains("Arc.app") && !lineStr.contains("Opera") &&
+                   !lineStr.contains("Chromium") {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Non-browser process accessing browser credentials",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "Kill the process — a non-browser accessing Login Data / logins.json is a stealer signature"
                     ))
                 }
             }

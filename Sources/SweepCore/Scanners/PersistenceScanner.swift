@@ -351,6 +351,21 @@ public final class PersistenceScanner: Scanner {
             ("python.*-c.*import", "runs inline Python (may be obfuscated)"),
             ("/tmp/", "references temp directory"),
             ("/.hidden", "references hidden directory"),
+            // AMOS / Cthulhu / Poseidon / PureLand family — prompt for admin password via AppleScript
+            ("osascript -e", "runs inline AppleScript (macOS infostealers use this to prompt for password)"),
+            ("display dialog", "presents a system dialog from a shell config (highly unusual)"),
+            // Keychain exfiltration — used by stealers to dump credentials
+            ("security find-generic-password", "reads keychain items (stealer pattern)"),
+            ("security find-internet-password", "reads keychain items (stealer pattern)"),
+            ("security dump-keychain", "dumps the entire keychain (stealer pattern)"),
+            // NimDoor / KrustyLoader / RustyAttr — unusual interpreters/patterns
+            ("xattr -c", "clears extended attributes (RustyAttr-family loader technique)"),
+            // Contagious Interview (BeaverTail/InvisibleFerret) — Node/Python one-liners
+            ("node -e", "runs inline Node.js (BeaverTail-family loader technique)"),
+            ("node --eval", "runs inline Node.js (BeaverTail-family loader technique)"),
+            // Downloading and running via zsh/bash from a URL — a canonical "curl | bash" variant
+            ("$(curl", "captures curl output for execution"),
+            ("$(wget", "captures wget output for execution"),
         ]
 
         for configPath in shellConfigs {
