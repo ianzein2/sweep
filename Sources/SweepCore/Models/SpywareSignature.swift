@@ -434,6 +434,192 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS infostealer families
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigidstealer", "frigidupdate", "SafariUpdate"],
+            bundleIdentifiers: ["com.frigid.stealer", "com.safari.updater"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odysseyagent"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.service"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "appleprocesshub", "applehubd"],
+            bundleIdentifiers: ["com.apple.processhub.agent"],
+            filePaths: [
+                "/private/tmp/.appleprocesshub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "Nano Stealer",
+            processNames: ["NanoStealer", "nanostealer", "nano_agent"],
+            bundleIdentifiers: ["com.nano.stealer"],
+            filePaths: [
+                "/private/tmp/.nanostealer",
+                "~/Library/Application Support/.NanoStealer",
+            ],
+            launchAgentLabels: ["com.nano.service"]
+        ),
+        SpywareSignature(
+            name: "PSLoramyra",
+            processNames: ["PSLoramyra", "psloramyra", "loramyra"],
+            bundleIdentifiers: ["com.psloramyra.agent"],
+            filePaths: ["/private/tmp/.loramyra"],
+            launchAgentLabels: ["com.psloramyra.service"]
+        ),
+        SpywareSignature(
+            name: "CloudChat Stealer",
+            processNames: ["CloudChat", "cloudchat_agent", "cloudchatd"],
+            bundleIdentifiers: ["com.cloudchat.agent"],
+            filePaths: [
+                "/private/tmp/.cloudchat",
+                "~/Library/Application Support/.CloudChat",
+            ],
+            launchAgentLabels: ["com.cloudchat.service"]
+        ),
+        SpywareSignature(
+            name: "Shameless Stealer",
+            processNames: ["Shameless", "shameless_stealer", "shmlss"],
+            bundleIdentifiers: ["com.shameless.stealer"],
+            filePaths: ["/private/tmp/.shameless"],
+            launchAgentLabels: ["com.shameless.agent"]
+        ),
+        SpywareSignature(
+            name: "Rodrigo Stealer",
+            processNames: ["RodrigoStealer", "rodrigo_stealer", "rdrgo"],
+            bundleIdentifiers: ["com.rodrigo.stealer"],
+            filePaths: ["/private/tmp/.rodrigo"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AMOS Sonoma",
+            processNames: ["AtomicSonoma", "amos_sonoma", "sonoma_stealer"],
+            bundleIdentifiers: ["com.atomic.sonoma"],
+            filePaths: ["/private/tmp/.amos_sonoma"],
+            launchAgentLabels: ["com.atomic.sonoma"]
+        ),
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync_agent", "SyncMac"],
+            bundleIdentifiers: ["com.macsync.agent"],
+            filePaths: ["/private/tmp/.macsync"],
+            launchAgentLabels: ["com.macsync.service"]
+        ),
+        // DPRK / Lazarus / BlueNoroff 2024-2026
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["BeaverTail", "beavertail", "node-ipc-agent", "nodejs_updater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.beavertail",
+                "~/.n2/",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["InvisibleFerret", "invisibleferret", "npl", "pay"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "~/.npl/",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "installer_nim", "cloudsync_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Group Containers/.nimdoor",
+            ],
+            launchAgentLabels: ["com.apple.cloudsync.helper"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ferret_helper"],
+            bundleIdentifiers: ["com.flexible.ferret"],
+            filePaths: [
+                "/private/tmp/.flexibleferret",
+                "~/Library/Application Support/.FlexibleFerret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HiddenRisk (BlueNoroff)",
+            processNames: ["hiddenrisk", "HiddenRisk", "growth_upd"],
+            bundleIdentifiers: ["com.hiddenrisk.agent"],
+            filePaths: [
+                "/Users/Shared/.pd",
+                "~/Library/Group Containers/.hiddenrisk",
+            ],
+            launchAgentLabels: ["com.google.chrome.helper"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "todosw"],
+            bundleIdentifiers: ["com.todo.swift"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: []
+        ),
+        // Commercial surveillance vendors (2024-2026)
+        SpywareSignature(
+            name: "LightSpy",
+            processNames: ["LightSpy", "lightspy", "irc_loader", "kernelmanaged"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.lightspy",
+                "~/Library/Group Containers/.lightspy",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TriangleDB (macOS variant)",
+            processNames: ["triangledb", "TriangleDB", "backupagent_v2"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.triangledb",
+                "~/Library/BackupAgent",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "KaraDump",
+            processNames: ["KaraDump", "karadump", "karad"],
+            bundleIdentifiers: ["com.karadump.agent"],
+            filePaths: ["/private/tmp/.karadump"],
+            launchAgentLabels: ["com.karadump.service"]
+        ),
+        // Cryptomining (Sysrv-hello / XMRig-based macOS drops)
+        SpywareSignature(
+            name: "XMRig (unauthorized)",
+            processNames: ["xmrig", "XMRig", "cpuminer", "cpuminerd", "kdevtmpfsi"],
+            bundleIdentifiers: ["com.xmrig.miner"],
+            filePaths: [
+                "/private/tmp/.xmrig",
+                "~/.config/xmrig",
+                "/usr/local/.xmrig",
+            ],
+            launchAgentLabels: ["com.xmrig.miner", "com.system.optimizer"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

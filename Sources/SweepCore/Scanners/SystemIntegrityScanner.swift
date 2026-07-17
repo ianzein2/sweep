@@ -42,6 +42,14 @@ public final class SystemIntegrityScanner: Scanner {
         progress?.update("checking XProtect status")
         checkXProtectHealth(findings: &findings, errors: &errors)
 
+        // 5. Authorization / SecurityAgent plugins — third-party code that intercepts login
+        progress?.update("checking authorization plugins")
+        checkAuthorizationPlugins(findings: &findings, errors: &errors)
+
+        // 6. cron/at bans and ttys — ttys file is read at login for pseudo-tty allocation
+        progress?.update("checking Secure Boot / kext user consent")
+        checkSecurityPolicy(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -307,6 +315,112 @@ public final class SystemIntegrityScanner: Scanner {
                         ))
                     }
                 }
+            }
+        }
+    }
+
+    // MARK: - Authorization Plugins
+
+    private let knownAuthPluginBundles: Set<String> = [
+        // Apple's own
+        "loginwindow.bundle",
+        "KerberosAgent.bundle",
+        "MCXMCS.bundle",
+        "PSSOAuthPlugin.appex",
+        // Common enterprise SSO / MDM
+        "NoMADLoginAD.bundle",     // Jamf Connect (open-source predecessor)
+        "JamfConnectLogin.bundle", // Jamf Connect
+        "Kerberos.bundle",         // Apple Kerberos SSO
+        "PlatformSSO.bundle",      // Apple Platform SSO
+        "Kandji.bundle",           // Kandji Passport
+        "OktaVerify.bundle",       // Okta Verify
+        "MicrosoftEntraID.bundle", // Microsoft Entra ID SSO
+    ]
+
+    private func checkAuthorizationPlugins(findings: inout [Finding], errors: inout [String]) {
+        // /Library/Security/SecurityAgentPlugins/ hosts bundles that macOS loads into the
+        // authentication dialog process (SecurityAgent / authorizationhost). A malicious
+        // plugin here sees every credential typed at the login screen, sudo prompts, and
+        // Keychain unlock dialogs. Apple ships zero third-party plugins by default; the
+        // directory is stock-empty unless enterprise SSO tools install one.
+        let pluginDir = "/Library/Security/SecurityAgentPlugins"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: pluginDir) else { return }
+
+        for entry in entries where !entry.hasPrefix(".") {
+            let entryPath = "\(pluginDir)/\(entry)"
+
+            // Known safe plugin? Report as informational.
+            if knownAuthPluginBundles.contains(entry) {
+                findings.append(Finding(
+                    severity: .low, category: .systemIntegrity,
+                    title: "Known enterprise auth plugin: \(entry)",
+                    detail: "Third-party authorization plugin — legitimate for Jamf/Okta/Entra SSO",
+                    path: entryPath,
+                    remediation: "No action needed if your org uses this SSO tool"
+                ))
+                continue
+            }
+
+            // Unknown plugin — high severity. Anything that intercepts login must be trusted.
+            var severity: Severity = .high
+            var extra = ""
+            let execName = entry.replacingOccurrences(of: ".bundle", with: "")
+                                .replacingOccurrences(of: ".appex", with: "")
+            let executablePath = "\(entryPath)/Contents/MacOS/\(execName)"
+            if fm.fileExists(atPath: executablePath) {
+                if !checkIsSignedBundle(path: entryPath) {
+                    extra = " (unsigned)"
+                } else {
+                    // Signed but unknown — still flag, but slightly softer.
+                    severity = .medium
+                    extra = " (signed by unknown developer)"
+                }
+            }
+
+            findings.append(Finding(
+                severity: severity, category: .systemIntegrity,
+                title: "Unknown authorization plugin installed\(extra)",
+                detail: "Plugin: \(entry) — plugins in SecurityAgentPlugins can intercept every login/sudo/Keychain password prompt",
+                path: entryPath,
+                remediation: "Verify this plugin belongs to a corporate SSO tool. If not, remove: sudo rm -rf \"\(entryPath)\""
+            ))
+        }
+    }
+
+    private func checkIsSignedBundle(path: String) -> Bool {
+        let result = ShellRunner.run("/usr/bin/codesign",
+                                     arguments: ["--verify", "--strict", path],
+                                     timeout: 5)
+        return result.success
+    }
+
+    // MARK: - Security policy (kext / boot / user consent)
+
+    private func checkSecurityPolicy(findings: inout [Finding], errors: inout [String]) {
+        // spctl --status reveals Gatekeeper; spctl kext-consent list surfaces kext-load
+        // policy allowlists which some malware installs to whitelist rogue kexts.
+        let allowedKexts = ShellRunner.run("/usr/sbin/spctl",
+                                           arguments: ["kext-consent", "list"], timeout: 5)
+        if allowedKexts.success && !allowedKexts.stdout.isEmpty {
+            let lines = allowedKexts.stdout.split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("Allowed Team") }
+
+            for line in lines {
+                // Format: "TEAMID    (Team Name)"
+                let teamId = String(line.prefix(while: { !$0.isWhitespace }))
+                guard !teamId.isEmpty else { continue }
+
+                // Apple's own team ID is 63GLP6BUM7 (some variants), but we don't hardcode; we surface
+                // every entry so the user can spot ones they don't recognize.
+                findings.append(Finding(
+                    severity: .low, category: .systemIntegrity,
+                    title: "User-approved kext team: \(teamId)",
+                    detail: "This developer team is on the user-approved kext allowlist — line: \(String(line.prefix(120)))",
+                    path: nil,
+                    remediation: "Revoke if unfamiliar: sudo spctl kext-consent remove \(teamId)"
+                ))
             }
         }
     }

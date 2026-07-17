@@ -9,7 +9,7 @@ final class ScanEngine: ObservableObject {
     @Published var progress: Double = 0
     @Published var currentScanner: String = ""
     @Published var completedCount: Int = 0
-    @Published var totalCount: Int = 13
+    @Published var totalCount: Int = 14
     @Published var scanDate: Date?
 
     let isRoot = getuid() == 0
@@ -37,6 +37,7 @@ final class ScanEngine: ObservableObject {
             BrowserScanner(),
             DeepScanner(),
             HardeningScanner(),
+            SupplyChainScanner(),
         ]
 
         let total = scanners.count

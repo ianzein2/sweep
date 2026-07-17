@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Login Items (btm)")
+        scanBackgroundTaskManagement(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript persistence")
+        scanAppleScriptPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -674,6 +680,216 @@ public final class PersistenceScanner: Scanner {
                 detail: "emond rule: \(entry) — emond is rarely used legitimately and is a known spyware persistence channel",
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
+            ))
+        }
+    }
+
+    // MARK: - Background Task Management (Login Items, SMAppService)
+
+    private func scanBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        // macOS Ventura (13+) introduced the Background Task Management database. Apps can
+        // register themselves as login items via SMAppService or the legacy Login Items API,
+        // and they show up in `sfltool dumpbtm` — but NOT in ~/Library/LaunchAgents. Malware
+        // increasingly uses this path because it survives most persistence audits that only
+        // walk LaunchAgents/Daemons.
+        let result = ShellRunner.run("/usr/bin/sfltool", arguments: ["dumpbtm"], timeout: 10)
+        guard result.success && !result.stdout.isEmpty else {
+            // sfltool exists on Ventura+, absent on older releases — not an error.
+            return
+        }
+
+        // The output is a repeated block per item; we care about identifier/executable/team
+        // triples. Parsing is line-oriented rather than structured — the format is documented
+        // only informally, so match on stable keywords.
+        struct BTMRecord {
+            var identifier: String?
+            var executable: String?
+            var type: String?
+            var team: String?
+            var disposition: String?
+        }
+
+        var records: [BTMRecord] = []
+        var current = BTMRecord()
+
+        for line in result.stdout.split(separator: "\n") {
+            let trimmed = String(line).trimmingCharacters(in: .whitespaces)
+            // A new record begins with a `UUID:` line (or on some releases, `identifier:`).
+            if trimmed.hasPrefix("UUID:") || trimmed.hasPrefix("Record UUID:") {
+                if current.identifier != nil { records.append(current) }
+                current = BTMRecord()
+                continue
+            }
+            if trimmed.hasPrefix("Identifier:") || trimmed.hasPrefix("identifier:") {
+                current.identifier = valueAfterColon(trimmed)
+                continue
+            }
+            if trimmed.hasPrefix("Executable Path:") || trimmed.hasPrefix("executable path:") ||
+               trimmed.hasPrefix("URL:") {
+                let raw = valueAfterColon(trimmed)
+                if raw.hasPrefix("file://") {
+                    current.executable = String(raw.dropFirst("file://".count))
+                        .removingPercentEncoding ?? raw
+                } else if raw.hasPrefix("/") || current.executable == nil {
+                    current.executable = raw
+                }
+                continue
+            }
+            if trimmed.hasPrefix("Type:") || trimmed.hasPrefix("type:") {
+                current.type = valueAfterColon(trimmed)
+                continue
+            }
+            if trimmed.hasPrefix("Team Identifier:") || trimmed.hasPrefix("team identifier:") {
+                current.team = valueAfterColon(trimmed)
+                continue
+            }
+            if trimmed.hasPrefix("Disposition:") || trimmed.hasPrefix("disposition:") {
+                current.disposition = valueAfterColon(trimmed)
+                continue
+            }
+        }
+        if current.identifier != nil { records.append(current) }
+
+        for record in records {
+            guard let identifier = record.identifier else { continue }
+            let exec = record.executable ?? "(unknown)"
+
+            // Skip Apple entries — they're the vast majority and legitimate.
+            if identifier.hasPrefix("com.apple.") &&
+               !SpywareSignature.isFakeAppleBundleId(identifier) {
+                continue
+            }
+
+            // Known spyware label
+            if let sig = SpywareSignature.match(label: identifier) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware in Login Items (btm): \(sig.name)",
+                    detail: "Identifier: \(identifier), Executable: \(exec)",
+                    path: exec.hasPrefix("/") ? exec : nil,
+                    remediation: "Remove in System Settings > General > Login Items — or `sfltool remove <UUID>`"
+                ))
+                continue
+            }
+
+            // Fake Apple identifier
+            if SpywareSignature.isFakeAppleBundleId(identifier) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID registered as Login Item",
+                    detail: "Identifier: \(identifier), Executable: \(exec) — not a legitimate Apple service",
+                    path: exec.hasPrefix("/") ? exec : nil,
+                    remediation: "Remove in System Settings > General > Login Items"
+                ))
+                continue
+            }
+
+            // Executable in a hidden / temp path is a strong indicator
+            let isHidden = exec.contains("/.") || exec.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            let isTempPath = exec.hasPrefix("/tmp/") || exec.hasPrefix("/private/tmp/") || exec.hasPrefix("/var/tmp/")
+
+            if isHidden || isTempPath {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Login Item runs from suspicious location",
+                    detail: "Identifier: \(identifier), Executable: \(exec)" +
+                        (isHidden ? " — hidden path" : "") +
+                        (isTempPath ? " — temp directory" : ""),
+                    path: exec.hasPrefix("/") ? exec : nil,
+                    remediation: "Remove in System Settings > General > Login Items; hidden/temp Login Items are almost always malicious"
+                ))
+                continue
+            }
+
+            // Unsigned login items from unusual paths — report as medium
+            let isTrustedPath = trustedPathPrefixes.contains { exec.hasPrefix($0) }
+            let executableExists = FileManager.default.fileExists(atPath: exec)
+            let isDisabled = (record.disposition ?? "").lowercased().contains("disabled")
+            if !isTrustedPath && executableExists && !isDisabled && exec.hasPrefix("/") {
+                let signed = checkIsSigned(path: exec)
+                if !signed {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "Unsigned Login Item registered (btm)",
+                        detail: "Identifier: \(identifier), Type: \(record.type ?? "unknown"), Team: \(record.team ?? "none"), Executable: \(exec)",
+                        path: exec,
+                        remediation: "Verify this Login Item is expected: System Settings > General > Login Items"
+                    ))
+                }
+            }
+        }
+    }
+
+    private func valueAfterColon(_ line: String) -> String {
+        guard let colon = line.firstIndex(of: ":") else { return line }
+        return String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+    }
+
+    // MARK: - AppleScript Persistence
+
+    private func scanAppleScriptPersistence(findings: inout [Finding], errors: inout [String]) {
+        // ~/Library/Application Scripts/ is where apps register AppleScript handlers that fire
+        // in response to system events (Mail rules, Folder Actions, Calendar alarms). Malware —
+        // notably XCSSET and several 2024-2025 stealer families — plants scripts here because
+        // Apple's persistence audits often skip this directory.
+        let scriptsRoot = "\(ShellRunner.realUserHome)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard let bundles = try? fm.contentsOfDirectory(atPath: scriptsRoot) else { return }
+
+        for bundle in bundles where !bundle.hasPrefix(".") {
+            let bundleDir = "\(scriptsRoot)/\(bundle)"
+
+            // Real Apple system-preferences scripts folder is empty by default; XCSSET plants there.
+            let isApplePane = bundle == "com.apple.systempreferences" ||
+                              bundle == "com.apple.Preferences" ||
+                              bundle == "com.apple.systemuiserver"
+
+            guard let scripts = try? fm.contentsOfDirectory(atPath: bundleDir) else { continue }
+            for script in scripts where !script.hasPrefix(".") {
+                let scriptPath = "\(bundleDir)/\(script)"
+
+                if isApplePane {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Script planted in Apple system pane's Application Scripts",
+                        detail: "Bundle: \(bundle), Script: \(script) — this directory is empty on a clean macOS install; XCSSET and similar malware plant here",
+                        path: scriptPath,
+                        remediation: "Inspect and remove if unfamiliar: cat \"\(scriptPath)\" — then: rm \"\(scriptPath)\""
+                    ))
+                    continue
+                }
+
+                // Non-Apple entries: flag scripts that pull remote code (curl|sh, do shell script + curl).
+                guard let content = try? String(contentsOfFile: scriptPath, encoding: .utf8) else { continue }
+                let lower = content.lowercased()
+                let hasRemoteExec =
+                    (lower.contains("do shell script") && (lower.contains("curl ") || lower.contains("wget "))) ||
+                    lower.contains("| sh") || lower.contains("|sh\n") ||
+                    lower.contains("| bash") || lower.contains("base64 --decode | ")
+                if hasRemoteExec {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "AppleScript handler runs remote shell command",
+                        detail: "Bundle: \(bundle), Script: \(script) — content triggers `do shell script` with remote download",
+                        path: scriptPath,
+                        remediation: "Inspect: open \"\(scriptPath)\" — remove if this app didn't legitimately install it"
+                    ))
+                }
+            }
+        }
+
+        // Folder Actions — AppleScripts attached to directories that fire on file changes.
+        let folderActionsScript = "\(ShellRunner.realUserHome)/Library/Preferences/com.apple.FolderActionsDispatcher.plist"
+        if fm.fileExists(atPath: folderActionsScript),
+           let data = fm.contents(atPath: folderActionsScript),
+           let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+           let folderActions = plist["FolderActions"] as? [[String: Any]], !folderActions.isEmpty {
+            findings.append(Finding(
+                severity: .medium, category: .persistence,
+                title: "Folder Actions configured (\(folderActions.count))",
+                detail: "AppleScript handlers fire when files change in watched folders — a rare but real persistence channel",
+                path: folderActionsScript,
+                remediation: "Review handlers: System Settings > Privacy & Security > Automation, or Automator > Folder Actions Setup"
             ))
         }
     }
