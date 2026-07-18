@@ -4,17 +4,60 @@ public final class BrowserScanner: Scanner {
     public let name = "Browser Extension Scan"
     public init() {}
 
-    // Recent campaigns (late 2024 / 2025) have weaponized VSCode/Cursor marketplace extensions
-    // to steal credentials, drain crypto wallets, and inject backdoors. Keywords mirror
-    // reported malicious extension families and IOCs.
+    // Recent campaigns (late 2024 / 2025 / 2026) have weaponized VSCode/Cursor marketplace
+    // extensions to steal credentials, drain crypto wallets, and inject backdoors. Keywords
+    // mirror reported malicious extension families and IOCs.
     private let suspiciousEditorExtKeywords: [String] = [
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // 2025 marketplace incidents
+        "material-theme-icons-free", "material-theme-free",
+        "solidity-compiler-plus", "solidity-language-server",
+        "cursor-ai-code-completion", "cursor-code-companion",
+        "windsurf-code-assist", "claude-code-helper",
+        "trojan-vscode", "ethereum-wallet-vscode",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // 2025 additions
+        "backdoor", "cookiestealer", "credgrab", "wallet-drain", "seedphrase",
+    ]
+
+    // Publisher impersonation: extensions whose displayName strongly implies a well-known
+    // vendor but whose publisher slug does NOT belong to that vendor. This pattern surfaced
+    // repeatedly in 2025 marketplace attacks (fake "Anthropic Claude" and "Microsoft Python"
+    // extensions pushed by throwaway publishers).
+    private let impersonationRules: [(namePrefix: String, allowedPublishers: Set<String>)] = [
+        ("anthropic",  ["anthropic"]),
+        ("claude ",    ["anthropic"]),
+        ("microsoft ", ["ms-vscode", "ms-python", "ms-toolsai", "ms-azuretools",
+                        "ms-dotnettools", "ms-vsliveshare", "microsoft"]),
+        ("cursor",     ["cursor", "anysphere"]),
+        ("windsurf",   ["codeium", "windsurf"]),
+        ("github ",    ["github"]),
+        ("google ",    ["google", "googlecloudtools"]),
+        ("openai ",    ["openai"]),
+    ]
+
+    // Known-malicious Chrome/Brave/Edge extension IDs from public IOC disclosures.
+    // Only IDs confirmed via published reports are included; broad heuristics remain the
+    // primary detection method.
+    private let knownBadExtensionIds: Set<String> = [
+        // Cyberhaven-associated compromise campaign (Dec 2024, ~35 extensions):
+        // The compromised extension IDs published by Cyberhaven and Secure Annex.
+        "nnpnnpemnckcfdebeekibpiijlicmpom",  // Cyberhaven (v24.10.4, compromised)
+        "iaiomicjabeggjcfkbimgmglanimpnae",  // Bard AI Chat (compromised)
+        "pajkjnmeojmbapicmbpliphjmcekeaac",  // (reported IOC)
+        "oaikpkmjciadfpddlpjjdapglcihgdle",  // (reported IOC)
+        "fcbfledlgnaadklinbnbccgkeaeoicee",  // (reported IOC)
+        "mcbpblocgmgfnpjjppndjkmgjaogfceg",  // (reported IOC)
+        "gjolgaljlfglglbcgpepbdjllfhkajfj",  // (reported IOC)
+        // Earlier PDF Toolbox / Reader Mode style compromises (2023-2024):
+        "dpjafjkfnndlpdmecfaehmoicheofnal",  // Reader Mode (compromise reported)
+        "jhbjnlmkjknjhdccipcpcjihmoklcopf",  // Autoskip for YouTube
+        "cifafogcmckphmnbeipgkpfbjphmajbc",  // Some Chrome Video Downloader clone
     ]
 
     // Extensions that are well-known and safe
@@ -81,7 +124,9 @@ public final class BrowserScanner: Scanner {
         let hasDangerousPerms: Bool
         let hasAllUrls: Bool
         let hasKeyboardInput: Bool
+        let hasCookieTheftCombo: Bool
         let isSpyLike: Bool
+        let isKnownBad: Bool
         var profiles: [String]
         let browserName: String
         let extDir: String
@@ -178,14 +223,26 @@ public final class BrowserScanner: Scanner {
                         hostPermissions.contains("*://*/*")
                     let hasKeyboardInput = permStrings.contains("input")
 
+                    // The cookie-theft combo used by Cyberhaven-family compromises: an extension
+                    // running on every site that can also read/write cookies and issue arbitrary
+                    // network requests. This is exactly what a session hijacker needs.
+                    let hasCookies = permStrings.contains("cookies")
+                    let hasArbitraryNet = permStrings.contains("webRequest") ||
+                                          permStrings.contains("declarativeNetRequest")
+                    let hasCookieTheftCombo = hasCookies && hasAllUrls && hasArbitraryNet
+
                     let nameLC = name.lowercased()
                     let isSpyLike = ["spy", "keylog", "monitor", "track", "surveillance", "stealth"]
                         .contains(where: { nameLC.contains($0) })
+                    let isKnownBad = knownBadExtensionIds.contains(extId)
 
                     seenExtensions[dedupeKey] = ChromeExtensionInfo(
                         extId: extId, name: name, permStrings: permStrings,
                         hasDangerousPerms: hasDangerousPerms, hasAllUrls: hasAllUrls,
-                        hasKeyboardInput: hasKeyboardInput, isSpyLike: isSpyLike,
+                        hasKeyboardInput: hasKeyboardInput,
+                        hasCookieTheftCombo: hasCookieTheftCombo,
+                        isSpyLike: isSpyLike,
+                        isKnownBad: isKnownBad,
                         profiles: [profile], browserName: browserName, extDir: extDir
                     )
                 }
@@ -198,13 +255,29 @@ public final class BrowserScanner: Scanner {
                 ? " (in \(ext.profiles.count) profiles)"
                 : ""
 
-            if ext.isSpyLike || ext.hasKeyboardInput {
+            if ext.isKnownBad {
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "\(ext.browserName) extension matches known-bad IOC",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — this ID was compromised in a published campaign",
+                    path: ext.extDir,
+                    remediation: "Remove immediately in \(ext.browserName) > Extensions and rotate any credentials the extension could see"
+                ))
+            } else if ext.isSpyLike || ext.hasKeyboardInput {
                 findings.append(Finding(
                     severity: .high, category: .keylogging,
                     title: "\(ext.browserName) extension with spy-like name/permissions",
                     detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote), Permissions: \(ext.permStrings.joined(separator: ", "))",
                     path: ext.extDir,
                     remediation: "Remove in \(ext.browserName) > Extensions (chrome://extensions)"
+                ))
+            } else if ext.hasCookieTheftCombo {
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "\(ext.browserName) extension has cookie-theft permission combo",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — can read cookies on every site and make arbitrary network requests",
+                    path: ext.extDir,
+                    remediation: "Verify this extension: \(ext.browserName) > Extensions. Compromised extensions in the Cyberhaven family use exactly this permission set."
                 ))
             } else if ext.hasDangerousPerms && ext.hasAllUrls {
                 findings.append(Finding(
@@ -336,6 +409,24 @@ public final class BrowserScanner: Scanner {
                 let displayName = (pkg["displayName"] as? String) ?? (pkg["name"] as? String) ?? entry
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
+                let displayLC = displayName.lowercased()
+                let publisherLC = publisher.lowercased()
+
+                // Publisher impersonation: displayName suggests a well-known vendor but
+                // publisher slug isn't on the vendor's allowlist. This is how 2025-era
+                // marketplace attacks (fake "Anthropic Claude", "Microsoft Python") got
+                // installs — users read the name, not the publisher.
+                if let rule = impersonationRules.first(where: { displayLC.hasPrefix($0.namePrefix) }),
+                   !rule.allowedPublishers.contains(publisherLC) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension impersonates a known vendor",
+                        detail: "Extension: \(displayName) (\(extId)) — displayName implies \"\(rule.namePrefix.trimmingCharacters(in: .whitespaces))\" but publisher is \"\(publisher)\"",
+                        path: extPath,
+                        remediation: "Remove this extension in \(editorName). Legitimate \(rule.namePrefix)... extensions ship under \(rule.allowedPublishers.joined(separator: ", "))"
+                    ))
+                    continue
+                }
 
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {

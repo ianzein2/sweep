@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Background Task Management")
+        scanBackgroundTaskManagement(findings: &findings, errors: &errors)
+
+        progress?.update("checking audit configuration")
+        scanAuditControl(findings: &findings, errors: &errors)
+
+        progress?.update("checking AppleScript / Script Menu items")
+        scanAppleScriptPersistence(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -96,6 +105,8 @@ public final class PersistenceScanner: Scanner {
         let label = plist["Label"] as? String ?? "unknown"
         let runAtLoad = plist["RunAtLoad"] as? Bool ?? false
         let keepAlive = plist["KeepAlive"] != nil
+        let watchPaths = (plist["WatchPaths"] as? [String]) ?? []
+        let queueDirectories = (plist["QueueDirectories"] as? [String]) ?? []
 
         // Get executable path
         var executablePath: String?
@@ -133,6 +144,36 @@ public final class PersistenceScanner: Scanner {
 
         // Skip real Apple plists
         if label.hasPrefix("com.apple.") { return }
+
+        // A non-Apple LaunchAgent that triggers on writes to a wallet/keychain/browser
+        // credential store is a strong stealer indicator — infostealer campaigns weaponize
+        // WatchPaths so their payload only fires when the user actually uses the wallet.
+        let watchedPaths = watchPaths + queueDirectories
+        if !watchedPaths.isEmpty {
+            let sensitivePatterns = [
+                "/Keychains", "login.keychain",
+                "/Library/Application Support/Google/Chrome",
+                "/Library/Application Support/BraveSoftware",
+                "/Library/Application Support/Firefox",
+                "/Library/Application Support/Microsoft Edge",
+                "/Library/Application Support/Arc",
+                "/Cookies", "Login Data", "Web Data",
+                "MetaMask", "Electrum", "Exodus", "Ledger",
+                ".ssh", ".aws", ".config/gcloud", ".azure",
+            ]
+            if let hit = watchedPaths.first(where: { wp in
+                sensitivePatterns.contains { wp.contains($0) }
+            }) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "LaunchAgent triggered by writes to sensitive path",
+                    detail: "Label: \(label), WatchPath/QueueDirectory: \(hit) — payload runs when this path changes",
+                    path: path,
+                    remediation: "Inspect: cat \"\(path)\" — file-triggered persistence is a stealer hallmark"
+                ))
+                return
+            }
+        }
 
         guard let execPath = executablePath else { return }
 
@@ -675,6 +716,215 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Background Task Management (Ventura+)
+
+    /// macOS Ventura consolidated login items, LaunchAgents/Daemons, and helper items into
+    /// the Background Task Management (BTM) database at
+    /// /private/var/db/com.apple.backgroundtaskmanagement/. Malware families like Bkdr.Activator
+    /// and RustDoor tamper with the BTM database directly to hide their persistence from
+    /// System Settings > Login Items. `sfltool dumpbtm` (root-only) is the supported way to
+    /// enumerate what BTM actually holds.
+    private func scanBackgroundTaskManagement(findings: inout [Finding], errors: inout [String]) {
+        let sfltool = "/usr/bin/sfltool"
+        guard FileManager.default.isExecutableFile(atPath: sfltool) else { return }
+
+        let result = ShellRunner.run(sfltool, arguments: ["dumpbtm"], timeout: 15)
+        // sfltool dumpbtm needs root; silent skip if we can't read.
+        guard result.success && !result.stdout.isEmpty else { return }
+
+        // Records look like blocks: "Record #N ..." with fields like Name, Bundle ID,
+        // Executable Path, Disposition, Container. Split on Record boundaries.
+        let text = result.stdout
+        let records = text.components(separatedBy: "Record #").dropFirst()
+
+        for record in records {
+            // Skip Apple-signed / legitimate developer items
+            let hasAppleTeam = record.contains("Team ID: (Apple)") ||
+                               record.contains("Developer Name: (Apple Inc.)") ||
+                               record.contains("Bundle ID: (com.apple.")
+            if hasAppleTeam { continue }
+
+            // Extract "Name:" and "Executable Path:" for context
+            let name = extractField(record: record, key: "Name:") ?? "(unknown)"
+            let bundleID = extractField(record: record, key: "Bundle ID:") ?? ""
+            let execPath = extractField(record: record, key: "Executable Path:") ?? ""
+
+            // Empty/missing executable → dangling BTM entry, common for uninstalled apps
+            let execExists = !execPath.isEmpty && FileManager.default.fileExists(atPath: execPath)
+
+            // Known spyware match
+            if !bundleID.isEmpty, let sig = SpywareSignature.match(bundleId: bundleID) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Known spyware in Background Task Management: \(sig.name)",
+                    detail: "Item: \(name), Bundle ID: \(bundleID), Path: \(execPath)",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions; then uninstall \(sig.name)"
+                ))
+                continue
+            }
+
+            // Fake Apple bundle IDs slipped into BTM
+            if !bundleID.isEmpty && SpywareSignature.isFakeAppleBundleId(bundleID) {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Fake Apple bundle ID in Background Task Management",
+                    detail: "Item: \(name), Bundle ID: \(bundleID) — not a legitimate Apple service",
+                    path: execPath.isEmpty ? nil : execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+                continue
+            }
+
+            // Payload in temp / hidden path
+            let inTempOrHidden = execPath.hasPrefix("/tmp/") || execPath.hasPrefix("/private/tmp/") ||
+                                 execPath.hasPrefix("/var/tmp/") ||
+                                 execPath.split(separator: "/").contains(where: { $0.hasPrefix(".") })
+            if inTempOrHidden && !execPath.isEmpty {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Background Task Management item in temp/hidden path",
+                    detail: "Item: \(name), Path: \(execPath)",
+                    path: execPath,
+                    remediation: "Payloads registered here run at every login — investigate immediately"
+                ))
+                continue
+            }
+
+            // Dangling BTM record — the executable is gone but persistence remains
+            if !execPath.isEmpty && !execExists {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "Background Task Management item references missing executable",
+                    detail: "Item: \(name), Missing: \(execPath)",
+                    path: execPath,
+                    remediation: "Remove in System Settings > General > Login Items & Extensions"
+                ))
+            }
+        }
+    }
+
+    private func extractField(record: String, key: String) -> String? {
+        for line in record.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let range = trimmed.range(of: key) {
+                var value = trimmed[range.upperBound...].trimmingCharacters(in: .whitespaces)
+                // Fields often look like "Name: (Some App)" — strip the outer parens.
+                if value.hasPrefix("(") && value.hasSuffix(")") {
+                    value = String(value.dropFirst().dropLast())
+                }
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Audit Control Tampering
+
+    /// /etc/security/audit_control governs Basic Security Module logging. Malware routinely
+    /// tampers with it to blind macOS's audit trail — either by disabling flags entirely or
+    /// by writing logs to /dev/null. Both are signs of active anti-forensics.
+    private func scanAuditControl(findings: inout [Finding], errors: inout [String]) {
+        let path = "/etc/security/audit_control"
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+
+        // A stock file has a flags: line with at least one class enabled (e.g. "flags:lo,aa")
+        var flagsLine: String?
+        var dirLine: String?
+        for line in content.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("#") || trimmed.isEmpty { continue }
+            if trimmed.hasPrefix("flags:") { flagsLine = trimmed }
+            if trimmed.hasPrefix("dir:") { dirLine = trimmed }
+        }
+
+        if let f = flagsLine {
+            let value = f.replacingOccurrences(of: "flags:", with: "").trimmingCharacters(in: .whitespaces)
+            if value.isEmpty || value == "no" || value == "none" {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "macOS audit logging is disabled",
+                    detail: "audit_control flags are empty — this is an anti-forensics indicator",
+                    path: path,
+                    remediation: "Restore stock audit_control (flags:lo,aa) and reboot to reinitialize auditd"
+                ))
+            }
+        }
+
+        if let d = dirLine {
+            let value = d.replacingOccurrences(of: "dir:", with: "").trimmingCharacters(in: .whitespaces)
+            if value.contains("/dev/null") || value == "/tmp" {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Audit logs redirected to \(value)",
+                    detail: "audit_control 'dir:' points to a location where logs are discarded",
+                    path: path,
+                    remediation: "Restore stock audit_control (dir:/var/audit) and reboot to reinitialize auditd"
+                ))
+            }
+        }
+    }
+
+    // MARK: - AppleScript / Script Menu Persistence
+
+    /// macOS ships a per-app scripting hook: any file in ~/Library/Application Scripts/<bundleID>
+    /// is loaded by that app on launch. XCSSET-family malware abused this to persist inside
+    /// System Preferences and Terminal. We enumerate every entry and flag anything not signed
+    /// by Apple, or anything targeting bundle IDs where users rarely install custom scripts.
+    private func scanAppleScriptPersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let root = "\(home)/Library/Application Scripts"
+        let fm = FileManager.default
+        guard let apps = try? fm.contentsOfDirectory(atPath: root) else { return }
+
+        // These bundle IDs come stock on macOS but almost never receive user scripts — an
+        // Application Scripts folder for one is a strong XCSSET-style indicator.
+        let suspiciousTargets: Set<String> = [
+            "com.apple.systempreferences", "com.apple.Terminal",
+            "com.apple.finder", "com.apple.dock",
+            "com.apple.notificationcenterui",
+        ]
+
+        for app in apps where !app.hasPrefix(".") {
+            let dir = "\(root)/\(app)"
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            let scripts = entries.filter { !$0.hasPrefix(".") }
+            if scripts.isEmpty { continue }
+
+            let isSuspiciousTarget = suspiciousTargets.contains(app)
+            if isSuspiciousTarget {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "Custom scripts installed for \(app)",
+                    detail: "\(scripts.count) script(s) in \(dir) — this app rarely receives user scripts; XCSSET-family malware abuses this path",
+                    path: dir,
+                    remediation: "Inspect and remove unexpected scripts: ls -la \"\(dir)\""
+                ))
+                continue
+            }
+
+            // For other apps, look at scripts referencing shell/network eval — classic loaders.
+            for script in scripts {
+                let scriptPath = "\(dir)/\(script)"
+                guard let content = try? String(contentsOfFile: scriptPath, encoding: .utf8) else { continue }
+                let lower = content.lowercased()
+                let hasShellDrop = (lower.contains("do shell script") || lower.contains("system(")) &&
+                                   (lower.contains("curl ") || lower.contains("wget ") ||
+                                    lower.contains("| sh") || lower.contains("| bash") ||
+                                    lower.contains("base64") || lower.contains("osascript -e"))
+                if hasShellDrop {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Application Script downloads/executes shell code",
+                        detail: "\(script) for \(app) contains a shell-drop pattern",
+                        path: scriptPath,
+                        remediation: "Inspect: cat \"\(scriptPath)\" — remove if unexpected"
+                    ))
+                }
+            }
         }
     }
 

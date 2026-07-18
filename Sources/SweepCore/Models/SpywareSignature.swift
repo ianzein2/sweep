@@ -434,6 +434,184 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 additions: newly reported macOS malware families
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            // Process names limited to campaign-specific artifacts. Names like
+            // "GoogleDriveSync" collide with legitimate Google Drive processes and are
+            // omitted to avoid false positives.
+            processNames: ["NimDoor", "nimdoor", "installer_zoom", "ZoomHelperTools",
+                           "CoreKitAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "~/Library/Group Containers/group.com.nimdoor",
+                "~/Library/LaunchAgents/com.google.keystone.plist",
+            ],
+            launchAgentLabels: ["com.zoom.helper.updater"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            // "MacUpdater" is a legitimate paid product by CoreCode; excluded to
+            // avoid false positives. Campaign uses fake Mac update lures.
+            processNames: ["FrigidStealer", "frigidstealer",
+                           "MacBrowserUpdate", "SafariUpdater"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "HZ Rat",
+            // Excluded generic mimics like "OpenVPNConnect" and "WeChatUpdate" that
+            // could collide with the legitimate apps they impersonate.
+            processNames: ["hzrat", "HZRat", "hz_rat"],
+            bundleIdentifiers: ["com.hzrat.agent"],
+            filePaths: [
+                "~/Library/Application Support/.hzrat",
+                "/private/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.hzrat.helper"]
+        ),
+        SpywareSignature(
+            name: "Ferret / Contagious Interview (DPRK)",
+            // "ChromeUpdate" and "InitUtility" are Ferret's characteristic names, but
+            // ChromeUpdate is close to legitimate Google Update naming. The scanner
+            // additionally requires non-system paths for a match to fire.
+            processNames: ["FriendlyFerret", "FlexibleFerret", "FrostyFerret_UI",
+                           "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.libbismite.ferret"],
+            filePaths: [
+                "~/.n2",
+                "/Users/Shared/.pd",
+                "~/Library/InitUtility",
+            ],
+            launchAgentLabels: [
+                "com.apple.chromeupdate",
+                "com.libbismite.ferret",
+            ]
+        ),
+        SpywareSignature(
+            name: "Hidden Risk (Lazarus/DPRK)",
+            // "growth" alone is too generic — matched only via campaign-specific
+            // variations like "Growth Test" and combined with the RustyAttr marker.
+            processNames: ["Growth Test", "GrowthTest", "FinderTool",
+                           "RustyAttr", "growth_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/InitUtility",
+                "/Users/Shared/.helper",
+                "/private/tmp/.growth",
+            ],
+            launchAgentLabels: ["com.apple.growth.helper"]
+        ),
+        SpywareSignature(
+            name: "PasivRobber",
+            processNames: ["pasiv_agent", "PasivRobber", "wechatairport",
+                           "wechat_helper", "pasiv"],
+            bundleIdentifiers: ["com.pasiv.robber"],
+            filePaths: [
+                "/Library/Application Support/.pasiv",
+                "~/Library/Application Support/.pasiv",
+                "/private/tmp/.pasiv",
+            ],
+            launchAgentLabels: ["com.pasiv.service", "com.wechat.airport"]
+        ),
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "OdysseyClipper", "odyssey_installer",
+                           "odyssey_stealer", "OdysseyDaemon"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "RustDoor / GateDoor",
+            processNames: ["rustdoor", "RustDoor", "zshrc_service", "sh_agent",
+                           "rd_helper", "gatedoor"],
+            bundleIdentifiers: ["com.rustdoor.agent"],
+            filePaths: [
+                "~/Library/Application Support/.rustdoor",
+                "/private/tmp/.rustdoor",
+                "/Users/Shared/.rd",
+            ],
+            launchAgentLabels: ["com.apple.rustdoor",
+                                "com.rustdoor.service", "com.gatedoor.service"]
+        ),
+        SpywareSignature(
+            name: "BRICKSTORM (APT41)",
+            processNames: ["brickstorm", "BRICKSTORM", "bs_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/tmp/.brickstorm", "/private/var/tmp/.brickstorm"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "JOKERSPY",
+            processNames: ["xcc", "jokerspy", "sh.py", "xcc_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Users/Shared/.xcc",
+                "/Users/Shared/.xcc_helper",
+                "/Users/Shared/AppleAccount.tgz",
+                "/tmp/.jokerspy",
+            ],
+            launchAgentLabels: ["com.apple.xcc"]
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub Stealer",
+            processNames: ["AppleProcessHub", "apple_process_hub", "aphub_helper"],
+            bundleIdentifiers: ["com.appleprocesshub.stealer"],
+            filePaths: [
+                "/tmp/.aphub",
+                "~/Library/AppleProcessHub",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.appleprocesshub.agent"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail / OtterCookie (DPRK)",
+            processNames: ["otter_installer", "beavertail_agent", "beavertail",
+                           "OtterCookie", "MicrophonePermission"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Preferences/.otter",
+                "~/Library/Application Support/.beavertail",
+                "/tmp/.n2",
+                "~/.pyp",
+            ],
+            launchAgentLabels: ["com.otter.agent"]
+        ),
+        SpywareSignature(
+            name: "XMRig / Cryptojacker",
+            processNames: ["xmrig", "cpuminer", "minerd", "cryptominer",
+                           "kdevtmpfsi"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/.xmrig",
+                "~/Library/Application Support/.xmrig",
+                "/tmp/.system_daemon",
+                "/private/tmp/.miner",
+            ],
+            launchAgentLabels: ["com.apple.xmrig.helper"]
+        ),
+        SpywareSignature(
+            name: "macOS.Bkdr.Activator variants",
+            processNames: ["ActivatorDaemon", "activator_launcher",
+                           "helper_bg", "helper_daemon"],
+            bundleIdentifiers: ["com.macactivator.daemon"],
+            filePaths: [
+                "/Users/Shared/.local",
+                "/Users/Shared/.helper",
+                "/Users/Shared/DYLD_INSERT_LIBRARIES",
+            ],
+            launchAgentLabels: ["com.apple.helper.plist",
+                                "com.apple.helperd.plist"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +628,26 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2026 additions — patterns seen in Ferret, NimDoor, Hidden Risk
+        "com.apple.chromeupdate",
+        "com.apple.growth.helper",
+        "com.apple.mediaassetd.helper",
+        "com.apple.xcc",
+        "com.apple.rustdoor",
+        "com.apple.helperd.plist",
+        "com.apple.systemupdater",
+        "com.apple.macos.updater",
+        "com.apple.installer.updater",
+        "com.apple.wifi.helper",
+        "com.apple.launchd.helper",
+        "com.apple.core.helper",
+        "com.apple.system.helper",
+        "com.apple.icloud.helper",
+        "com.apple.tccd.helper",
+        // Common malware-added "Apple-lookalike" service patterns
+        "com.apple.airport.wpsd",   // Nonexistent; real is airportd
+        "com.apple.finder.helper",  // Real Finder has no helper daemon
+        "com.apple.terminal.helper",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +672,20 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2026 additions — names used in recent DPRK/APT campaigns
+        "ChromeUpdate",          // Fake Chrome updater name used by Ferret
+        "ChromeUpdateAlert",     // Ferret family
+        "MacOSUpdater",          // Not a real Apple process
+        "SafariUpdater",         // Real: no such thing; Safari updates via macOS
+        "MacBrowserUpdate",      // FrigidStealer signal
+        "MobileAsset_helper",    // Real: mobileassetd (no _helper)
+        "RemoteInstallMacOSHelper", // Not a real macOS daemon
+        "InitUtility",           // Fake, seen in Hidden Risk/Ferret
+        "installer_zoom",        // NimDoor
+        "FinderTool",            // Fake — Finder has no CLI companion
+        "TCCHelper",             // Real: tccd (no Helper)
+        "XPCHelper",             // Real: XPC services don't run standalone
+        "CoreKitAgent",          // Fake; used by NimDoor variants
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

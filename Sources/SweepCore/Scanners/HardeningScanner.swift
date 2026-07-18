@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking AirPlay Receiver")
+        checkAirPlayReceiver(findings: &findings, errors: &errors)
+
+        progress?.update("checking sudo version (CVE-2025-32463)")
+        checkSudoVulnerability(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect Remediator activity")
+        checkXProtectRemediatorFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking pending software updates")
+        checkPendingSoftwareUpdates(findings: &findings, errors: &errors)
+
+        progress?.update("checking App Management (Sonoma+)")
+        checkAppManagement(findings: &findings, errors: &errors)
+
+        progress?.update("checking Sensitive Content Warning")
+        checkSensitiveContentWarning(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,249 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - AirPlay Receiver
+
+    /// AirPlay Receiver turns any Mac into an AirPlay sink — meaning anyone on the local
+    /// network can attempt to project to it. On macOS Sonoma+ it's enabled by default on
+    /// some hardware. Attackers routinely use it as a lateral-movement / social-engineering
+    /// surface. Users who don't AirPlay to their Mac should have it off.
+    private func checkAirPlayReceiver(findings: inout [Finding], errors: inout [String]) {
+        // System-wide AirPlay Receiver setting
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.RemoteDesktop.plist", "AirPlayReceiverEnabled"
+        ], timeout: 5)
+
+        var systemEnabled = false
+        if result.success && result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            systemEnabled = true
+        }
+
+        // The airplayreceiverd launchd service is present when enabled.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        let daemonRunning = launchctl.success && launchctl.stdout.contains("airplayreceiver")
+
+        if systemEnabled || daemonRunning {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "AirPlay Receiver is enabled",
+                detail: "This Mac accepts AirPlay from nearby devices — increases attack surface on shared networks",
+                path: nil,
+                remediation: "Disable if not needed: System Settings > General > AirDrop & Handoff > AirPlay Receiver"
+            ))
+        }
+    }
+
+    // MARK: - Sudo CVE-2025-32463 (chwoot)
+
+    /// CVE-2025-32463 ("chwoot", disclosed June 2025) lets any local user gain root through
+    /// sudo's -R/--chroot flag. Affected: sudo 1.9.14 through 1.9.17. Fixed in 1.9.17p1.
+    /// macOS 15 (Sequoia) shipped an unpatched sudo for months; users on stalled Xcode CLT
+    /// or Homebrew installs may still have vulnerable binaries in $PATH.
+    private func checkSudoVulnerability(findings: inout [Finding], errors: inout [String]) {
+        // Check every sudo binary reachable via common paths — a stale Homebrew copy on
+        // /usr/local/bin can shadow /usr/bin/sudo even after a system update.
+        let candidates = ["/usr/bin/sudo", "/usr/local/bin/sudo", "/opt/homebrew/bin/sudo"]
+
+        for path in candidates {
+            guard FileManager.default.isExecutableFile(atPath: path) else { continue }
+            let result = ShellRunner.run(path, arguments: ["--version"], timeout: 5)
+            guard result.success else { continue }
+
+            // Grab the first "Sudo version X.Y.Z[pN]" line.
+            var version: String?
+            for line in result.stdout.split(separator: "\n") {
+                let s = String(line).trimmingCharacters(in: .whitespaces)
+                if s.hasPrefix("Sudo version") {
+                    version = s.replacingOccurrences(of: "Sudo version ", with: "")
+                    break
+                }
+            }
+            guard let v = version else { continue }
+
+            if isSudoVulnerableToChwoot(v) {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "sudo is vulnerable to CVE-2025-32463 (chwoot)",
+                    detail: "sudo version \(v) at \(path) allows any local user to escalate to root via -R/--chroot. Fixed in 1.9.17p1.",
+                    path: path,
+                    remediation: path.hasPrefix("/usr/bin/")
+                        ? "Update macOS via System Settings > General > Software Update"
+                        : "Update via `brew upgrade sudo` or remove the stale binary at \(path)"
+                ))
+            }
+        }
+    }
+
+    /// Returns true when the given "Sudo version" string is in the chwoot-vulnerable range.
+    /// Public so it can be unit-tested; free of external state.
+    static func isSudoVulnerableToChwoot(_ versionString: String) -> Bool {
+        // Format: MAJOR.MINOR.PATCH[pN]. Anything before 1.9.14 is unaffected; 1.9.17p1+ is fixed.
+        let core = versionString.split(separator: "p").first.map(String.init) ?? versionString
+        let parts = core.split(separator: ".").compactMap { Int($0) }
+        guard parts.count >= 3 else { return false }
+        let major = parts[0], minor = parts[1], patch = parts[2]
+
+        if major != 1 || minor != 9 { return false }
+        if patch < 14 || patch > 17 { return false }
+        // 1.9.17p1+ is patched; earlier p-levels of 1.9.17 are still vulnerable.
+        if patch == 17 {
+            let pSuffix = versionString.split(separator: "p").dropFirst().first.map(String.init) ?? "0"
+            if let p = Int(pSuffix), p >= 1 { return false }
+        }
+        return true
+    }
+
+    // MARK: - XProtect Remediator Freshness
+
+    /// XProtect Remediator (XPR) is Apple's malware removal service on Ventura+. It periodically
+    /// scans for the exact families we're listing in this scanner. If XPR hasn't run recently,
+    /// the machine has been walking around without an active defense sweep. XPR writes reports
+    /// under /private/var/protected/xprotect/; the newest file's mtime tells us when it last ran.
+    private func checkXProtectRemediatorFreshness(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let candidates = [
+            "/private/var/protected/xprotect",
+            "/var/protected/xprotect",
+        ]
+
+        var newest: Date?
+        for dir in candidates {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") {
+                let full = "\(dir)/\(entry)"
+                if let attrs = try? fm.attributesOfItem(atPath: full),
+                   let modDate = attrs[.modificationDate] as? Date {
+                    if newest == nil || modDate > newest! { newest = modDate }
+                }
+            }
+        }
+
+        guard let last = newest else {
+            // Directory unreadable without root — silent skip is fine; SIP protects it anyway.
+            return
+        }
+
+        let daysSince = Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 0
+        if daysSince > 14 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect Remediator hasn't run in \(daysSince) days",
+                detail: "Apple's built-in malware removal service (XPR) normally runs every few days. Last activity: \(daysSince) days ago.",
+                path: nil,
+                remediation: "Force a run: `sudo /Library/Apple/System/Library/CoreServices/XProtect.app/Contents/MacOS/XProtectRemediator` — or reboot"
+            ))
+        }
+    }
+
+    // MARK: - Pending Software Updates
+
+    /// Apple pushes security patches through the Software Update mechanism. Users that stall
+    /// on updates while running a version with published CVEs (WebKit, kernel, sudo…) leave
+    /// themselves exposed. Rather than run `softwareupdate --list` (network + slow), we look
+    /// at when macOS last checked and whether any recommended updates are pending on disk.
+    private func checkPendingSoftwareUpdates(findings: inout [Finding], errors: inout [String]) {
+        // LastRecommendedUpdatesAvailable — count of pending recommended updates (Ventura+).
+        let pendingResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "RecommendedUpdates"
+        ], timeout: 5)
+        if pendingResult.success {
+            // Output is an array literal like "( { ... }, { ... } )". A quick line-count heuristic
+            // avoids pulling in a full plist parser for a status check.
+            let displayNames = pendingResult.stdout
+                .split(separator: "\n")
+                .filter { $0.contains("Display Name") }
+            if !displayNames.isEmpty {
+                let sample = displayNames.prefix(3).map {
+                    String($0).trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: "\"", with: "")
+                        .replacingOccurrences(of: ";", with: "")
+                }.joined(separator: "; ")
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "\(displayNames.count) recommended software update(s) pending",
+                    detail: "Pending: \(sample)",
+                    path: nil,
+                    remediation: "Install: System Settings > General > Software Update"
+                ))
+            }
+        }
+
+        // How long since macOS last checked? Anything over 14 days suggests updates are blocked.
+        let lastCheckResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.SoftwareUpdate", "LastFullSuccessfulDate"
+        ], timeout: 5)
+        if lastCheckResult.success {
+            let text = lastCheckResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fmt = DateFormatter()
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+            fmt.dateFormat = "yyyy-MM-dd HH:mm:ss Z"
+            if let date = fmt.date(from: text) {
+                let daysSince = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+                if daysSince > 14 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "macOS hasn't checked for updates in \(daysSince) days",
+                        detail: "Last successful check: \(text) — security patches may be missing",
+                        path: nil,
+                        remediation: "Trigger a check: System Settings > General > Software Update, or run `softwareupdate --list`"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - App Management (Sonoma+)
+
+    /// macOS Sonoma introduced "App Management" (TCC service kTCCServiceAppleEvents-adjacent),
+    /// which blocks apps from silently modifying other installed apps (a classic infostealer
+    /// dropper technique). When the toggle is off system-wide, malware can quietly overwrite
+    /// or hollow out legitimate apps in /Applications.
+    private func checkAppManagement(findings: inout [Finding], errors: inout [String]) {
+        // Only meaningful on Sonoma (14+); silently skip on older systems.
+        let osVer = ProcessInfo.processInfo.operatingSystemVersion
+        guard osVer.majorVersion >= 14 else { return }
+
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSAppManagementDisabled"
+        ], timeout: 5)
+        if result.success &&
+           result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "App Management is disabled",
+                detail: "System-wide App Management is off — apps can silently modify other apps in /Applications",
+                path: nil,
+                remediation: "Re-enable in System Settings > Privacy & Security > App Management, or clear the override: sudo defaults delete com.apple.LaunchServices LSAppManagementDisabled"
+            ))
+        }
+    }
+
+    // MARK: - Sensitive Content Warning (Sonoma+)
+
+    /// Sonoma+ can blur nude images/videos before showing them in Messages, FaceTime and AirDrop.
+    /// This is more anti-harassment than anti-malware, but disabling it also disables the AirDrop
+    /// warning path that flags unexpected sensitive files — worth surfacing.
+    private func checkSensitiveContentWarning(findings: inout [Finding], errors: inout [String]) {
+        let osVer = ProcessInfo.processInfo.operatingSystemVersion
+        guard osVer.majorVersion >= 14 else { return }
+
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.security.SensitiveContentAnalysis", "CMPhotoAnalysisEnabled"
+        ], timeout: 5)
+        // Absence = default (on); explicit 0 = disabled.
+        if result.success &&
+           result.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Sensitive Content Warning is disabled",
+                detail: "Explicit-content detection in Messages/AirDrop is turned off",
+                path: nil,
+                remediation: "Enable in System Settings > Privacy & Security > Sensitive Content Warning"
+            ))
         }
     }
 
