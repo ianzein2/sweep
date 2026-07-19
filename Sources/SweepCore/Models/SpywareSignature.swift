@@ -434,6 +434,189 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS ClickFix / infostealer wave
+        SpywareSignature(
+            name: "ClickLock Stealer",
+            processNames: ["clicklock", "ClickLock", "authirity", "chromer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.authirity.plist",
+                "~/Library/LaunchAgents/com.chromer.plist",
+                "/private/tmp/.clicklock",
+            ],
+            // ClickLock spawns a 210ms process-kill loop until the victim types their password.
+            // Persistence is two LaunchAgents dropped in the user's LaunchAgents directory.
+            launchAgentLabels: ["com.authirity", "com.chromer"]
+        ),
+        SpywareSignature(
+            name: "CrashStealer",
+            processNames: ["veltod", "CrashReporter", "crashreporter_helper"],
+            bundleIdentifiers: ["com.apple.crashreporter.helper"],
+            filePaths: [
+                "/private/tmp/CrashReporter.dmg",
+                "/private/tmp/sys.cache",
+                "~/Library/Application Support/.CrashReporter",
+            ],
+            // CrashStealer disguises itself as Apple's CrashReporter — the LaunchAgent label
+            // com.apple.crashreporter.helper is a fake Apple bundle ID (real one is com.apple.CrashReporter).
+            launchAgentLabels: ["com.apple.crashreporter.helper"]
+        ),
+        SpywareSignature(
+            name: "SHub Reaper",
+            processNames: ["SHub", "shub_reaper", "GoogleUpdater"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/GoogleUpdate.app",
+                "~/Library/Application Support/GoogleUpdate",
+            ],
+            // Reaper impersonates Google Update via a fake GoogleUpdate.app in ~/Library. The
+            // fake LaunchAgent label matches the legitimate Chrome updater — see the impersonated
+            // vendor path check in PersistenceScanner for the disambiguating rule.
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MacSync Stealer",
+            processNames: ["MacSync", "macsync", "macsync_helper"],
+            bundleIdentifiers: ["com.macsync.helper", "com.macsync.agent"],
+            filePaths: [
+                "~/Library/Application Support/.MacSync",
+                "/private/tmp/.macsync",
+            ],
+            launchAgentLabels: ["com.macsync.helper", "com.macsync.agent"]
+        ),
+        // North-Korea Contagious Interview / DPRK campaign families
+        SpywareSignature(
+            name: "BeaverTail",
+            processNames: ["beavertail", "BeaverTail", "n2_pdf", "node_pdf"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.n2",
+                "/private/tmp/p.zi",
+                "~/Library/Caches/.beavertail",
+            ],
+            // BeaverTail is a Node.js-based DPRK stealer dropped by fake npm packages and
+            // .vscode/tasks.json auto-installers during "job interview" chains.
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            processNames: ["invisibleferret", "python_helper", "pyloader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.invisibleferret",
+                "~/Library/Application Support/.pyp",
+                "~/.npl",
+            ],
+            // Second-stage Python backdoor deployed by BeaverTail. Uses hidden ~/.npl staging.
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["ottercookie", "OtterCookie"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ottercookie",
+                "~/Library/Application Support/.ottercookie",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FRIENDLYFERRET",
+            processNames: ["FRIENDLYFERRET", "friendlyferret", "secd_helper"],
+            bundleIdentifiers: ["com.apple.secd"],
+            filePaths: [
+                "/private/tmp/.friendlyferret",
+                "~/Library/Application Support/.secd",
+            ],
+            // FRIENDLYFERRET masquerades as com.apple.secd (the real Apple daemon has no LaunchAgent plist).
+            launchAgentLabels: ["com.apple.secd"]
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret",
+            processNames: ["FlexibleFerret", "flexibleferret", "ChromeUpdate", "FerretHelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.ferret",
+                "/private/tmp/.flexibleferret",
+                "~/.chromeupdate",
+            ],
+            launchAgentLabels: ["com.apple.chromeupdate"]
+        ),
+        SpywareSignature(
+            name: "BlueNoroff HiddenRisk",
+            processNames: ["HiddenRisk", "hiddenrisk", "growth", "crypto_news"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.hiddenrisk",
+                "/private/tmp/.hiddenrisk",
+            ],
+            // BlueNoroff HiddenRisk uses zshenv-based persistence — the zshenv modification is
+            // detected separately by the shell-config scanner.
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TanStack gh-token-monitor",
+            processNames: ["gh-token-monitor", "gh_token_monitor"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/LaunchAgents/com.user.gh-token-monitor.plist",
+            ],
+            // Payload from the TanStack npm supply-chain compromise — a LaunchAgent that exfiltrates
+            // GitHub tokens from the developer's keychain.
+            launchAgentLabels: ["com.user.gh-token-monitor"]
+        ),
+        // Cryptojackers (2024-2025)
+        SpywareSignature(
+            name: "LoudMiner (XMRig)",
+            processNames: ["LoudMiner", "loudminer", "xmrig", "coreaudiod-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/CoreAudioService",
+                "~/Library/Application Support/CoreAudioService",
+                "/Library/LaunchDaemons/com.apple.coreaudiod.plist.helper",
+            ],
+            launchAgentLabels: ["com.coreaudiod.helper"]
+        ),
+        SpywareSignature(
+            name: "OSX.ppminer",
+            processNames: ["ppminer", "com.pplauncher.plist"],
+            bundleIdentifiers: [],
+            filePaths: ["/Library/Application Support/pplauncher"],
+            launchAgentLabels: ["com.pplauncher.plist"]
+        ),
+        SpywareSignature(
+            name: "OSX.CpuMeaner",
+            processNames: ["cpumeaner", "CpuMeaner", "com.osxext.gpumon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Application Support/com.osxext.gpumon",
+                "/Library/LaunchDaemons/com.osxext.gpumon.plist",
+            ],
+            launchAgentLabels: ["com.osxext.gpumon"]
+        ),
+        // LightSpy — modular surveillance framework with a 2024 macOS build
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            processNames: ["lightspy", "LightSpy", "SpyLight", "F_Warehouse"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.lightspy",
+                "/private/var/tmp/.lightspy",
+                "~/Library/Caches/.F_Warehouse",
+            ],
+            launchAgentLabels: []
+        ),
+        // XCSSET 2024/2025 variants that hide inside Xcode projects
+        SpywareSignature(
+            name: "XCSSET (2024 variant)",
+            processNames: ["xcodebuild_helper", "xcode_installer", "safari_boot"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Caches/com.apple.dt.Xcode.installer",
+                "~/Library/Developer/Xcode/UserData/xcuserdata/.xcsset",
+            ],
+            launchAgentLabels: ["com.apple.xcode.installer.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +633,52 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2025-2026 additions — LaunchAgent labels observed in real infostealer campaigns.
+        // The real Apple bundle IDs are com.apple.CrashReporter, com.apple.secd, com.apple.mdworker
+        // (mixed case, no ".helper" / ".agent" suffix, and never installed as a user LaunchAgent).
+        "com.apple.crashreporter.helper", // CrashStealer
+        "com.apple.secd",                 // FRIENDLYFERRET (real secd has no user plist)
+        "com.apple.chromeupdate",         // FlexibleFerret
+        "com.apple.xcode.installer.helper", // XCSSET 2024
+        "com.apple.mdworker.helper",
+        "com.apple.mdworker.agent",
+        "com.apple.spotlight.helper",
+        "com.apple.icloud.helper",
+        "com.apple.airport.helper",
+    ]
+
+    /// Fake bundle identifiers that impersonate other well-known vendors (Google, Microsoft, Adobe, etc.).
+    /// Recent macOS stealers frequently pretend to be Google Update or Microsoft OneDrive.
+    ///
+    /// Note: labels that are ALSO used by legitimate vendor updaters (e.g. `com.google.keystone.agent`)
+    /// are NOT listed here — that would misfire on every Chrome install. Those are disambiguated by
+    /// their executable path in the vendor-impersonation heuristic (see PersistenceScanner).
+    public static let fakeVendorBundlePatterns: [String] = [
+        // SHub Reaper / stealer families that pick a plausible-but-not-real Google/Adobe/MS label
+        "com.google.updater.helper",
+        "com.adobe.updater.helper",
+        "com.adobe.creativecloud.updater.plist",
+        "com.microsoft.update.agent",
+        "com.microsoft.onedrive.helper",
+        // Node/npm supply-chain
+        "com.user.gh-token-monitor",
+    ]
+
+    /// Legitimate vendor LaunchAgent labels paired with the executable-path prefix they
+    /// SHOULD run from. If a plist uses one of these labels but its executable lives outside
+    /// the expected prefix, it's very likely an impersonator (e.g. SHub Reaper spoofing Chrome's
+    /// Keystone updater). Values are checked with `contains(where:)` on the executable path, so a
+    /// match anywhere in the path suffices — accounts for user-home variance.
+    public static let vendorLaunchAgentAllowedPaths: [String: [String]] = [
+        "com.google.keystone.agent": [
+            "/Library/Google/GoogleSoftwareUpdate/",
+            "/Applications/Google Chrome.app/",
+            "/Applications/Google Chrome Canary.app/",
+            "/Applications/Google Chrome Beta.app/",
+        ],
+        "com.google.keystone.daemon": [
+            "/Library/Google/GoogleSoftwareUpdate/",
+        ],
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -490,6 +719,31 @@ public struct SpywareSignature {
             }
         }
         return false
+    }
+
+    /// Checks if a bundle ID impersonates a well-known vendor (Google Update, Adobe, Microsoft, etc.)
+    /// installed in a user or system LaunchAgents directory.
+    /// Legitimate vendor updaters live in vendor-controlled application directories, not the
+    /// user's LaunchAgents folder — so a match here is a strong compromise signal.
+    public static func isFakeVendorBundleId(_ bundleId: String) -> Bool {
+        return fakeVendorBundlePatterns.contains(bundleId)
+    }
+
+    /// If `label` is a known vendor LaunchAgent label AND `executablePath` sits outside every
+    /// allowed prefix for that label, returns true — this is a strong signal of an impersonation
+    /// campaign (e.g. SHub Reaper's fake `com.google.keystone.agent` pointing at ~/Library/GoogleUpdate.app).
+    /// Returns false when the label is unknown or when the executable lives where it should.
+    public static func isImpersonatedVendorLaunchAgent(label: String, executablePath: String) -> Bool {
+        guard let allowedPrefixes = vendorLaunchAgentAllowedPaths[label], !allowedPrefixes.isEmpty else {
+            return false
+        }
+        // The executable path is legitimate if it contains ANY of the allowed prefixes.
+        for prefix in allowedPrefixes {
+            if executablePath.contains(prefix) {
+                return false
+            }
+        }
+        return true
     }
 
     /// Checks if a process name is mimicking a system process

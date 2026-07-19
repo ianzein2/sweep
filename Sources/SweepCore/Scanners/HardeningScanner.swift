@@ -55,6 +55,21 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking sudo timeout")
+        checkSudoTimeout(findings: &findings, errors: &errors)
+
+        progress?.update("checking Wi-Fi MAC randomization")
+        checkWifiMacRandomization(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect signature age")
+        checkXProtectFreshness(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth discoverability")
+        checkBluetoothDiscoverability(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +459,175 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Sudo timeout
+
+    /// A long sudo grace period (or `timestamp_timeout=-1`) lets malware run passwordless sudo
+    /// commands after the user has authorized any single sudo call — a stealth privilege
+    /// escalation vector abused by recent macOS stealers (they wait for the user to run their
+    /// own sudo command, then piggyback).
+    private func checkSudoTimeout(findings: inout [Finding], errors: inout [String]) {
+        let sudoersPaths = ["/etc/sudoers"]
+        var allPaths = sudoersPaths
+        if let dropIns = try? FileManager.default.contentsOfDirectory(atPath: "/etc/sudoers.d") {
+            for entry in dropIns where !entry.hasPrefix(".") && entry != "README" {
+                allPaths.append("/etc/sudoers.d/\(entry)")
+            }
+        }
+
+        for path in allPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for line in content.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                guard trimmed.lowercased().contains("timestamp_timeout") else { continue }
+
+                // Extract the number (may be quoted, may be negative)
+                let after = trimmed.components(separatedBy: "timestamp_timeout=")
+                guard after.count == 2 else { continue }
+                let cleaned = after[1].trimmingCharacters(in: CharacterSet(charactersIn: " \t\"'"))
+                let raw = cleaned.split(separator: " ").first.map { String($0) } ?? ""
+                let value = Int(raw) ?? 5
+
+                if value < 0 {
+                    findings.append(Finding(
+                        severity: .high, category: .hardening,
+                        title: "sudo grace period never expires",
+                        detail: "timestamp_timeout=\(value) in \(path) — once sudo is authorized, it stays authorized forever",
+                        path: path,
+                        remediation: "Reduce to a sensible default: sudo visudo -f \(path) and set timestamp_timeout=5"
+                    ))
+                } else if value > 15 {
+                    findings.append(Finding(
+                        severity: .medium, category: .hardening,
+                        title: "sudo grace period is long (\(value) min)",
+                        detail: "timestamp_timeout=\(value) in \(path) — a long grace period gives running malware a wider window to piggyback on user sudo",
+                        path: path,
+                        remediation: "Reduce to 5 or 10 minutes: sudo visudo -f \(path)"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - Wi-Fi MAC randomization (macOS 14+)
+
+    /// Since Sonoma, macOS supports MAC-address randomization per Wi-Fi SSID to defeat
+    /// cross-network tracking. On a personal Mac this should be on by default. If it's off on
+    /// several remembered networks, tracking is possible.
+    private func checkWifiMacRandomization(findings: inout [Finding], errors: inout [String]) {
+        // The AirPort preferences plist stores per-SSID PrivateMACAddressModeUserSetting.
+        // 0 = off, 1 = fixed, 2 = rotating. macOS 15 default is "rotating".
+        let plistPath = "/Library/Preferences/com.apple.wifi.known-networks.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+            return
+        }
+
+        var networksWithoutRandomization = 0
+        var totalNetworks = 0
+        for (_, value) in plist {
+            guard let entry = value as? [String: Any] else { continue }
+            totalNetworks += 1
+            // Newer keys: PrivateMACAddressModeUserSetting; older: PrivateMACAddress.
+            let mode = (entry["PrivateMACAddressModeUserSetting"] as? Int) ??
+                       (entry["PrivateMACAddressMode"] as? Int)
+            if mode == 0 {
+                networksWithoutRandomization += 1
+            }
+        }
+
+        // Only surface if at least a few networks are known and half or more have randomization off.
+        guard totalNetworks >= 3, networksWithoutRandomization * 2 >= totalNetworks else { return }
+        findings.append(Finding(
+            severity: .low, category: .hardening,
+            title: "Wi-Fi MAC randomization is disabled on \(networksWithoutRandomization)/\(totalNetworks) networks",
+            detail: "Fixed MAC address is broadcast whenever these networks are joined — trackable across locations",
+            path: plistPath,
+            remediation: "For each network: System Settings > Wi-Fi > (i) next to network > Private Wi-Fi Address: Rotating"
+        ))
+    }
+
+    // MARK: - iCloud Private Relay
+
+    /// Private Relay (macOS Monterey+ with iCloud+) hides the client IP from third parties and
+    /// prevents DNS-level tracking. Not everyone subscribes, but if the user does subscribe and
+    /// has it disabled, that's worth flagging as a privacy regression.
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // com.apple.networkserviceproxy PrivacyProxyServiceEnabled: 1 = on, 0 = off.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "PrivacyProxyServiceEnabled"
+        ], timeout: 5)
+        if result.success {
+            let v = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v == "0" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Private Relay is disabled",
+                    detail: "Private Relay hides your IP and DNS from third parties. If you subscribe to iCloud+, keeping it on improves privacy.",
+                    path: nil,
+                    remediation: "Enable: System Settings > Apple ID > iCloud > Private Relay"
+                ))
+            }
+        }
+    }
+
+    // MARK: - XProtect freshness
+
+    /// XProtect is Apple's built-in malware signature engine. Its bundle version is embedded in
+    /// XProtect.bundle/Contents/Resources/XProtect.plist and moves several times a month.
+    /// A signature bundle older than ~60 days usually means updates aren't being applied.
+    private func checkXProtectFreshness(findings: inout [Finding], errors: inout [String]) {
+        let candidates = [
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.meta.plist",
+            "/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.meta.plist",
+        ]
+        var mtime: Date?
+        var location: String?
+        for path in candidates {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+               let modDate = attrs[.modificationDate] as? Date {
+                mtime = modDate
+                location = path
+                break
+            }
+        }
+        guard let modDate = mtime, let path = location else { return }
+        let ageDays = Int(Date().timeIntervalSince(modDate) / 86400)
+        if ageDays > 60 {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "XProtect signatures are \(ageDays) days old",
+                detail: "XProtect.meta.plist at \(path) hasn't been updated in \(ageDays) days — signature-based malware detection is stale",
+                path: path,
+                remediation: "Ensure automatic updates are enabled: System Settings > General > Software Update > (i) > Install system data files and security updates"
+            ))
+        }
+    }
+
+    // MARK: - Bluetooth discoverability
+
+    /// A discoverable Bluetooth radio is a well-known attack surface (BlueBorne / KNOB / Bluetana
+    /// pairing tricks). macOS is discoverable while the Bluetooth pane is open; leaving Bluetooth
+    /// on at all with unknown devices near a compromised machine is a proximity risk.
+    private func checkBluetoothDiscoverability(findings: inout [Finding], errors: inout [String]) {
+        // ControllerPowerState: 1 = on, 0 = off. DiscoverableState: 1 = discoverable, 0 = hidden.
+        let discoverable = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "DiscoverableState"
+        ], timeout: 5)
+        if discoverable.success {
+            let v = discoverable.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if v == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Bluetooth is set to discoverable",
+                    detail: "This Mac advertises itself for Bluetooth pairing — increases proximity attack surface",
+                    path: nil,
+                    remediation: "Close the Bluetooth settings pane, or turn Bluetooth off when not in use"
                 ))
             }
         }

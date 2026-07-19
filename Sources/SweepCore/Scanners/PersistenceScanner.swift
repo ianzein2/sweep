@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking IDE task-runner auto-installers")
+        scanEditorTaskRunners(findings: &findings, errors: &errors)
+
+        progress?.update("checking zshenv abuse")
+        scanZshEnvAbuse(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -131,8 +137,98 @@ public final class PersistenceScanner: Scanner {
             return
         }
 
-        // Skip real Apple plists
+        // Check for fake vendor bundle IDs — malware that impersonates Google Update,
+        // Adobe Creative Cloud, Microsoft OneDrive, etc. as a persistence disguise.
+        if SpywareSignature.isFakeVendorBundleId(label) {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Impersonated vendor updater LaunchAgent",
+                detail: "Label: \(label) — real vendor updaters do not install into this directory",
+                path: path,
+                remediation: "Remove this plist: sudo rm \"\(path)\" — verify the vendor's updater from its official installer"
+            ))
+            return
+        }
+
+        // Vendor-label impersonation: the LaunchAgent uses a legitimate vendor label
+        // (e.g. com.google.keystone.agent) but the executable it points to lives outside every
+        // path that vendor uses. Real Chrome Keystone runs from ~/Library/Google/... — SHub Reaper's
+        // clone runs from ~/Library/GoogleUpdate.app.
+        if let execPath = executablePath,
+           SpywareSignature.isImpersonatedVendorLaunchAgent(label: label, executablePath: execPath) {
+            findings.append(Finding(
+                severity: .high,
+                category: .persistence,
+                title: "Vendor LaunchAgent points to unexpected executable",
+                detail: "Label: \(label), Executable: \(execPath) — this label normally runs from the vendor's own directory",
+                path: path,
+                remediation: "This is the SHub Reaper / vendor-impersonation pattern. Remove the plist and inspect \(execPath) — do NOT run the executable."
+            ))
+            return
+        }
+
+        // AppleScript-based persistence: recent AMOS/Reaper variants embed a Base64-encoded
+        // AppleScript payload as the LaunchAgent's ProgramArguments (e.g. /usr/bin/osascript -e
+        // "do shell script (do shell script "echo <base64> | base64 -d")"). Legit LaunchAgents
+        // essentially never invoke osascript with an inline -e payload from the user's plists.
+        // We deliberately keep this check ABOVE the "skip com.apple.*" gate — a com.apple.* label
+        // that runs inline osascript is the fake-Apple-updater pattern used by CrashStealer and AMOS.
+        if let args = plist["ProgramArguments"] as? [String] {
+            let joined = args.joined(separator: " ")
+            let lower = joined.lowercased()
+            let usesOsascript = lower.contains("osascript") ||
+                                (args.first?.hasSuffix("/osascript") ?? false)
+            let inlineScript = args.contains("-e")
+            let hasBase64Decode = lower.contains("base64 -d") ||
+                                  lower.contains("base64 --decode") ||
+                                  lower.contains("base64_decode")
+            let hasCurlPipe = (lower.contains("curl ") || lower.contains("wget ")) &&
+                              (lower.contains(" | sh") || lower.contains(" | bash") ||
+                               lower.contains(" | osascript") || lower.contains(" | zsh"))
+
+            if usesOsascript && (inlineScript || hasBase64Decode) {
+                findings.append(Finding(
+                    severity: .high,
+                    category: .persistence,
+                    title: "LaunchAgent runs inline AppleScript at load",
+                    detail: "Label: \(label), Program: \(String(joined.prefix(140)))",
+                    path: path,
+                    remediation: "Inline osascript payloads are a hallmark of 2025 AMOS/Reaper-family stealers. Inspect and remove: sudo rm \"\(path)\""
+                ))
+                return
+            }
+            if hasCurlPipe {
+                findings.append(Finding(
+                    severity: .high,
+                    category: .persistence,
+                    title: "LaunchAgent downloads and executes remote code",
+                    detail: "Label: \(label), Program: \(String(joined.prefix(140)))",
+                    path: path,
+                    remediation: "Curl-piped-to-shell in a LaunchAgent is a classic dropper pattern. Remove: sudo rm \"\(path)\""
+                ))
+                return
+            }
+        }
+
+        // Skip real Apple plists BEFORE the aggressive-cadence check — Apple's own agents
+        // legitimately re-fire on short intervals (e.g. distributed notifications) and would
+        // otherwise generate noise.
         if label.hasPrefix("com.apple.") { return }
+
+        // Aggressive re-execute cadence: user LaunchAgents with StartInterval <= 300 seconds are
+        // used by stealers (e.g. SHub Reaper fires every 60s) to keep sessions alive and beacon.
+        // Normal user LaunchAgents rarely re-fire this often.
+        if let interval = plist["StartInterval"] as? Int, interval > 0, interval <= 300 {
+            findings.append(Finding(
+                severity: .medium,
+                category: .persistence,
+                title: "LaunchAgent re-runs on a short interval",
+                detail: "Label: \(label), StartInterval: \(interval)s — aggressive polling loops are unusual for legitimate user agents",
+                path: path,
+                remediation: "Verify the plist is legitimate — SHub Reaper uses a 60s interval to beacon out"
+            ))
+        }
 
         guard let execPath = executablePath else { return }
 
@@ -675,6 +771,123 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - IDE Task Runner Auto-Installers (Contagious Interview / BeaverTail vector)
+
+    /// The DPRK "Contagious Interview" campaign compromises developers by planting a
+    /// `.vscode/tasks.json` in a fake take-home coding project. VSCode auto-runs the task on
+    /// folder open, fetching and executing BeaverTail. We flag any `runOn: folderOpen` task,
+    /// or any tasks.json whose command downloads and executes code.
+    private func scanEditorTaskRunners(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        let home = ShellRunner.realUserHome
+
+        // Common places a developer stores project checkouts. We look one level deep only —
+        // deep-scanning the entire drive would be prohibitively slow, and BeaverTail's real-world
+        // vector is the top-level project the developer just opened.
+        let projectRoots = [
+            "\(home)/Documents", "\(home)/Downloads", "\(home)/Desktop",
+            "\(home)/Projects", "\(home)/Code", "\(home)/src", "\(home)/dev",
+        ]
+
+        for root in projectRoots {
+            guard let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            for entry in entries.prefix(200) {  // cap to keep scan bounded
+                let projectDir = "\(root)/\(entry)"
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: projectDir, isDirectory: &isDir), isDir.boolValue else { continue }
+
+                let tasksPath = "\(projectDir)/.vscode/tasks.json"
+                guard fm.fileExists(atPath: tasksPath),
+                      let data = fm.contents(atPath: tasksPath),
+                      let text = String(data: data, encoding: .utf8) else { continue }
+
+                let lower = text.lowercased()
+                let runsOnFolderOpen = lower.contains("\"runon\"") &&
+                                       lower.contains("\"folderopen\"")
+                let hasCurlPipe = (lower.contains("curl") || lower.contains("wget")) &&
+                                  (lower.contains("| sh") || lower.contains("| bash") ||
+                                   lower.contains("| zsh") || lower.contains("| node") ||
+                                   lower.contains("| python"))
+                let hasChildProcess = lower.contains("eval(") || lower.contains("child_process")
+
+                if runsOnFolderOpen && (hasCurlPipe || hasChildProcess) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "VSCode task auto-runs remote code on folder open",
+                        detail: "Project: \(entry) — tasks.json auto-executes on folder open and pulls remote code (Contagious Interview / BeaverTail pattern)",
+                        path: tasksPath,
+                        remediation: "Delete the .vscode/tasks.json in this project and inspect the repository. Do not open the folder in VSCode/Cursor again until you have vetted its contents."
+                    ))
+                } else if runsOnFolderOpen {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "VSCode task set to auto-run on folder open",
+                        detail: "Project: \(entry) — a task fires automatically the moment this folder is opened in VSCode",
+                        path: tasksPath,
+                        remediation: "Verify the task is expected: cat \"\(tasksPath)\""
+                    ))
+                } else if hasCurlPipe {
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "VSCode task downloads and executes remote code",
+                        detail: "Project: \(entry) — task command pipes network fetch to a shell interpreter",
+                        path: tasksPath,
+                        remediation: "Inspect: cat \"\(tasksPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - zshenv abuse (BlueNoroff HiddenRisk)
+
+    /// `~/.zshenv` is sourced by every non-interactive Zsh invocation — including cron and
+    /// launchd's env. BlueNoroff's HiddenRisk campaign specifically writes to zshenv because
+    /// most users never open it, making it a quiet persistence channel that survives even when
+    /// the user cleans .zshrc. We flag any non-empty zshenv (it ships empty by default) and
+    /// escalate on shell-download-and-execute patterns.
+    private func scanZshEnvAbuse(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let zshenvPaths = ["\(home)/.zshenv", "/etc/zshenv"]
+
+        for zshenv in zshenvPaths {
+            guard let content = try? String(contentsOfFile: zshenv, encoding: .utf8) else { continue }
+            let trimmed = content
+                .split(separator: "\n")
+                .filter { line in
+                    let s = line.trimmingCharacters(in: .whitespaces)
+                    return !s.isEmpty && !s.hasPrefix("#")
+                }
+            guard !trimmed.isEmpty else { continue }
+
+            let text = content.lowercased()
+            let looksLikeDropper = (text.contains("curl") || text.contains("wget") ||
+                                    text.contains("nscurl") || text.contains("osascript")) &&
+                                   (text.contains("| sh") || text.contains("| bash") ||
+                                    text.contains("| zsh") || text.contains("eval "))
+            let hasBase64 = text.contains("base64 -d") || text.contains("base64 --decode")
+
+            if looksLikeDropper || hasBase64 {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "\(URL(fileURLWithPath: zshenv).lastPathComponent) contains dropper-style command",
+                    detail: "\(zshenv) is sourced by every zsh invocation. Detected pattern: download/eval or base64 decode.",
+                    path: zshenv,
+                    remediation: "Inspect and clean: open \(zshenv). BlueNoroff HiddenRisk plants persistence here because it's rarely reviewed."
+                ))
+            } else {
+                findings.append(Finding(
+                    severity: .low, category: .persistence,
+                    title: "\(URL(fileURLWithPath: zshenv).lastPathComponent) is not empty",
+                    detail: "\(trimmed.count) non-comment line(s) in a file most users never edit — verify each line is yours.",
+                    path: zshenv,
+                    remediation: "Review: cat \(zshenv)"
+                ))
+            }
         }
     }
 
