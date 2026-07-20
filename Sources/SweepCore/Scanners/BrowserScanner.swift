@@ -11,10 +11,23 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // DPRK "Contagious Interview" / BeaverTail lures — reported by Palo Alto Unit 42,
+        // ReversingLabs, and Snyk through 2024-2025. Delivered inside coding-test repos as
+        // trojanized npm packages, often loaded by malicious VSCode/Cursor extensions.
+        "beavertail", "invisibleferret", "n2-agent",
+        "colors-fun-cli", "js-cookie-cli", "chalk-hex", "chalk-npm-helper",
+        "eslint-config-airbnb-security", "solidity-lint-fix",
+        "web3-testing-plus", "solana-scaffold-tools",
+        // Solidity / crypto-focused fake extensions from late-2025 Cursor marketplace campaign
+        "ethereum-security-linter", "hardhat-helper-plus", "foundry-vscode-tools",
+        // Fake AI-assistant impersonators seen mid-2025 (typosquats of legitimate names)
+        "claude-code-helper", "cursor-ai-tools-plus", "copilot-plus-helper",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Additions mirroring 2025-era malicious extension naming conventions
+        "clipper", "seedphrase", "cookiegrab", "tokenstealer",
     ]
 
     // Extensions that are well-known and safe
@@ -63,6 +76,18 @@ public final class BrowserScanner: Scanner {
         //    malicious marketplace extensions that steal cookies, keychains, and wallets.
         progress?.update("scanning code editor extensions")
         scanEditorExtensions(findings: &findings, errors: &errors)
+
+        // 5. Native messaging hosts — Chrome/Chromium/Firefox extensions can invoke arbitrary
+        //    native binaries through JSON manifests registered in NativeMessagingHosts directories.
+        //    A rogue manifest is a stealth persistence + exfil channel that leaves no LaunchAgent trace.
+        progress?.update("scanning browser native messaging hosts")
+        scanNativeMessagingHosts(findings: &findings, errors: &errors)
+
+        // 6. Model-Context-Protocol servers — Cursor/Claude Desktop auto-start MCP server
+        //    binaries on launch, effectively giving an editor extension a stable command channel
+        //    into the user's environment. Malicious mcp.json entries are a 2025-era persistence vector.
+        progress?.update("scanning MCP server configurations")
+        scanMCPConfigurations(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -382,6 +407,249 @@ public final class BrowserScanner: Scanner {
     private struct EditorScriptScan {
         let hasRemoteExec: Bool
         let hasShellExec: Bool
+    }
+
+    // MARK: - Native Messaging Hosts (Chrome / Chromium / Firefox)
+
+    /// Directories a browser will read a NativeMessagingHost manifest from. Each manifest is a
+    /// JSON file whose `path` key points at an executable the browser will launch on demand from
+    /// an extension. A rogue entry survives without any LaunchAgent trace.
+    private var nativeMessagingHostDirs: [(browser: String, path: String)] {
+        let home = ShellRunner.realUserHome
+        return [
+            ("Chrome",      "\(home)/Library/Application Support/Google/Chrome/NativeMessagingHosts"),
+            ("Chrome (system)", "/Library/Google/Chrome/NativeMessagingHosts"),
+            ("Chromium",    "\(home)/Library/Application Support/Chromium/NativeMessagingHosts"),
+            ("Brave",       "\(home)/Library/Application Support/BraveSoftware/Brave-Browser/NativeMessagingHosts"),
+            ("Edge",        "\(home)/Library/Application Support/Microsoft Edge/NativeMessagingHosts"),
+            ("Edge (system)", "/Library/Microsoft/Edge/NativeMessagingHosts"),
+            ("Arc",         "\(home)/Library/Application Support/Arc/User Data/NativeMessagingHosts"),
+            ("Firefox",     "\(home)/Library/Application Support/Mozilla/NativeMessagingHosts"),
+            ("Firefox (system)", "/Library/Application Support/Mozilla/NativeMessagingHosts"),
+        ]
+    }
+
+    /// Common, well-known native messaging hosts published by trusted vendors.
+    /// A manifest matching one of these names is left alone.
+    private let trustedNativeHostNames: Set<String> = [
+        "com.1password.1password",
+        "com.1password.browser_support",
+        "com.google.chrome.browsercloudmanagement",
+        "com.google.chrome.messaging.autofill_private_api",
+        "com.google.chrome_remote_desktop",
+        "com.dashlane.dashlanephonefinderapp",
+        "com.microsoft.browsercore",
+        "com.microsoft.autoupdate.helper",
+        "com.bitwarden.desktop",
+        "com.grammarly.desktopintegrations",
+        "org.keepassxc.keepassxc_browser",
+        "org.dropbox.crx",
+        "com.plasmohq.mv3.notify",
+    ]
+
+    private func scanNativeMessagingHosts(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        for (browser, dir) in nativeMessagingHostDirs {
+            guard fm.fileExists(atPath: dir),
+                  let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+            for entry in entries where entry.hasSuffix(".json") {
+                let manifestPath = "\(dir)/\(entry)"
+                guard let data = fm.contents(atPath: manifestPath),
+                      let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+                let hostName = (manifest["name"] as? String)
+                    ?? String(entry.dropLast(".json".count))
+                let execPath = manifest["path"] as? String
+                let allowedExts = (manifest["allowed_extensions"] as? [String]) ?? []
+                let allowedOrigins = (manifest["allowed_origins"] as? [String]) ?? []
+
+                // A trusted vendor's host is fine — just skip.
+                if trustedNativeHostNames.contains(hostName) { continue }
+
+                // Flag: the executable path is missing or unresolvable.
+                guard let exec = execPath, !exec.isEmpty else {
+                    findings.append(Finding(
+                        severity: .low, category: .suspiciousFile,
+                        title: "\(browser) native messaging host with no executable path",
+                        detail: "Host: \(hostName)",
+                        path: manifestPath,
+                        remediation: "Inspect \(manifestPath); orphaned host manifests are safe to remove"
+                    ))
+                    continue
+                }
+
+                // Absolute-path check + hidden-path check + tmp check
+                let inTemp = exec.hasPrefix("/tmp/") || exec.hasPrefix("/private/tmp/") || exec.hasPrefix("/var/tmp/")
+                let isHidden = exec.split(separator: "/").contains { $0.hasPrefix(".") }
+                let execExists = fm.fileExists(atPath: exec)
+
+                let trustedPrefixes = [
+                    "/System/", "/usr/", "/Applications/",
+                    "/Library/Application Support/",
+                    "/opt/homebrew/", "/usr/local/",
+                    "\(ShellRunner.realUserHome)/Applications/",
+                    "\(ShellRunner.realUserHome)/Library/Application Support/",
+                ]
+                let isTrustedPath = trustedPrefixes.contains { exec.hasPrefix($0) }
+
+                if inTemp || isHidden {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(browser) native messaging host points to hidden or temp path",
+                        detail: "Host \(hostName) → \(exec) — extensions can invoke this binary at will",
+                        path: manifestPath,
+                        remediation: "Remove: rm \"\(manifestPath)\" (and inspect the referenced binary)"
+                    ))
+                    continue
+                }
+
+                if execExists && !isTrustedPath {
+                    findings.append(Finding(
+                        severity: .medium, category: .suspiciousFile,
+                        title: "\(browser) native messaging host in unusual location",
+                        detail: "Host \(hostName) → \(exec)" +
+                            (allowedExts.isEmpty && allowedOrigins.isEmpty
+                                ? " (no allowed_extensions restriction — any extension may invoke it)"
+                                : ""),
+                        path: manifestPath,
+                        remediation: "Verify \(exec) is legitimate; remove the manifest if unexpected: rm \"\(manifestPath)\""
+                    ))
+                } else if !execExists {
+                    findings.append(Finding(
+                        severity: .low, category: .suspiciousFile,
+                        title: "\(browser) native messaging host references missing binary",
+                        detail: "Host \(hostName) → \(exec) (does not exist)",
+                        path: manifestPath,
+                        remediation: "Orphaned host manifest — safe to remove: rm \"\(manifestPath)\""
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - MCP server configurations (Claude Desktop, Cursor, Windsurf, etc.)
+
+    /// MCP (Model Context Protocol) config files. Each entry launches a command with args on
+    /// editor/app startup — effectively a per-app LaunchAgent that a malicious extension or a
+    /// social-engineered config commit can weaponize.
+    private var mcpConfigLocations: [(app: String, path: String)] {
+        let home = ShellRunner.realUserHome
+        return [
+            ("Claude Desktop", "\(home)/Library/Application Support/Claude/claude_desktop_config.json"),
+            ("Cursor",         "\(home)/.cursor/mcp.json"),
+            ("Cursor (workspace defaults)", "\(home)/Library/Application Support/Cursor/User/mcp.json"),
+            ("Windsurf",       "\(home)/.codeium/windsurf/mcp_config.json"),
+            ("VS Code (Continue)", "\(home)/.continue/config.json"),
+            ("Zed",            "\(home)/.config/zed/settings.json"),
+        ]
+    }
+
+    private func scanMCPConfigurations(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        for (app, path) in mcpConfigLocations {
+            guard fm.fileExists(atPath: path),
+                  let data = fm.contents(atPath: path),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+
+            // Normalize: some clients store MCP entries under "mcpServers", others under "mcp.servers".
+            var servers: [String: Any] = (root["mcpServers"] as? [String: Any]) ?? [:]
+            if servers.isEmpty, let mcp = root["mcp"] as? [String: Any],
+               let s = mcp["servers"] as? [String: Any] {
+                servers = s
+            }
+            if servers.isEmpty { continue }
+
+            for (name, rawEntry) in servers {
+                guard let entry = rawEntry as? [String: Any] else { continue }
+                let command = entry["command"] as? String ?? ""
+                let args = (entry["args"] as? [String])?.joined(separator: " ") ?? ""
+                let env = entry["env"] as? [String: String] ?? [:]
+                let url = entry["url"] as? String
+
+                // A remote MCP server URL is worth noting but not by itself dangerous.
+                if let remote = url, !remote.isEmpty {
+                    let isPlainHTTP = remote.lowercased().hasPrefix("http://") &&
+                                      !remote.contains("127.0.0.1") && !remote.contains("localhost")
+                    if isPlainHTTP {
+                        findings.append(Finding(
+                            severity: .medium, category: .networkActivity,
+                            title: "\(app) MCP server \"\(name)\" is loaded over plain HTTP",
+                            detail: "URL: \(remote) — traffic is trivially interceptable",
+                            path: path,
+                            remediation: "Switch to HTTPS or remove this MCP entry from \(path)"
+                        ))
+                    }
+                    continue
+                }
+
+                // Local command entries: the real risk. Flag runners that execute remote code on start.
+                let combined = "\(command) \(args)".lowercased()
+                let executesRemoteCode =
+                    combined.contains("curl ") || combined.contains("wget ") ||
+                    combined.contains("| sh") || combined.contains("| bash") ||
+                    combined.contains("|sh") || combined.contains("|bash") ||
+                    combined.contains("iex ") || combined.contains("$(curl") ||
+                    combined.contains("eval ")
+
+                if executesRemoteCode {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(app) MCP server \"\(name)\" runs remote code on launch",
+                        detail: "Command: \(command) \(args)".trimmingCharacters(in: .whitespaces),
+                        path: path,
+                        remediation: "Remove this MCP entry from \(path); it fetches and executes remote code every time the app starts"
+                    ))
+                    continue
+                }
+
+                // npx/uvx entries pinned to "@latest" (or unversioned bare package names) will
+                // silently pick up the newest upstream release on every launch — an upstream
+                // package hijack runs immediately.
+                let npxLike = command == "npx" || command == "uvx" || command == "pnpx"
+                if npxLike && args.contains("@latest") {
+                    findings.append(Finding(
+                        severity: .low, category: .suspiciousFile,
+                        title: "\(app) MCP server \"\(name)\" pinned to @latest",
+                        detail: "Args: \(args) — every launch pulls whatever is on the registry",
+                        path: path,
+                        remediation: "Pin an explicit version (e.g. @1.2.3) in \(path)"
+                    ))
+                }
+
+                // Executable in /tmp, /var/tmp, or a hidden path is a red flag.
+                let inTemp = command.hasPrefix("/tmp/") || command.hasPrefix("/private/tmp/") || command.hasPrefix("/var/tmp/")
+                let isHidden = command.split(separator: "/").contains { $0.hasPrefix(".") && $0 != ".cargo" && $0 != ".rustup" && $0 != ".local" }
+                if inTemp || isHidden {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "\(app) MCP server \"\(name)\" launches a binary from a hidden/temp path",
+                        detail: "Command: \(command) \(args)".trimmingCharacters(in: .whitespaces),
+                        path: path,
+                        remediation: "Remove this MCP entry from \(path) and inspect the referenced binary"
+                    ))
+                }
+
+                // Environment blocks that carry secrets (API keys, tokens) are common but worth surfacing
+                // once — a compromised MCP server would exfiltrate whatever is passed in env.
+                let secretishKeys = env.keys.filter { key in
+                    let k = key.uppercased()
+                    return k.contains("KEY") || k.contains("TOKEN") || k.contains("SECRET") ||
+                           k.contains("PASSWORD") || k.contains("APIKEY")
+                }
+                if !secretishKeys.isEmpty && !executesRemoteCode {
+                    findings.append(Finding(
+                        severity: .low, category: .suspiciousFile,
+                        title: "\(app) MCP server \"\(name)\" is handed secret-like env vars",
+                        detail: "env keys: \(secretishKeys.joined(separator: ", ")) — a compromised server sees these",
+                        path: path,
+                        remediation: "Confirm you trust the MCP server binary and its supply chain"
+                    ))
+                }
+            }
+        }
     }
 
     private func scanExtensionScripts(extPath: String) -> EditorScriptScan {

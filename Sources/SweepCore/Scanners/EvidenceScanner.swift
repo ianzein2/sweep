@@ -439,19 +439,39 @@ public final class EvidenceScanner: Scanner {
         ("Coinbase Wallet", "hnfanknocfeofbddgcijnmhnfnkdnaad"),
         ("Ronin",    "fnjhmkhhmkbjkkabndcnnogagogbneec"),
         ("TronLink", "ibnejdfjmmkpcnlpebklmnkoeoihofec"),
+        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // Added 2025 — top targets in AMOS/Banshee/Odyssey/AppleProcessHub families
+        ("Rabby",    "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("Enkrypt",  "kkpllkodjeloidieedojogacfhpaihoh"),
+        ("Binance",  "fhbohimaelbohpjbbldcngcnapndodjp"),
+        ("Solflare", "bhhhlbepdkbapadjdgnlmlakkechnbcg"),
+        ("XDEFI",    "hmeobnfnfcmdkdcmlblgagmfpfboieaf"),
+        ("Argent X", "dlcobpjiigpikoobohmabehhmhfoodbb"),
+        ("Braavos",  "jnlgamecbpmbajjfhmmmlhejkemejdma"),
+        ("Kaikas",   "jblndlipeogpafnldhgmapagcccfchpi"),
+        // Desktop / hardware wallet directories
         ("Exodus",   "Exodus"),
         ("Electrum", ".electrum"),
         ("Atomic Wallet", "Atomic"),
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
-        ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        ("Bitcoin Core", "Bitcoin"),
+        ("Wasabi Wallet", "WalletWasabi"),
+        ("Sparrow Wallet", "Sparrow"),
+        ("Coinomi", ".coinomi"),
+        ("MyMonero", "MyMonero"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
     private let browserCredStoreNames: Set<String> = [
         "Login Data", "Web Data", "Cookies", "Local State",
-        "key4.db", "logins.json", "cookies.sqlite",  // Firefox
-        "Keychains", "login.keychain-db",            // macOS keychain copies
+        "Login Data For Account", "Extension Cookies",                 // Chromium 130+ splits
+        "Network Persistent State",                                    // Chromium — session tokens
+        "key4.db", "logins.json", "cookies.sqlite", "signons.sqlite", // Firefox / Zen / LibreWolf
+        "formhistory.sqlite",                                          // Firefox autofill (targeted 2025)
+        "Keychains", "login.keychain-db",                              // macOS keychain copies
     ]
 
     private func scanForCredentialTheft(home: String, findings: inout [Finding], errors: inout [String]) {
@@ -468,8 +488,15 @@ public final class EvidenceScanner: Scanner {
             "\(home)/Library/Application Support/Microsoft Edge",
             "\(home)/Library/Application Support/Chromium",
             "\(home)/Library/Application Support/Arc",
+            "\(home)/Library/Application Support/Vivaldi",
             "\(home)/Library/Application Support/Firefox",
+            "\(home)/Library/Application Support/zen",
+            "\(home)/Library/Application Support/LibreWolf",
+            "\(home)/Library/Application Support/Waterfox",
             "\(home)/Library/Application Support/com.operasoftware.Opera",
+            "\(home)/Library/Application Support/com.operasoftware.OperaGX",
+            "\(home)/Library/Application Support/Sidekick",
+            "\(home)/Library/Application Support/Orion",
             "\(home)/Library/Keychains",
             "/Library/Keychains",
         ]
