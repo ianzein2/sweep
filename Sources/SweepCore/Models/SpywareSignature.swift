@@ -434,6 +434,191 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2024-2026 threat landscape — DPRK-linked campaigns targeting developers
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["BeaverTail", "beavertail", "npm-helper", "node_installer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.n2",
+                "~/.n2",
+                "~/.npl",
+                "/private/tmp/.p2",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie",
+            processNames: ["OtterCookie", "ottercookie", "npm_agent", "package_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.otter",
+                "~/Library/Application Support/.OtterCookie",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            processNames: ["NimDoor", "nimdoor", "GoogIe", "Zoom_Update", "ZoomSDKService"],
+            bundleIdentifiers: ["us.zoom.sdk.helper"],
+            filePaths: [
+                "/private/tmp/.CoreKitAgent",
+                "~/Library/LaunchAgents/com.google.googledrive.helper.plist",
+                "~/Library/Application Support/.nimdoor",
+            ],
+            launchAgentLabels: ["com.google.googledrive.helper", "us.zoom.sdk.helper"]
+        ),
+        SpywareSignature(
+            name: "FERRETUI / FlexibleFerret",
+            processNames: ["FlexibleFerret", "InstallerAlert", "ChromeUpdateAlert"],
+            bundleIdentifiers: ["com.google.chrome.updater", "com.apple.installeralert"],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/Application Support/.Ferret",
+                "/private/tmp/InstallerAlert",
+                "~/.zshenv_darwin",
+            ],
+            launchAgentLabels: ["com.apple.installeralert", "com.google.chrome.updater"]
+        ),
+        SpywareSignature(
+            name: "TodoSwift",
+            processNames: ["TodoSwift", "todoswift", "TodoTasks", "toolboxupdater"],
+            bundleIdentifiers: ["com.toolbox.updater", "com.todoswift.app"],
+            filePaths: [
+                "/private/tmp/.todoswift",
+                "~/Library/Application Support/.TodoSwift",
+            ],
+            launchAgentLabels: ["com.toolbox.updater"]
+        ),
+        SpywareSignature(
+            name: "RustBucket (JumpCloud)",
+            processNames: ["RustBucket", "InternalPDF", "UnityUpdater", "SafariHelper", "OpenSourceDoc"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.rustbucket",
+                "~/Library/Metadata/.system_update",
+                "~/Library/LaunchAgents/com.apple.systempreferences.helper.plist",
+            ],
+            launchAgentLabels: ["com.apple.systempreferences.helper"]
+        ),
+        // 2024 Rust-based backdoors (BlueNoroff)
+        SpywareSignature(
+            name: "RustDoor / ThiefBucket",
+            processNames: ["RustDoor", "rustdoor", "VisualStudioUpdater", "zshrc_updater", "VisualStudioCode-helper"],
+            bundleIdentifiers: ["com.microsoft.vscode.helper"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.rustbin",
+                "~/.rustdoor",
+                "~/Public/.iCloud",
+            ],
+            launchAgentLabels: ["com.apple.systemupdate", "com.microsoft.vscode.helper"]
+        ),
+        // 2024 hidden-attribute abusing malware
+        SpywareSignature(
+            name: "RustyAttr",
+            processNames: ["RustyAttr", "rustyattr"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/.rustyattr",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2024 China-linked RAT (masquerades as OpenVPN Connect — process/name match would
+        // false-positive on legitimate OpenVPN; only file/label indicators are safe to match).
+        SpywareSignature(
+            name: "HZ RAT",
+            processNames: ["hzrat", "hz_rat"],
+            bundleIdentifiers: ["com.openvpn.hzrat"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.client.plist.helper"]
+        ),
+        // 2024 China-linked, pirated app bundling. Uses fake libcrypto/iTerm2 names — those
+        // collide with legit shared libraries, so we only match specific staged paths.
+        SpywareSignature(
+            name: "ZuRu (2024)",
+            processNames: ["ZuRu", "zuru", "crontab_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.fseventsd",
+                "/Users/Shared/.zuru",
+            ],
+            launchAgentLabels: []
+        ),
+        // Feb 2025 fake browser-update infostealer targeting macOS
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "SafariUpdate", "ChromeUpdater.app", "MacUpdater"],
+            bundleIdentifiers: ["com.apple.safariupdate", "com.macupdater.helper"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.FrigidStealer",
+                "~/Downloads/MacBrowserUpdate.dmg",
+                "~/Downloads/UpdateAgent.dmg",
+            ],
+            launchAgentLabels: ["com.apple.safariupdate"]
+        ),
+        // 2025 AMOS-derived stealer
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey", "odyssey_stealer", "AppleMediaService"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent", "com.applemedia.service"]
+        ),
+        // 2025 Vietnamese-linked infostealer
+        SpywareSignature(
+            name: "PSMBotnet Stealer",
+            processNames: ["PSMBot", "psmbot", "psm_agent"],
+            bundleIdentifiers: ["com.psm.agent"],
+            filePaths: [
+                "/private/tmp/.psm",
+                "~/Library/Application Support/.PSMBot",
+            ],
+            launchAgentLabels: ["com.psm.agent"]
+        ),
+        // 2025 AMOS-family newer variant (delivered via fake ChatGPT/AI installers).
+        // Deliberately excludes bare "Setup" — too many legit installers use that name.
+        SpywareSignature(
+            name: "AMOS 'ClearFake' variant",
+            processNames: ["ChatGPT_Setup", "ChatGPT-Installer", "ClearFake", "GPT4o_Installer"],
+            bundleIdentifiers: ["com.openai.installer", "com.chatgpt.setup"],
+            filePaths: [
+                "/private/tmp/.clearfake",
+                "~/Library/Application Support/.ChatGPT_Installer",
+                "~/Downloads/ChatGPT_MacOS.dmg",
+                "~/Downloads/AnyDesk_Installer.dmg",
+            ],
+            launchAgentLabels: ["com.openai.installer"]
+        ),
+        // Recent variants of Bookitty / SentinelSneak (pyPI stealer targeting devs)
+        SpywareSignature(
+            name: "SentinelSneak (pyPI)",
+            processNames: ["sentinelsneak", "sentinel_sdk", "pytoileur"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.sentinel_sdk",
+                "~/.local/share/.sentinel_sdk",
+            ],
+            launchAgentLabels: []
+        ),
+        // 2025 China-linked APT (SwiftBelt enumeration + backdoor combo)
+        SpywareSignature(
+            name: "SwiftBelt (recon)",
+            processNames: ["SwiftBelt", "swiftbelt", "SwiftBelt-CLI"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.swiftbelt",
+                "/private/var/tmp/.swiftbelt",
+            ],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +635,16 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // 2024-2026 observed impersonations
+        "com.apple.systempreferences.helper",   // RustBucket
+        "com.apple.installeralert",             // FERRETUI
+        "com.apple.safariupdate",               // FrigidStealer
+        "com.apple.installhelper",              // Generic dropper pattern
+        "com.apple.xpc.launchd.agent",          // Fake XPC service
+        "com.apple.spotlightd",                 // Real: mdworker
+        "com.apple.timemachined",               // Real: backupd
+        "com.apple.diskutild",                  // Not a real Apple daemon
+        "com.apple.systemupdate",               // RustDoor label
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.
@@ -474,6 +669,30 @@ public struct SpywareSignature {
         "AppleDockD",            // Real: Dock (not a daemon)
         "ApplePushService",      // Real: apsd
         "coreaudio_helper",      // Real: coreaudiod
+        // 2024-2026 masqueraders observed in the wild
+        "ZoomSDKService",        // NimDoor — no such Zoom service exists
+        "Zoom_Update",           // NimDoor
+        "GoogIe",                // NimDoor — "l" replaced with capital "I"
+        "ChromeUpdate",          // FERRETUI — Chrome does not ship a bare "ChromeUpdate" binary
+        "ChromeUpdateAlert",     // FERRETUI
+        "InstallerAlert",        // FERRETUI
+        "SafariUpdate",          // FrigidStealer
+        "SafariHelper",          // RustBucket variants
+        "InternalPDF",           // RustBucket
+        "OpenSourceDoc",         // RustBucket
+        "MacUpdater",            // FrigidStealer / MacUpdater impersonation
+        "ChatGPT_Setup",         // AMOS ClearFake
+        "AnyDesk_Installer",     // AMOS/CleanShot lures
+        "AppleMediaService",     // Odyssey Stealer
+        "ChromeUpdater.app",     // FrigidStealer (bogus .app suffix)
+        "Preview.app",           // RustyAttr — real: Preview (no .app suffix in ps)
+        "systempreferences.helper", // RustBucket
+        "npm-helper",            // BeaverTail — no such standard binary
+        "node_installer",        // BeaverTail
+        "VisualStudioUpdater",   // RustDoor
+        "VisualStudioCode-helper", // RustDoor
+        "TouchIDHelper",         // Impersonating pam_tid
+        "Applesetupdone",        // Real: Apple Setup Done (not an ongoing daemon)
     ]
 
     /// Checks if a bundle ID looks like a fake Apple ID

@@ -78,6 +78,12 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking QuickLook / Spotlight / Screen Saver plugins")
+        scanPluginBundlePersistence(findings: &findings, errors: &errors)
+
+        progress?.update("checking at(1) jobs")
+        scanAtJobs(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -676,6 +682,105 @@ public final class PersistenceScanner: Scanner {
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
         }
+    }
+
+    // MARK: - QuickLook / Spotlight / Screen Saver / Xcode plugin bundles
+    //
+    // These directories are user-writable and macOS loads bundles from them automatically:
+    //   • .qlgenerator plugins run when Finder previews a file
+    //   • .mdimporter plugins run inside mdworker whenever new content is indexed
+    //   • .saver bundles run when the screensaver activates (unattended machine)
+    //   • .xpc / .osax handlers can be loaded by scripting hosts
+    // Attackers use these as passive-persistence channels that avoid LaunchAgents entirely.
+
+    private func scanPluginBundlePersistence(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let vectors: [(dir: String, ext: String, mechanism: String, trigger: String)] = [
+            ("\(home)/Library/QuickLook", "qlgenerator", "QuickLook plugin",
+             "runs whenever Finder previews a matching file type"),
+            ("/Library/QuickLook", "qlgenerator", "QuickLook plugin (system)",
+             "runs whenever Finder previews a matching file type"),
+            ("\(home)/Library/Spotlight", "mdimporter", "Spotlight importer",
+             "runs inside mdworker whenever new content is indexed"),
+            ("/Library/Spotlight", "mdimporter", "Spotlight importer (system)",
+             "runs inside mdworker whenever new content is indexed"),
+            ("\(home)/Library/Screen Savers", "saver", "Screen Saver bundle",
+             "runs when the screensaver activates on an unattended Mac"),
+            ("/Library/Screen Savers", "saver", "Screen Saver bundle (system)",
+             "runs when the screensaver activates on an unattended Mac"),
+        ]
+
+        let fm = FileManager.default
+        for vector in vectors {
+            guard let entries = try? fm.contentsOfDirectory(atPath: vector.dir) else { continue }
+            for entry in entries where !entry.hasPrefix(".") && entry.hasSuffix(".\(vector.ext)") {
+                let path = "\(vector.dir)/\(entry)"
+
+                // Skip Apple-provided bundles under /Library/ paths (they live under /System/Library
+                // normally, but a few system-level items are Apple-shipped stubs).
+                if path.hasPrefix("/System/") { continue }
+
+                // Signature check on the bundle. Legit third-party bundles ship signed and notarized.
+                let executablePath = findExecutableInBundle(path)
+                let isSigned = executablePath.map { checkIsSigned(path: $0) } ?? checkIsSigned(path: path)
+
+                findings.append(Finding(
+                    severity: isSigned ? .low : .high,
+                    category: .persistence,
+                    title: isSigned
+                        ? "\(vector.mechanism) installed (signed)"
+                        : "Unsigned \(vector.mechanism) installed",
+                    detail: "\(entry) — \(vector.trigger). Third-party \(vector.mechanism)s auto-load; unsigned bundles are a known persistence channel.",
+                    path: path,
+                    remediation: isSigned
+                        ? "Verify you installed this bundle: ls -la \"\(path)\""
+                        : "Inspect and remove if unexpected: rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    /// Find the main executable in a macOS bundle (Contents/MacOS/*).
+    private func findExecutableInBundle(_ bundlePath: String) -> String? {
+        let macOSDir = "\(bundlePath)/Contents/MacOS"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: macOSDir),
+              let first = entries.first else { return nil }
+        return "\(macOSDir)/\(first)"
+    }
+
+    // MARK: - at(1) job spooling
+    //
+    // The at(8) scheduler is disabled by default on macOS but can be enabled by attackers via
+    // `sudo launchctl load -F /System/Library/LaunchDaemons/com.apple.atrun.plist`.
+    // Once loaded, jobs spooled under /var/at/jobs are executed on schedule with the user's
+    // privileges — an ideal one-shot persistence mechanism that leaves no LaunchAgent trace.
+
+    private func scanAtJobs(findings: inout [Finding], errors: inout [String]) {
+        let spool = "/var/at/jobs"
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: spool) else { return }
+
+        // Legitimate marker files that should be ignored.
+        let ignored: Set<String> = [".SEQ", ".lockfile"]
+        let jobs = entries.filter { !$0.hasPrefix(".") && !ignored.contains($0) }
+        guard !jobs.isEmpty else { return }
+
+        // Also report whether atrun is currently loaded — an unloaded atrun means these jobs
+        // won't fire, but the scheduled entries are still worth surfacing.
+        let atrunStatus = ShellRunner.run("/bin/launchctl",
+                                          arguments: ["list", "com.apple.atrun"], timeout: 3)
+        let atrunLoaded = atrunStatus.success && !atrunStatus.stdout.contains("Could not find")
+
+        findings.append(Finding(
+            severity: atrunLoaded ? .high : .medium,
+            category: .persistence,
+            title: atrunLoaded
+                ? "at(1) jobs scheduled and atrun daemon loaded"
+                : "at(1) jobs spooled (atrun currently unloaded)",
+            detail: "\(jobs.count) job(s) queued in \(spool): \(jobs.prefix(3).joined(separator: ", "))" +
+                (atrunLoaded ? " — jobs will execute on schedule" : " — jobs would run if atrun were loaded"),
+            path: spool,
+            remediation: "Inspect each job: sudo cat /var/at/jobs/<job>. Remove unexpected jobs: sudo atrm <job-id>"
+        ))
     }
 
     private func checkIsSigned(path: String) -> Bool {

@@ -67,6 +67,12 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Check for reverse tunnel binaries (cloudflared/ngrok/localtunnel/frp) running with
+        //    active connections. Attackers use these to expose internal machines to an operator
+        //    without opening an inbound port — a rising 2024-2025 exfiltration / C2 pattern.
+        progress?.update("checking reverse tunnels")
+        scanReverseTunnels(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -361,6 +367,65 @@ public final class NetworkScanner: Scanner {
                         ? "Expected if you're using Proxyman/Charles/mitmproxy — otherwise disable in Network settings"
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
+            }
+        }
+    }
+
+    // MARK: - Reverse tunnel binaries
+
+    /// Tunneling utilities that let an operator reach a machine behind NAT without opening a
+    /// listening port. Legitimate when used by developers, but increasingly the C2 / exfil path
+    /// of choice in 2024-2025 macOS intrusions — attackers drop them into /tmp or a hidden dir,
+    /// authenticate against a public relay, and get a persistent inbound channel that firewalls
+    /// don't see. Bare-name entries only (no ambiguous 2-char names like `lt`) to avoid
+    /// false-positiving on shell aliases.
+    private let tunnelProcessNames: [(name: String, tool: String)] = [
+        ("cloudflared", "Cloudflare Tunnel"),
+        ("ngrok",       "ngrok"),
+        ("frpc",        "frp (fast reverse proxy)"),
+        ("frps",        "frp (fast reverse proxy)"),
+        ("chisel",      "chisel"),
+        ("gost",        "gost"),
+        ("localxpose",  "localxpose"),
+        ("pinggy",      "pinggy"),
+        ("localtunnel", "localtunnel"),
+    ]
+
+    private func scanReverseTunnels(findings: inout [Finding], errors: inout [String]) {
+        // Use ps to enumerate running processes; correlate against the tunnel list. We walk
+        // the full command line so cloudflared / frpc invoked via absolute paths still match.
+        let ps = ShellRunner.run("/bin/ps", arguments: ["-axo", "pid,comm,args"], timeout: 5)
+        guard ps.success else { return }
+
+        for line in ps.stdout.split(separator: "\n") {
+            let lineStr = String(line)
+            let lower = lineStr.lowercased()
+
+            // Split on whitespace AND slash so a path like /opt/homebrew/bin/cloudflared
+            // yields "cloudflared" as its own token — then we require an exact token match
+            // (rather than a substring) so "cloudflared-config.yml" won't false-hit "cloudflared".
+            let tokens = lower.split(whereSeparator: { $0 == " " || $0 == "/" }).map(String.init)
+
+            for tunnel in tunnelProcessNames {
+                let needle = tunnel.name.lowercased()
+                guard tokens.contains(needle) else { continue }
+
+                // Pull the PID off the front of the ps line.
+                let parts = lineStr.trimmingCharacters(in: .whitespaces)
+                    .split(separator: " ", omittingEmptySubsequences: true)
+                let pid = parts.first.map(String.init) ?? "?"
+
+                // Compact the command display without dumping the whole line.
+                let display = String(lineStr.trimmingCharacters(in: .whitespaces).prefix(140))
+
+                findings.append(Finding(
+                    severity: .medium, category: .networkActivity,
+                    title: "Reverse tunnel process running: \(tunnel.tool)",
+                    detail: "PID \(pid) — \(display). Reverse tunnels expose this Mac to an external operator without opening a listening port.",
+                    path: nil,
+                    remediation: "Expected if you or your team run \(tunnel.tool). Otherwise kill it (kill \(pid)) and investigate how it was installed."
+                ))
+                break
             }
         }
     }
