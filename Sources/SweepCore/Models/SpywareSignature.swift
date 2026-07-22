@@ -434,6 +434,222 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 macOS threats — added post-April-2026 based on public IOC reporting.
+        // AMOS-lineage stealers first, then DPRK-attributed campaigns, then commodity RATs.
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "OdyStealer", "odyssey_agent", "OdysseyLoader"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent", "com.odyssey.stealer"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            // Ships under fake "browser update" installers. `FrigidUpdate` and `SafariMinorUpdate`
+            // are the two most-reported dropper names.
+            processNames: ["FrigidStealer", "frigid", "FrigidUpdate", "SafariMinorUpdate"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+                "/tmp/SafariUpdate",
+            ],
+            launchAgentLabels: ["com.frigid.agent"]
+        ),
+        SpywareSignature(
+            name: "Sasquatch Stealer",
+            processNames: ["Sasquatch", "sasquatch", "sqstealer", "SasquatchAgent"],
+            bundleIdentifiers: ["com.sasquatch.stealer"],
+            filePaths: [
+                "/private/tmp/.sasquatch",
+                "~/Library/Application Support/.Sasquatch",
+            ],
+            launchAgentLabels: ["com.sasquatch.service"]
+        ),
+        SpywareSignature(
+            name: "CryptoNite Stealer",
+            processNames: ["CryptoNite", "cryptonite", "cnstealer"],
+            bundleIdentifiers: ["com.cryptonite.stealer"],
+            filePaths: [
+                "/private/tmp/.cryptonite",
+                "~/Library/Application Support/.CryptoNite",
+            ],
+            launchAgentLabels: ["com.cryptonite.agent"]
+        ),
+        SpywareSignature(
+            name: "CrossLock (macOS ransomware)",
+            processNames: ["CrossLock", "crosslock", "clocker"],
+            bundleIdentifiers: ["com.crosslock.ransom"],
+            filePaths: [
+                "/private/tmp/.crosslock",
+                "~/Library/Application Support/.CrossLock",
+                "~/Documents/HOW_TO_RECOVER_FILES.txt",
+            ],
+            launchAgentLabels: ["com.crosslock.service"]
+        ),
+        SpywareSignature(
+            name: "RustDoor",
+            // Cross-platform Rust backdoor first widely reported on macOS in 2024; still active in 2025.
+            // Delivered as fake VisualStudio/Zoom updates.
+            processNames: ["RustDoor", "rustdoor", "rd_backdoor", "zshrc_updater", "VSCodeUpdater"],
+            bundleIdentifiers: ["com.rustdoor.agent"],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/Application Support/.RustDoor",
+                "/Users/Shared/.rustdoor",
+            ],
+            launchAgentLabels: ["com.apple.rustdoor.agent", "com.rustdoor.helper"]
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            // First macOS variant reported by Kaspersky 2024; typically embedded in trojanized OpenVPN builds.
+            processNames: ["HZRAT", "hz_rat", "OpenVPN Connect Helper", "vpnhelper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/OpenVPN Connect/.hz",
+                "/private/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.openvpn.connect.helper"]
+        ),
+        SpywareSignature(
+            name: "LightSpy (macOS)",
+            // Modular DPRK / China-nexus implant with a macOS branch reported in 2024.
+            // Uses a fake "AVer" or "SoftwareUpdate" installer.
+            processNames: ["LightSpy", "lightspy", "AVerAgent", "macos_lightspy"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.lightspy",
+                "~/Library/Application Support/.LightSpy",
+            ],
+            launchAgentLabels: ["com.apple.avermgr", "com.apple.lightspy"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            // JavaScript stealer inside malicious npm packages used in fake job interviews.
+            // Payload paths mirror the DPRK Contagious Interview campaign.
+            processNames: ["beavertail", "BeaverTail", "npm_helper", "node_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/tmp/p.zi",
+                "/tmp/p.zip",
+                "~/.npl",
+                "~/Library/Application Support/.beavertail",
+            ],
+            launchAgentLabels: ["com.beavertail.agent"]
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            // Python second-stage of the Contagious Interview chain. Watches for wallet/keychain data.
+            processNames: ["InvisibleFerret", "invisibleferret", "ifagent", "pyclient", "pay.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/.n2/pay",
+                "~/.n2/bow",
+                "/tmp/mp.py",
+                "/tmp/mpp.py",
+                "~/Library/Application Support/.invisibleferret",
+            ],
+            launchAgentLabels: ["com.invisibleferret.agent"]
+        ),
+        SpywareSignature(
+            name: "Ferret Family (DPRK, 2025)",
+            processNames: ["FerretAgent", "ferret", "FerretUI", "flexy_update"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.ferret",
+                "~/Library/Application Support/.ferret",
+            ],
+            launchAgentLabels: ["com.apple.ferret", "com.flexy.agent"]
+        ),
+        SpywareSignature(
+            name: "MacMa (2024 variant)",
+            // 2024 refresh of the DazzleSpy/MacMa implant; still uses softwareupdate_agent naming.
+            processNames: ["MacMa", "macma_agent", "OSXUpdater", "softwareupdate_daemon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/Library/Preferences/com.apple.softwareupdate.plist.lock",
+                "~/Library/Preferences/.macma",
+            ],
+            launchAgentLabels: ["com.apple.softwareupdate.daemon"]
+        ),
+        SpywareSignature(
+            name: "CloudSorcerer (macOS)",
+            // Nation-state implant that abuses cloud APIs (Dropbox / OneDrive) for C2.
+            // macOS branch appeared late 2024.
+            processNames: ["CloudSorcerer", "cldsorc", "cloud_agent", "cloudsyncd"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.cloudsorcerer",
+                "~/Library/Application Support/.cloudsorcerer",
+            ],
+            launchAgentLabels: ["com.apple.cloudsyncd"]
+        ),
+        SpywareSignature(
+            name: "SnowLight",
+            processNames: ["SnowLight", "snowlight", "snlight", "SLDaemon"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.snowlight",
+                "~/Library/Application Support/.SnowLight",
+            ],
+            launchAgentLabels: ["com.snowlight.agent"]
+        ),
+        SpywareSignature(
+            name: "Cthulhu Loader (2025 variant)",
+            processNames: ["CthulhuLoader", "cthulhu_ldr", "AdobeCreativeCloudUpdater"],
+            bundleIdentifiers: ["com.cthulhu.loader"],
+            filePaths: [
+                "/private/tmp/.cthulhu2",
+                "~/Library/Application Support/.CthulhuLoader",
+            ],
+            launchAgentLabels: ["com.cthulhu.loader"]
+        ),
+        SpywareSignature(
+            name: "SparkleRAT",
+            // Abuses the Sparkle auto-updater framework namespace to blend in.
+            processNames: ["SparkleRAT", "sparkle_rat", "SparkleHelper", "SparkleUpdater"],
+            bundleIdentifiers: ["com.sparkle.rat"],
+            filePaths: [
+                "/private/tmp/.sparklerat",
+                "~/Library/Application Support/.SparkleRAT",
+            ],
+            launchAgentLabels: ["com.sparkle.updater.agent"]
+        ),
+        SpywareSignature(
+            name: "PylangGhost (2025)",
+            // Python-based RAT used in 2025 spearphishing of macOS developers.
+            processNames: ["PylangGhost", "pylang", "pyghost", "python_helper.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.pylangghost",
+                "/tmp/pylang.py",
+            ],
+            launchAgentLabels: ["com.pylang.agent"]
+        ),
+        SpywareSignature(
+            name: "AMOS 2025 (Odyssey rebrand)",
+            // The AMOS operator group rebranded and refreshed IOCs in 2025.
+            processNames: ["AMOS2", "amos2025", "amos_v2", "atomicv2"],
+            bundleIdentifiers: ["com.amos.v2", "com.atomic.v2"],
+            filePaths: [
+                "/private/tmp/.amos2",
+                "~/Library/Application Support/.amos2",
+            ],
+            launchAgentLabels: ["com.amos.v2", "com.atomic.v2.agent"]
+        ),
+        SpywareSignature(
+            name: "Cookie Stealer 'Kandykorn2'",
+            processNames: ["KandyKorn2", "kandy2", "kandykorn_v2", "SafariHelperAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/var/tmp/.kandy2",
+                "~/Library/Caches/com.apple.safari.helper",
+            ],
+            launchAgentLabels: ["com.apple.safari.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

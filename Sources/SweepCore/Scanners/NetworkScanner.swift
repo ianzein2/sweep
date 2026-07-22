@@ -67,6 +67,11 @@ public final class NetworkScanner: Scanner {
         progress?.update("checking proxy configuration")
         scanProxyConfiguration(findings: &findings, errors: &errors)
 
+        // 4. Custom PF (packet-filter) rules. macOS's built-in Application Firewall doesn't
+        //    surface these — attackers use PF anchors to silently redirect or block traffic.
+        progress?.update("checking PF firewall rules")
+        scanPFCustomRules(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -361,6 +366,70 @@ public final class NetworkScanner: Scanner {
                         ? "Expected if you're using Proxyman/Charles/mitmproxy — otherwise disable in Network settings"
                         : "Verify this proxy is authorized, or disable: System Settings > Network > \(service) > Details > Proxies"
                 ))
+            }
+        }
+    }
+
+    // MARK: - PF Firewall Custom Rules
+
+    /// macOS ships a small set of Apple-owned PF anchors — everything else in `/etc/pf.anchors`
+    /// or referenced from `/etc/pf.conf` was added by a third party (a legitimate firewall app
+    /// like Lulu/Little Snitch, an installer, or malware). We surface them for review.
+    private func scanPFCustomRules(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+        // Apple-owned anchor files that ship stock. Any other file in this directory is custom.
+        let appleAnchorNames: Set<String> = [
+            "com.apple", "com.apple.internet-sharing", "com.apple.airdrop",
+            "com.apple.mDNSResponder", "com.apple.mDNSResponder.d",
+        ]
+
+        let anchorsDir = "/etc/pf.anchors"
+        if let entries = try? fm.contentsOfDirectory(atPath: anchorsDir) {
+            for entry in entries where !entry.hasPrefix(".") {
+                if appleAnchorNames.contains(entry) { continue }
+                let path = "\(anchorsDir)/\(entry)"
+                // Read the first line as a hint. Little Snitch / Lulu drop identifiable comments.
+                let firstLine: String = {
+                    guard let data = try? String(contentsOfFile: path, encoding: .utf8) else { return "" }
+                    return String(data.split(separator: "\n").first ?? "").trimmingCharacters(in: .whitespaces)
+                }()
+                let hintLC = firstLine.lowercased()
+                let looksLikeKnownTool = hintLC.contains("little snitch")
+                    || hintLC.contains("lulu") || hintLC.contains("obdev")
+                    || hintLC.contains("radiosilence") || hintLC.contains("murus")
+
+                findings.append(Finding(
+                    severity: looksLikeKnownTool ? .low : .medium,
+                    category: .networkActivity,
+                    title: "Custom PF anchor installed" + (looksLikeKnownTool ? " (known firewall tool)" : ""),
+                    detail: "\(entry) at \(path) — contains packet-filter rules that can block or redirect network traffic silently",
+                    path: path,
+                    remediation: looksLikeKnownTool
+                        ? "Expected if you use Little Snitch / Lulu / Radio Silence — inspect: cat \"\(path)\""
+                        : "Inspect: cat \"\(path)\" — malicious PF anchors are a stealthy way to reroute traffic"
+                ))
+            }
+        }
+
+        // The main pf.conf lists which anchors are loaded. If it's been modified from the stock
+        // Apple copy and pulls in a non-standard anchor, flag that too.
+        if let pfConf = try? String(contentsOfFile: "/etc/pf.conf", encoding: .utf8) {
+            for line in pfConf.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                // Look for anchor references that aren't Apple's standard ones.
+                if trimmed.hasPrefix("anchor ") || trimmed.hasPrefix("load anchor ") {
+                    let isApple = appleAnchorNames.contains { trimmed.contains($0) }
+                    if !isApple {
+                        findings.append(Finding(
+                            severity: .medium, category: .networkActivity,
+                            title: "Non-Apple anchor referenced in /etc/pf.conf",
+                            detail: "Rule: \(String(trimmed.prefix(120)))",
+                            path: "/etc/pf.conf",
+                            remediation: "Review: sudo cat /etc/pf.conf — an added anchor pulls in custom rules"
+                        ))
+                    }
+                }
             }
         }
     }
