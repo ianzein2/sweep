@@ -55,6 +55,18 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking iCloud Private Relay")
+        checkPrivateRelay(findings: &findings, errors: &errors)
+
+        progress?.update("checking Terminal paste protection")
+        checkTerminalPasteProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking Safari version against known-exploited CVEs")
+        checkSafariVersion(findings: &findings, errors: &errors)
+
+        progress?.update("checking Find My activation")
+        checkFindMyActivation(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +458,137 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - iCloud Private Relay
+
+    private func checkPrivateRelay(findings: inout [Finding], errors: inout [String]) {
+        // Private Relay is an iCloud+ privacy feature. We only surface a finding
+        // when we can prove the user has iCloud+ and *explicitly disabled* Private
+        // Relay — otherwise every non-iCloud+ user gets noise they can't act on.
+        // The user_disabled key is written when the toggle is flipped off in Settings.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.networkserviceproxy", "PrivateRelayDisabled",
+        ], timeout: 5)
+        guard result.success else { return }
+        let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value == "1" {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud Private Relay is explicitly disabled",
+                detail: "Traffic is no longer relayed through Apple's privacy proxies — Safari and OS-level requests go directly to their destination",
+                path: nil,
+                remediation: "Re-enable: System Settings > Apple ID > iCloud > Private Relay"
+            ))
+        }
+    }
+
+    // MARK: - Terminal Paste Protection (macOS 26.4+ / Tahoe)
+
+    private func checkTerminalPasteProtection(findings: inout [Finding], errors: inout [String]) {
+        // Terminal's paste-warning UI, tightened in macOS 26.4, is the single best
+        // OS-level mitigation against ClickFix (paste-and-run) attacks. If a user
+        // has disabled the warning, they lose that guard.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SecureKeyboardEntry",
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Terminal Secure Keyboard Entry is off",
+                    detail: "Secure Keyboard Entry blocks other processes from reading your keystrokes in Terminal",
+                    path: nil,
+                    remediation: "Enable: Terminal > Secure Keyboard Entry (menu bar), or: defaults write com.apple.Terminal SecureKeyboardEntry -bool true"
+                ))
+            }
+        }
+
+        // The paste-warning suppression key — if set to true, the warning is disabled,
+        // which is exactly the state ClickFix attackers rely on.
+        let pasteWarn = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.Terminal", "SuppressPasteWarning",
+        ], timeout: 5)
+        if pasteWarn.success {
+            let value = pasteWarn.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" || value.uppercased() == "YES" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Terminal paste warning is suppressed",
+                    detail: "Terminal will silently paste multi-line or shell-metacharacter clipboards — the primary macOS defense against ClickFix / paste-and-run attacks is disabled",
+                    path: nil,
+                    remediation: "Re-enable: defaults delete com.apple.Terminal SuppressPasteWarning"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Safari Version vs Known-Exploited WebKit CVEs
+
+    private func checkSafariVersion(findings: inout [Finding], errors: inout [String]) {
+        // Two WebKit zero-days (CVE-2025-14174, CVE-2025-43529) were added to the
+        // CISA Known Exploited Vulnerabilities catalog in December 2025.
+        // Fixed in Safari 26.2 (macOS Tahoe) and the backport train that reached
+        // Sequoia/Sonoma as Safari 18.7.3 / 18.3.x. Anything below either fix line
+        // is vulnerable to drive-by exploitation from any visited page.
+        let plistPath = "/Applications/Safari.app/Contents/Info.plist"
+        guard let data = FileManager.default.contents(atPath: plistPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let versionString = plist["CFBundleShortVersionString"] as? String else {
+            return
+        }
+
+        // Parse "26.2" / "18.7.3" / "15.6" into a tuple of ints.
+        let parts = versionString.split(separator: ".").compactMap { Int($0) }
+        guard let major = parts.first else { return }
+        let minor = parts.count > 1 ? parts[1] : 0
+        let patch = parts.count > 2 ? parts[2] : 0
+
+        // Vulnerable window: below the two known fix lines.
+        //  - The 18.x backport landed at 18.7.3
+        //  - The 26.x line is fixed at 26.2
+        //  - Anything below 18 is definitely unpatched.
+        let isVulnerable: Bool
+        if major < 18 {
+            isVulnerable = true
+        } else if major == 18 {
+            isVulnerable = minor < 7 || (minor == 7 && patch < 3)
+        } else if major == 26 {
+            isVulnerable = minor < 2
+        } else {
+            isVulnerable = false
+        }
+
+        if isVulnerable {
+            findings.append(Finding(
+                severity: .high, category: .systemIntegrity,
+                title: "Safari \(versionString) is vulnerable to known-exploited WebKit CVEs",
+                detail: "CVE-2025-14174 and CVE-2025-43529 are actively exploited in the wild; fix is Safari 26.2 (Tahoe) or 18.7.3 (Sequoia/Sonoma backport)",
+                path: plistPath,
+                remediation: "Update macOS: System Settings > General > Software Update"
+            ))
+        }
+    }
+
+    // MARK: - Find My Activation
+
+    private func checkFindMyActivation(findings: inout [Finding], errors: inout [String]) {
+        // Find My + Activation Lock is Apple's equivalent of a stolen-device
+        // wipe/lock control. Presence of the fmm-mobileme-token in NVRAM
+        // indicates the Mac is enrolled with Find My.
+        let result = ShellRunner.run("/usr/sbin/nvram", arguments: ["-p"], timeout: 5)
+        guard result.success else { return }
+        let enrolled = result.stdout.contains("fmm-mobileme-token-FMM")
+        if !enrolled {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Find My does not appear to be active on this Mac",
+                detail: "No fmm-mobileme-token found in NVRAM — Activation Lock and remote wipe will not work if the Mac is stolen",
+                path: nil,
+                remediation: "Enable: System Settings > Apple ID > iCloud > Find My Mac"
+            ))
         }
     }
 

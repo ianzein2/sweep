@@ -37,6 +37,10 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Extended-attribute payload hiding (RustyAttr / Lazarus 2024)
+        progress?.update("scanning for xattr-hidden payloads")
+        scanXattrHiddenPayloads(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +281,90 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Extended-Attribute Hidden Payloads (RustyAttr class)
+
+    /// RustyAttr (Lazarus 2024) hides its second-stage payload inside a
+    /// `com.apple.metadata:*` extended attribute of an otherwise-empty carrier
+    /// file. Legitimate `com.apple.metadata:*` values are small binary plists
+    /// (usually <1 KB) — an oversized one, especially on a Downloads-tree
+    /// carrier, is a strong indicator of xattr-based payload hiding.
+    private func scanXattrHiddenPayloads(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let roots = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "\(home)/Applications",
+            "/private/tmp",
+            "/tmp",
+            "/var/tmp",
+        ]
+        let fm = FileManager.default
+        // Cap: xattr -l is slow. We only want the biggest offenders.
+        let sizeThreshold = 1024   // bytes — anything over 1 KB in metadata is suspect
+        let perDirCap = 30
+
+        for root in roots {
+            guard fm.fileExists(atPath: root),
+                  let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+
+            var inspected = 0
+            for entry in entries {
+                if inspected >= perDirCap { break }
+                // Skip hidden system entries and directories that would explode the scan
+                if entry.hasPrefix(".") { continue }
+                let path = "\(root)/\(entry)"
+
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: path, isDirectory: &isDir)
+                if isDir.boolValue { continue }
+                inspected += 1
+
+                // `xattr -l -s <path>` prints one attribute at a time with size.
+                let result = ShellRunner.run("/usr/bin/xattr", arguments: ["-l", path], timeout: 3)
+                guard result.success, !result.stdout.isEmpty else { continue }
+
+                // Group lines by attribute to compute per-attribute size.
+                var currentAttr: String?
+                var currentSize = 0
+                var oversizedAttrs: [(name: String, size: Int)] = []
+
+                for line in result.stdout.split(separator: "\n") {
+                    let s = String(line)
+                    // A header line looks like "com.apple.metadata:_kMDItemUserTags:" — starts at col 0.
+                    if !s.hasPrefix(" ") && !s.hasPrefix("\t") && s.hasSuffix(":") {
+                        if let name = currentAttr, currentSize >= sizeThreshold,
+                           name.hasPrefix("com.apple.metadata:") {
+                            oversizedAttrs.append((name: name, size: currentSize))
+                        }
+                        currentAttr = String(s.dropLast())
+                        currentSize = 0
+                    } else {
+                        // Body lines contain the hex dump. Approximate: each printable
+                        // char = 1 byte of the underlying value (the count includes hex
+                        // digits but that overestimates equally across files, so the
+                        // relative comparison is fine).
+                        currentSize += s.count
+                    }
+                }
+                if let name = currentAttr, currentSize >= sizeThreshold,
+                   name.hasPrefix("com.apple.metadata:") {
+                    oversizedAttrs.append((name: name, size: currentSize))
+                }
+
+                if !oversizedAttrs.isEmpty {
+                    let top = oversizedAttrs.max(by: { $0.size < $1.size })!
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "Oversized com.apple.metadata xattr — possible RustyAttr-style payload",
+                        detail: "File \(entry) has \(top.name) totaling ~\(top.size) bytes — legitimate metadata is almost always <1 KB",
+                        path: path,
+                        remediation: "Inspect: xattr -p \(top.name) \"\(path)\" | xxd | head — if this is executable code, delete the file"
+                    ))
+                }
+            }
         }
     }
 

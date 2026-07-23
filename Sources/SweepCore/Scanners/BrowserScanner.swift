@@ -337,6 +337,30 @@ public final class BrowserScanner: Scanner {
                 let extId = "\(publisher).\(pkg["name"] as? String ?? "")"
                 let combined = "\(displayName) \(extId) \(entry)".lowercased()
 
+                // Exact match against the shared IOC list — TigerJack, Anivia, etc.
+                let extIdLC = extId.lowercased()
+                if SpywareSignature.maliciousEditorExtensionIds.contains(where: { $0.lowercased() == extIdLC }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension matches a known-malicious ID",
+                        detail: "Extension: \(displayName) (\(extId)) — flagged in public IOC reporting",
+                        path: extPath,
+                        remediation: "Remove immediately in \(editorName) > Extensions and rotate any credentials this editor could access"
+                    ))
+                    continue
+                }
+                // Publisher-level match — catches renamed variants from the same threat actor
+                if SpywareSignature.maliciousEditorPublishers.contains(where: { $0.lowercased() == publisher.lowercased() }) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "\(editorName) extension by a known-malicious publisher",
+                        detail: "Extension: \(displayName) (\(extId)) — publisher \"\(publisher)\" has been linked to malicious extensions",
+                        path: extPath,
+                        remediation: "Remove all extensions by this publisher in \(editorName)"
+                    ))
+                    continue
+                }
+
                 // Direct keyword match against known malicious families
                 if let kw = suspiciousEditorExtKeywords.first(where: { combined.contains($0) }) {
                     findings.append(Finding(
