@@ -434,6 +434,172 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // 2025-2026 additions — post-AMOS-leak stealer wave, DPRK "Contagious Interview"
+        // family, and other macOS-specific threats disclosed in 2025.
+        SpywareSignature(
+            name: "Odyssey Stealer",
+            processNames: ["Odyssey", "odyssey_stealer", "odys"],
+            bundleIdentifiers: ["com.odyssey.stealer"],
+            filePaths: [
+                "/private/tmp/.odyssey",
+                "~/Library/Application Support/.Odyssey",
+            ],
+            launchAgentLabels: ["com.odyssey.agent"]
+        ),
+        SpywareSignature(
+            name: "FrigidStealer",
+            processNames: ["FrigidStealer", "frigid", "frigidstealer"],
+            bundleIdentifiers: ["com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/.frigid",
+                "~/Library/Application Support/.Frigid",
+            ],
+            launchAgentLabels: ["com.frigid.service"]
+        ),
+        SpywareSignature(
+            name: "BeaverTail (DPRK Contagious Interview)",
+            processNames: ["beavertail", "BeaverTail", "node_helper", "npm-helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.beavertail",
+                "~/Library/Application Support/.n2",
+                "~/Library/Application Support/.pyp",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (DPRK)",
+            processNames: ["invisibleferret", "InvisibleFerret", "pyloader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ferret",
+                "~/Library/.npl",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FlexibleFerret / FrostyFerret (DPRK)",
+            processNames: ["ChromeUpdate", "chromeupdate", "flexibleferret", "frostyferret", "FerretAgent"],
+            bundleIdentifiers: ["com.google.chrome.updater.helper", "com.zoom.installer.helper"],
+            filePaths: [
+                "~/Library/Application Support/com.google.Keystone",
+                "/private/tmp/.ferretinstall",
+            ],
+            launchAgentLabels: ["com.google.chrome.updater.helper"]
+        ),
+        SpywareSignature(
+            name: "OtterCookie (DPRK)",
+            processNames: ["ottercookie", "OtterCookie", "cookiegrabber"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.ottercookie"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "AppleProcessHub",
+            processNames: ["AppleProcessHub", "appleprocesshub", "aph_agent"],
+            bundleIdentifiers: ["com.apple.processhub"],
+            filePaths: [
+                "/private/tmp/.aph",
+                "~/Library/Application Support/.AppleProcessHub",
+            ],
+            launchAgentLabels: ["com.apple.processhub"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (Lazarus)",
+            processNames: ["rustyattr", "RustyAttr", "xattr_loader"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.rustyattr"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["hzrat", "HZRat", "hz_helper", "OpenVPN Connect Helper"],
+            bundleIdentifiers: ["com.hz.rat.agent"],
+            filePaths: [
+                "/private/tmp/.hzrat",
+                "~/Library/Application Support/.hzr",
+            ],
+            launchAgentLabels: ["com.hz.rat.agent"]
+        ),
+        SpywareSignature(
+            name: "NimStealer / NimGhost",
+            processNames: ["NimStealer", "nimstealer", "NimGhost", "nimghost"],
+            bundleIdentifiers: ["com.nim.stealer"],
+            filePaths: [
+                "/private/tmp/.nimstealer",
+                "~/Library/Application Support/.NimGhost",
+            ],
+            launchAgentLabels: ["com.nim.stealer"]
+        ),
+        SpywareSignature(
+            name: "Zenith Stealer",
+            processNames: ["Zenith", "zenith_stealer", "zenithagent"],
+            bundleIdentifiers: ["com.zenith.stealer"],
+            filePaths: [
+                "/private/tmp/.zenith",
+                "~/Library/Application Support/.Zenith",
+            ],
+            launchAgentLabels: ["com.zenith.service"]
+        ),
+        SpywareSignature(
+            name: "GreedyStealer",
+            processNames: ["Greedy", "greedystealer", "greedy_mac"],
+            bundleIdentifiers: ["com.greedy.stealer"],
+            filePaths: [
+                "/private/tmp/.greedy",
+                "~/Library/Application Support/.Greedy",
+            ],
+            launchAgentLabels: ["com.greedy.service"]
+        ),
+        SpywareSignature(
+            name: "Nomad Stealer",
+            processNames: ["Nomad", "nomadstealer", "nomad_installer"],
+            bundleIdentifiers: ["com.nomad.stealer"],
+            filePaths: [
+                "/private/tmp/.nomad",
+                "~/Library/Application Support/.Nomad",
+            ],
+            launchAgentLabels: ["com.nomad.service"]
+        ),
+        SpywareSignature(
+            name: "PylotStealer",
+            processNames: ["Pylot", "pylotstealer", "pylot_helper"],
+            bundleIdentifiers: ["com.pylot.stealer"],
+            filePaths: [
+                "/private/tmp/.pylot",
+                "~/Library/Application Support/.Pylot",
+            ],
+            launchAgentLabels: ["com.pylot.service"]
+        ),
+        SpywareSignature(
+            name: "AdLoad / Bundlore (macOS adware family)",
+            processNames: ["adload", "AdLoad", "Bundlore", "bundlore", "InstallCore",
+                           "com.searchmine", "com.chill-tab", "com.myshopcoupon",
+                           "GeneralOpenPipeSearch", "SafeFinder", "SearchProtect"],
+            bundleIdentifiers: [
+                "com.adload.installer", "com.bundlore.installer",
+                "com.installcore.mac", "com.safefinder.helper",
+            ],
+            filePaths: [
+                "~/Library/Application Support/com.adload",
+                "/Library/LaunchAgents/com.adload.agent.plist",
+                "/Library/LaunchDaemons/com.searchmine.daemon.plist",
+            ],
+            launchAgentLabels: [
+                "com.adload.agent", "com.bundlore.agent",
+                "com.searchmine.plist", "com.chill-tab.plist",
+            ]
+        ),
+        SpywareSignature(
+            name: "Fickle Stealer (macOS port)",
+            processNames: ["fickle", "FickleStealer", "fickle_mac"],
+            bundleIdentifiers: ["com.fickle.stealer"],
+            filePaths: [
+                "/private/tmp/.fickle",
+                "~/Library/Application Support/.Fickle",
+            ],
+            launchAgentLabels: ["com.fickle.service"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns

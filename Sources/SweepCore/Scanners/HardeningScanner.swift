@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH server hardening")
+        checkSSHServerHardening(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper assessment")
+        checkGatekeeperAssessment(findings: &findings, errors: &errors)
+
+        progress?.update("checking legacy remote services")
+        checkLegacyRemoteServices(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +455,176 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - SSH Server Hardening
+
+    private func checkSSHServerHardening(findings: inout [Finding], errors: inout [String]) {
+        // sshd on macOS is off by default, but once Remote Login is enabled the config
+        // becomes network-facing. We check for three high-impact settings: root login,
+        // password authentication, and deprecated ciphers/kex — plus any explicit
+        // AuthorizedKeysCommand tampering that can smuggle in credentials.
+        let sshdConfigPaths = ["/etc/ssh/sshd_config", "/private/etc/ssh/sshd_config"]
+
+        // Only worth reporting if sshd is actually enabled — otherwise the config is inert.
+        let remoteLogin = ShellRunner.run("/usr/sbin/systemsetup",
+                                          arguments: ["-getremotelogin"], timeout: 5)
+        let sshdOn = remoteLogin.success && remoteLogin.stdout.lowercased().contains(": on")
+        guard sshdOn else { return }
+
+        for path in sshdConfigPaths {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+
+            var permitRoot: String?
+            var passwordAuth: String?
+            var challengeResponseAuth: String?
+            var kbdInteractiveAuth: String?
+            var authorizedKeysCommand: String?
+
+            for rawLine in content.split(separator: "\n") {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+                let parts = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2 else { continue }
+                let key = String(parts[0]).lowercased()
+                let value = String(parts[1]).trimmingCharacters(in: .whitespaces)
+                switch key {
+                case "permitrootlogin":       permitRoot = value.lowercased()
+                case "passwordauthentication": passwordAuth = value.lowercased()
+                case "challengeresponseauthentication": challengeResponseAuth = value.lowercased()
+                case "kbdinteractiveauthentication":    kbdInteractiveAuth = value.lowercased()
+                case "authorizedkeyscommand":           authorizedKeysCommand = value
+                default: break
+                }
+            }
+
+            // PermitRootLogin defaults to "prohibit-password" on modern macOS — safe.
+            // An explicit "yes" is a strong misconfig.
+            if let root = permitRoot, root == "yes" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "SSH permits direct root login",
+                    detail: "\(path): PermitRootLogin yes — an attacker who guesses the root password gets full access without proxying through a user account",
+                    path: path,
+                    remediation: "Change to `PermitRootLogin no` (or `prohibit-password`): sudo nano \(path); then sudo launchctl kickstart -k system/com.openssh.sshd"
+                ))
+            }
+
+            // Password auth over the network is the single largest exposure once sshd is on.
+            if let pw = passwordAuth, pw == "yes" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SSH allows password authentication",
+                    detail: "\(path): PasswordAuthentication yes — network-facing password login is a brute-force target",
+                    path: path,
+                    remediation: "Switch to keys only: set `PasswordAuthentication no` after confirming you have a working SSH key"
+                ))
+            }
+            if let challenge = challengeResponseAuth, challenge == "yes",
+               (passwordAuth ?? "yes") == "no" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "SSH ChallengeResponseAuthentication is still enabled",
+                    detail: "\(path): ChallengeResponseAuthentication yes — this reintroduces a password path even if PasswordAuthentication is off",
+                    path: path,
+                    remediation: "Set `ChallengeResponseAuthentication no` if you don't need PAM prompts"
+                ))
+            }
+            if let kbd = kbdInteractiveAuth, kbd == "yes",
+               (passwordAuth ?? "yes") == "no" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "SSH KbdInteractiveAuthentication is still enabled",
+                    detail: "\(path): KbdInteractiveAuthentication yes — reintroduces an interactive prompt path",
+                    path: path,
+                    remediation: "Set `KbdInteractiveAuthentication no` unless you rely on PAM/2FA prompts"
+                ))
+            }
+
+            // AuthorizedKeysCommand runs on every SSH auth — a rogue value is a credential
+            // interception vector.
+            if let cmd = authorizedKeysCommand,
+               (cmd.contains("/tmp/") || cmd.contains("/.") || cmd.contains("curl") || cmd.contains("wget")) {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Suspicious sshd AuthorizedKeysCommand",
+                    detail: "\(path): AuthorizedKeysCommand \(cmd) — runs on every SSH connection",
+                    path: path,
+                    remediation: "Verify this command is legitimate — attacker-controlled AuthorizedKeysCommand can inject keys or steal auth material"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Gatekeeper Assessment
+
+    private func checkGatekeeperAssessment(findings: inout [Finding], errors: inout [String]) {
+        // The classic `spctl --status` check lives in SystemIntegrityScanner. Here we look at
+        // Gatekeeper's SUBSTITUTE knob: the developer-mode kill switch that lets `spctl` be
+        // globally disabled per-user via `spctl developer-mode enable-terminal`, and the
+        // per-file `com.apple.macl` / quarantine bit removal used by installers of "cracked"
+        // apps to bypass notarization.
+        let devMode = ShellRunner.run("/usr/sbin/spctl", arguments: ["developer-mode", "status"], timeout: 5)
+        if devMode.success && devMode.stdout.lowercased().contains("enabled") {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "spctl developer mode is enabled",
+                detail: "Terminal-launched apps skip Gatekeeper — anything run from a shell will not be assessed",
+                path: nil,
+                remediation: "Disable if you don't need it: sudo spctl developer-mode disable-terminal"
+            ))
+        }
+
+        // LSQuarantine controls whether new downloads get the `com.apple.quarantine` xattr
+        // that triggers Gatekeeper on first open. Disabling this globally means every
+        // download runs without the notarization/malware assessment.
+        let quarantine = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.LaunchServices", "LSQuarantine"
+        ], timeout: 5)
+        if quarantine.success {
+            let value = quarantine.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" || value.lowercased() == "false" {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Download quarantine is disabled",
+                    detail: "LSQuarantine=0 — downloads skip the Gatekeeper quarantine flag, so no first-run notarization check runs",
+                    path: nil,
+                    remediation: "Re-enable: defaults write com.apple.LaunchServices LSQuarantine -bool true"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Legacy Remote Services
+
+    private func checkLegacyRemoteServices(findings: inout [Finding], errors: inout [String]) {
+        // FTP, telnet, rsh, tftp are cleartext protocols that have no place on a modern
+        // developer laptop. macOS does not enable them by default, but users following old
+        // tutorials or inheriting older systems sometimes turn them on with launchctl or
+        // via a third-party helper. Any of these listening is a major exposure.
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        guard launchctl.success else { return }
+        let list = launchctl.stdout
+
+        let legacyServices: [(label: String, name: String)] = [
+            ("com.apple.ftpd",     "FTP server"),
+            ("com.apple.ftp-proxy", "FTP proxy"),
+            ("com.apple.tftpd",    "TFTP server"),
+            ("com.apple.telnetd",  "Telnet server"),
+            ("com.apple.rlogind",  "rlogin server"),
+            ("com.apple.rshd",     "rsh server"),
+            ("com.apple.rexecd",   "rexec server"),
+            ("com.apple.finger",   "finger daemon"),
+        ]
+        for svc in legacyServices where list.contains(svc.label) {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "\(svc.name) is enabled",
+                detail: "launchd is running \(svc.label) — this is a cleartext, deprecated protocol with no legitimate modern use on a Mac",
+                path: nil,
+                remediation: "Disable: sudo launchctl unload -w /System/Library/LaunchDaemons/\(svc.label).plist"
+            ))
         }
     }
 

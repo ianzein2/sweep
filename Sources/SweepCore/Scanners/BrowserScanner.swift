@@ -82,6 +82,8 @@ public final class BrowserScanner: Scanner {
         let hasAllUrls: Bool
         let hasKeyboardInput: Bool
         let isSpyLike: Bool
+        let hasCookieAccess: Bool
+        let hasIdentityAccess: Bool
         var profiles: [String]
         let browserName: String
         let extDir: String
@@ -177,6 +179,13 @@ public final class BrowserScanner: Scanner {
                         hostPermissions.contains("<all_urls>") ||
                         hostPermissions.contains("*://*/*")
                     let hasKeyboardInput = permStrings.contains("input")
+                    // Cookie-Bite (2024) and successor session-theft extensions request the
+                    // `cookies` permission plus a broad host pattern, letting them exfil session
+                    // cookies straight past 2FA. Legitimate cookie extensions are rare — most
+                    // trusted ones (password managers, ad blockers) don't need `cookies`.
+                    let hasCookieAccess = permStrings.contains("cookies")
+                    let hasIdentityAccess = permStrings.contains("identity") ||
+                                            permStrings.contains("identity.email")
 
                     let nameLC = name.lowercased()
                     let isSpyLike = ["spy", "keylog", "monitor", "track", "surveillance", "stealth"]
@@ -186,6 +195,7 @@ public final class BrowserScanner: Scanner {
                         extId: extId, name: name, permStrings: permStrings,
                         hasDangerousPerms: hasDangerousPerms, hasAllUrls: hasAllUrls,
                         hasKeyboardInput: hasKeyboardInput, isSpyLike: isSpyLike,
+                        hasCookieAccess: hasCookieAccess, hasIdentityAccess: hasIdentityAccess,
                         profiles: [profile], browserName: browserName, extDir: extDir
                     )
                 }
@@ -205,6 +215,25 @@ public final class BrowserScanner: Scanner {
                     detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote), Permissions: \(ext.permStrings.joined(separator: ", "))",
                     path: ext.extDir,
                     remediation: "Remove in \(ext.browserName) > Extensions (chrome://extensions)"
+                ))
+            } else if ext.hasCookieAccess && ext.hasAllUrls {
+                // Cookie-Bite (2024) and similar session-theft extensions request `cookies`
+                // + broad host access to lift auth cookies past MFA. Very few legitimate
+                // extensions need this combination.
+                findings.append(Finding(
+                    severity: .high, category: .permission,
+                    title: "\(ext.browserName) extension can read cookies for all sites",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — the cookies+all-URLs combo can steal session tokens (bypassing MFA)",
+                    path: ext.extDir,
+                    remediation: "Remove unless you specifically trust this extension: \(ext.browserName) > Extensions"
+                ))
+            } else if ext.hasIdentityAccess {
+                findings.append(Finding(
+                    severity: .medium, category: .permission,
+                    title: "\(ext.browserName) extension can read your Google account identity",
+                    detail: "Extension: \(ext.name), ID: \(ext.extId)\(profileNote) — the `identity` API exposes your signed-in email and OAuth tokens",
+                    path: ext.extDir,
+                    remediation: "Verify this extension needs your identity: \(ext.browserName) > Extensions"
                 ))
             } else if ext.hasDangerousPerms && ext.hasAllUrls {
                 findings.append(Finding(

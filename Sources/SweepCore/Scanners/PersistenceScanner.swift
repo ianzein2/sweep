@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking SSH client config")
+        scanSSHClientConfig(findings: &findings, errors: &errors)
+
+        progress?.update("checking system plugin bundles")
+        scanSystemPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking git hook backdoors")
+        scanGitHooks(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -335,9 +344,17 @@ public final class PersistenceScanner: Scanner {
 
     private func scanShellConfigs(findings: inout [Finding], errors: inout [String]) {
         let home = ShellRunner.realUserHome
+        // Note: .zshenv is sourced by EVERY zsh invocation — including non-interactive scripts
+        // and git hooks — which makes it a stealthy persistence target. .zlogin/.zlogout run
+        // at login/logout. All shell rc files here have been observed as persistence in the wild.
         let shellConfigs = [
             "\(home)/.zshrc", "\(home)/.zprofile", "\(home)/.zshenv",
-            "\(home)/.bashrc", "\(home)/.bash_profile", "\(home)/.profile",
+            "\(home)/.zlogin", "\(home)/.zlogout",
+            "\(home)/.bashrc", "\(home)/.bash_profile", "\(home)/.bash_login",
+            "\(home)/.bash_logout", "\(home)/.profile",
+            // System-wide equivalents — extra weight since they run for every user.
+            "/etc/zshrc", "/etc/zshenv", "/etc/zprofile",
+            "/etc/bashrc", "/etc/profile",
         ]
 
         let suspiciousPatterns: [(pattern: String, description: String)] = [
@@ -675,6 +692,182 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - SSH client config
+
+    private func scanSSHClientConfig(findings: inout [Finding], errors: inout [String]) {
+        // ~/.ssh/config directives like LocalCommand (with PermitLocalCommand yes) and
+        // ProxyCommand run arbitrary shell whenever the user connects to a matching host.
+        // An attacker who plants a wildcard host block gets code execution every time the
+        // user runs ssh/scp/rsync/git — a very stealthy backdoor.
+        let home = ShellRunner.realUserHome
+        let configPaths = ["\(home)/.ssh/config", "/etc/ssh/ssh_config"]
+
+        for cfg in configPaths {
+            guard let content = try? String(contentsOfFile: cfg, encoding: .utf8) else { continue }
+
+            var permitsLocalCommand = false
+            for rawLine in content.split(separator: "\n") {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") { continue }
+                let lower = line.lowercased()
+
+                if lower.hasPrefix("permitlocalcommand") && lower.contains("yes") {
+                    permitsLocalCommand = true
+                }
+                if lower.hasPrefix("localcommand ") {
+                    findings.append(Finding(
+                        severity: permitsLocalCommand ? .high : .medium,
+                        category: .persistence,
+                        title: "SSH config uses LocalCommand",
+                        detail: "\(cfg): \(String(line.prefix(160))) — runs on every ssh invocation" +
+                            (permitsLocalCommand ? " (PermitLocalCommand is enabled — this WILL execute)" : ""),
+                        path: cfg,
+                        remediation: "If this LocalCommand isn't yours, remove it: nano \(cfg)"
+                    ))
+                }
+                if lower.hasPrefix("proxycommand ") {
+                    // ProxyCommand is legitimate for jump hosts, but the common ones use
+                    // ssh/nc/corp-specific gateways. Flag entries that pipe through a shell,
+                    // fetch remote code, or reference /tmp — attacker patterns, not admin patterns.
+                    let looksMalicious = lower.contains("curl ") || lower.contains("wget ") ||
+                                         lower.contains(" | sh") || lower.contains(" | bash") ||
+                                         lower.contains(" | zsh") || lower.contains("/tmp/") ||
+                                         lower.contains("base64") || lower.contains("eval ")
+                    if looksMalicious {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Suspicious ProxyCommand in SSH config",
+                            detail: "\(cfg): \(String(line.prefix(160)))",
+                            path: cfg,
+                            remediation: "This ProxyCommand runs on every matching ssh — pattern matches known backdoors. Remove if unexpected: nano \(cfg)"
+                        ))
+                    }
+                }
+                // Match ~/.ssh/config with an explicit `Include` from a temp/hidden path
+                if lower.hasPrefix("include ") {
+                    let target = String(line.dropFirst("include ".count)).trimmingCharacters(in: .whitespaces)
+                    if target.contains("/tmp/") || target.contains("/.") {
+                        findings.append(Finding(
+                            severity: .medium, category: .persistence,
+                            title: "SSH config includes file from unusual path",
+                            detail: "\(cfg): Include \(target)",
+                            path: cfg,
+                            remediation: "Inspect the included file — Include directives can hide LocalCommand/ProxyCommand backdoors"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - System plugin bundles (screensavers, quicklook, spotlight, prefpanes)
+
+    private func scanSystemPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        // These bundle types are loaded by the OS into privileged host processes — Finder,
+        // System Settings, Spotlight — the moment a matching file/asset is accessed. Nothing
+        // else needs to run them; there's no plist and no launchd registration to notice.
+        // They're a classic macOS persistence blind spot.
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // (containing directory, extension, human label, host process that loads it)
+        let locations: [(dir: String, ext: String, label: String, host: String)] = [
+            ("/Library/Spotlight",                  "mdimporter", "Spotlight importer", "mdworker"),
+            ("\(home)/Library/Spotlight",           "mdimporter", "Spotlight importer", "mdworker"),
+            ("/Library/QuickLook",                  "qlgenerator", "QuickLook plugin", "quicklookd"),
+            ("\(home)/Library/QuickLook",           "qlgenerator", "QuickLook plugin", "quicklookd"),
+            ("/Library/Screen Savers",              "saver",      "Screensaver bundle", "ScreenSaverEngine"),
+            ("\(home)/Library/Screen Savers",       "saver",      "Screensaver bundle", "ScreenSaverEngine"),
+            ("/Library/PreferencePanes",            "prefPane",   "PreferencePane",     "System Settings"),
+            ("\(home)/Library/PreferencePanes",     "prefPane",   "PreferencePane",     "System Settings"),
+        ]
+
+        for loc in locations {
+            guard let entries = try? fm.contentsOfDirectory(atPath: loc.dir) else { continue }
+            for entry in entries where entry.hasSuffix(".\(loc.ext)") {
+                let path = "\(loc.dir)/\(entry)"
+
+                // Grab the bundle identifier for display and to skip Apple bundles.
+                let bundleId: String? = {
+                    let plistPath = "\(path)/Contents/Info.plist"
+                    guard let data = fm.contents(atPath: plistPath),
+                          let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                    else { return nil }
+                    return plist["CFBundleIdentifier"] as? String
+                }()
+
+                if let id = bundleId, id.hasPrefix("com.apple.") { continue }
+
+                if let id = bundleId, let sig = SpywareSignature.match(bundleId: id) {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Known spyware \(loc.label): \(sig.name)",
+                        detail: "Bundle: \(id) — auto-loaded by \(loc.host)",
+                        path: path,
+                        remediation: "Remove: sudo rm -rf \"\(path)\""
+                    ))
+                    continue
+                }
+
+                // Unsigned third-party bundles here are worth surfacing regardless of intent —
+                // they run in privileged host processes and users rarely install them by hand.
+                let signed = checkIsSigned(path: path)
+                findings.append(Finding(
+                    severity: signed ? .low : .medium,
+                    category: .persistence,
+                    title: "Third-party \(loc.label) installed" + (signed ? "" : " (unsigned)"),
+                    detail: "\(entry)\(bundleId.map { " (\($0))" } ?? "") — loaded automatically by \(loc.host)",
+                    path: path,
+                    remediation: "If you don't recognize this bundle, remove it: sudo rm -rf \"\(path)\""
+                ))
+            }
+        }
+    }
+
+    // MARK: - Git hook backdoors
+
+    private func scanGitHooks(findings: inout [Finding], errors: inout [String]) {
+        // A `core.hooksPath` set in the user's global git config (or a templateDir under
+        // the user's control) causes every `git clone`, `git commit`, or `git checkout`
+        // to run whatever executable is in that directory. A stealthy, high-frequency
+        // execution vector — the user runs git commands all day.
+        let home = ShellRunner.realUserHome
+        let configPaths = ["\(home)/.gitconfig", "\(home)/.config/git/config", "/etc/gitconfig"]
+
+        for cfg in configPaths {
+            guard let content = try? String(contentsOfFile: cfg, encoding: .utf8) else { continue }
+            for rawLine in content.split(separator: "\n") {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                let lower = line.lowercased()
+                guard lower.hasPrefix("hookspath") || lower.hasPrefix("templatedir") else { continue }
+                // Extract the value after `=`
+                guard let eq = line.firstIndex(of: "=") else { continue }
+                let target = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                let expanded = target.hasPrefix("~") ? "\(home)\(target.dropFirst())" : target
+                if target.contains("/tmp/") || target.contains("/.") ||
+                   target.contains("/private/tmp") {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Git \(lower.hasPrefix("hookspath") ? "core.hooksPath" : "init.templateDir") points to unusual location",
+                        detail: "\(cfg) sets path to \(target) — code here runs on every git operation",
+                        path: cfg,
+                        remediation: "Inspect: ls -la \"\(expanded)\". If not intentional, remove: git config --global --unset \(lower.hasPrefix("hookspath") ? "core.hooksPath" : "init.templateDir")"
+                    ))
+                } else if !target.isEmpty {
+                    // Even legitimate-looking values deserve a soft flag — users often set
+                    // this once and forget it exists. Point them at the file to review.
+                    findings.append(Finding(
+                        severity: .low, category: .persistence,
+                        title: "Git \(lower.hasPrefix("hookspath") ? "core.hooksPath" : "init.templateDir") is configured",
+                        detail: "\(cfg) → \(target) — runs on every git operation",
+                        path: cfg,
+                        remediation: "Verify you recognize the hooks: ls -la \"\(expanded)\""
+                    ))
+                }
+            }
         }
     }
 

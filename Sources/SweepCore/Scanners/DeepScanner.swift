@@ -37,6 +37,12 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. RustyAttr-style extended-attribute abuse — Lazarus-linked technique that
+        //    smuggles the malicious payload inside an xattr instead of the file body,
+        //    so on-disk scanners see a benign-looking file.
+        progress?.update("checking for extended-attribute payloads")
+        scanExtendedAttributePayloads(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -277,6 +283,56 @@ public final class DeepScanner: Scanner {
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
             ))
+        }
+    }
+
+    // MARK: - Extended Attribute Payload Detection (RustyAttr technique)
+
+    private func scanExtendedAttributePayloads(findings: inout [Finding], errors: inout [String]) {
+        // The RustyAttr technique (attributed to Lazarus in 2024) hides the malicious payload
+        // inside a custom extended attribute on a benign-looking file. On-disk scanners see a
+        // small PDF or image; the loader reads the xattr and executes stage-2 from memory.
+        // We look for files whose combined xattr size is well beyond what Finder tags,
+        // Spotlight metadata, or `com.apple.quarantine` legitimately write.
+        //
+        // Threshold: 16 KB. Real com.apple.metadata values top out around a few KB;
+        // com.apple.FinderInfo is 32 bytes; quarantine values are ~100 bytes. A file with
+        // 16+ KB of xattr data is carrying something.
+        let home = ShellRunner.realUserHome
+        let dirsToCheck = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "/tmp", "/private/tmp", "/var/tmp",
+        ]
+
+        for dir in dirsToCheck {
+            // Single-line pipeline to sidestep any Swift/bash line-continuation surprises.
+            let script = "/usr/bin/find \"\(dir)\" -maxdepth 3 -type f 2>/dev/null | /usr/bin/head -500 | while IFS= read -r f; do sz=$(/usr/bin/xattr -l \"$f\" 2>/dev/null | /usr/bin/wc -c); if [ \"$sz\" -gt 16384 ]; then echo \"$sz|$f\"; fi; done | /usr/bin/sort -rn | /usr/bin/head -10"
+            let listing = ShellRunner.run("/bin/sh", arguments: ["-c", script], timeout: 20)
+            guard listing.success && !listing.stdout.isEmpty else { continue }
+
+            for rawLine in listing.stdout.split(separator: "\n") {
+                let parts = rawLine.split(separator: "|", maxSplits: 1)
+                guard parts.count == 2,
+                      let bytes = Int(parts[0].trimmingCharacters(in: .whitespaces))
+                else { continue }
+                let filePath = String(parts[1]).trimmingCharacters(in: .whitespaces)
+
+                // App bundles carry legitimate large xattrs (Info.plist metadata, code
+                // signature hashes, resource fork). Skip them to keep the signal clean.
+                let lower = filePath.lowercased()
+                if lower.hasSuffix(".app") || lower.contains(".xcodeproj/") { continue }
+
+                let sizeKB = String(format: "%.1fKB", Double(bytes) / 1024)
+                findings.append(Finding(
+                    severity: bytes > 65_536 ? .high : .medium,
+                    category: .suspiciousFile,
+                    title: "Large payload hidden in extended attributes",
+                    detail: "File: \(filePath), xattr size: \(sizeKB) — well beyond Finder/Spotlight metadata; RustyAttr-style loaders hide stage-2 here",
+                    path: filePath,
+                    remediation: "Inspect: xattr -l \"\(filePath)\" | head -50. If unexpected, strip all xattrs: xattr -c \"\(filePath)\""
+                ))
+            }
         }
     }
 

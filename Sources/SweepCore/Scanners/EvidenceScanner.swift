@@ -445,6 +445,15 @@ public final class EvidenceScanner: Scanner {
         ("Ledger Live", "Ledger Live"),
         ("Trezor Suite", "@trezor"),
         ("Keplr",    "dmkamcknogkgcdfhhbddcghachkejeap"),
+        // Additions targeted by 2024-2026 stealers (AMOS/Odyssey/Banshee variants)
+        ("Rabby",    "acmacodkjbdgmoleebolmdjonilkdbch"),
+        ("Trust Wallet", "egjidjbpglichdcondbcbdnbeeppgdph"),
+        ("OKX Wallet", "mcohilncbfahbmgdjkbpemcciiolgcge"),
+        ("Backpack",  "aflkmfhebedbjioipglgcbcmnbpgliof"),
+        ("Solflare",  "bhhhlbepdkbapadjdnnojkbgioiodbic"),
+        ("Wasabi",    "wasabi"),
+        ("Sparrow",   "sparrow-wallet"),
+        ("Bitcoin Core", "Bitcoin"),
     ]
 
     /// Browser credential stores AMOS-family stealers copy.
@@ -540,6 +549,7 @@ public final class EvidenceScanner: Scanner {
         if psResult.success {
             for line in psResult.stdout.split(separator: "\n") {
                 let lineStr = String(line)
+                // Classic keychain dump
                 if lineStr.contains("security") && lineStr.contains("dump-keychain") {
                     findings.append(Finding(
                         severity: .high, category: .suspiciousProcess,
@@ -549,6 +559,70 @@ public final class EvidenceScanner: Scanner {
                         remediation: "Identify the calling process and kill it — `security dump-keychain -d` extracts stored passwords"
                     ))
                 }
+                // AppleScript prompts asking for the user's password — the AMOS-family stealer
+                // hallmark. Uses `osascript -e 'display dialog ... default answer "" with hidden answer'`.
+                let lower = lineStr.lowercased()
+                if lower.contains("osascript") && lower.contains("display dialog") &&
+                   (lower.contains("hidden answer") || lower.contains("password")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "AppleScript prompting for a password",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "Do NOT enter your password. This is the AMOS/Banshee/Odyssey infostealer credential-harvest pattern — kill the process and investigate its origin."
+                    ))
+                }
+                // DPRK BeaverTail loaders execute an embedded `node -e` payload that
+                // downloads a stage-2 (InvisibleFerret) from the actor's C2.
+                if lower.contains(" node ") && lower.contains("-e ") &&
+                   (lower.contains("http://") || lower.contains("https://")) &&
+                   (lower.contains("require('http") || lower.contains("require(\"http") ||
+                    lower.contains("fetch(") || lower.contains("axios")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Node.js executing inline network payload",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "Signature pattern of DPRK BeaverTail/InvisibleFerret loaders. Kill the process, then investigate any recent \"technical interview\" or npm packages executed from downloaded repos."
+                    ))
+                }
+                // Curl/wget piped straight into a shell — canonical drop-and-run.
+                if (lower.contains("curl ") || lower.contains("wget ")) &&
+                   lower.contains(" | ") &&
+                   (lower.contains(" sh") || lower.contains(" bash") || lower.contains(" zsh")) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousProcess,
+                        title: "Process piping downloaded script to a shell",
+                        detail: "Active: \(String(lineStr.prefix(200)))",
+                        path: nil,
+                        remediation: "curl|sh / wget|sh executes attacker-controlled code without inspection. Kill the process and verify its parent — legitimate installers use signed packages, not this pattern."
+                    ))
+                }
+            }
+        }
+
+        // Check for exported keychain files staged for exfiltration. `security export`
+        // and `security dump-keychain` outputs commonly land in /tmp with these extensions.
+        let stagedKeychainRoots = ["/tmp", "/private/tmp", "/var/tmp"]
+        let keychainExportExts: Set<String> = ["keychain", "keychain-db"]
+        for root in stagedKeychainRoots {
+            guard let entries = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for entry in entries {
+                let ext = URL(fileURLWithPath: entry).pathExtension.lowercased()
+                let lower = entry.lowercased()
+                let looksLikeKeychainExport = keychainExportExts.contains(ext) ||
+                    lower.contains("keychain-dump") ||
+                    lower.contains("keychain_export") ||
+                    lower.contains("login.keychain")
+                guard looksLikeKeychainExport else { continue }
+                let filePath = "\(root)/\(entry)"
+                findings.append(Finding(
+                    severity: .high, category: .suspiciousFile,
+                    title: "Exported keychain file staged in \(root)",
+                    detail: "File: \(entry) — keychain data outside ~/Library/Keychains is either a debug dump or a stealer payload",
+                    path: filePath,
+                    remediation: "Do not upload this file anywhere. Delete it and rotate any credentials it may contain: rm \"\(filePath)\""
+                ))
             }
         }
     }
