@@ -434,6 +434,189 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK "Contagious Interview" cluster (2024-2025)
+        // BeaverTail + InvisibleFerret trojanized npm packages / fake job coding assignments
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            processNames: ["beavertail", "BeaverTail"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.npl",
+                "/private/tmp/.n2",
+                "~/Library/Application Support/.n2",
+                "~/Library/Application Support/Chrome/Default/.pmyxvb",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret (Contagious Interview)",
+            // Note: file path markers (/tmp/.pay etc.) do the heavy lifting — "pay" alone as a
+            // process name is too generic to include here without false-positives.
+            processNames: ["InvisibleFerret", "invisibleferret"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.pay",
+                "/private/tmp/aicore",
+                "~/.n1/",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FrostyFerret (DPRK)",
+            processNames: ["FrostyFerret", "frostyferret"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.ChromeUpdate"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "FriendlyFerret (DPRK)",
+            processNames: ["FriendlyFerret", "friendlyferret"],
+            bundleIdentifiers: [],
+            filePaths: [],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MultiFerret (DPRK)",
+            processNames: ["MultiFerret", "multiferret"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.multi"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "OtterCookie (DPRK)",
+            processNames: ["OtterCookie", "ottercookie"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.ottercookie",
+                "~/.n2/pay",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor (DPRK)",
+            // "GoogIe LLC" uses a capital I in place of a lowercase l — the classic homograph.
+            processNames: ["NimDoor", "nimdoor", "GoogIe LLC", "CoreKitAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PylangGhost (DPRK)",
+            processNames: ["pylangghost", "PylangGhost"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.pylang"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "HZ RAT",
+            // The reported OpenVPN-Connect impersonation used a fake bundle ID rather than the
+            // real OpenVPN process name — leaving that out to avoid false-positives on
+            // legitimate OpenVPN-Connect installs.
+            processNames: ["hzrat", "HZRat", "hzagent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.hz",
+                "~/Library/Application Support/.hz",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "StilachiRAT",
+            processNames: ["stilachi", "StilachiRAT", "wwaext"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.stilachi",
+                "~/Library/Application Support/.stilachi",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "DarkGate (macOS)",
+            processNames: ["darkgate", "DarkGate", "AppleService"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.darkgate",
+                "~/Library/Application Support/.darkgate",
+            ],
+            launchAgentLabels: ["com.apple.service.darkgate"]
+        ),
+        SpywareSignature(
+            name: "Braodo Stealer",
+            processNames: ["braodo", "Braodo", "braodo_stealer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.braodo",
+                "~/Library/Application Support/.braodo",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Frappe Stealer",
+            processNames: ["frappe", "Frappe", "frappe_stealer"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.frappe"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "PSAUX (packager stealer)",
+            processNames: ["psaux", "PSAUX", "psaux_helper"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.psaux"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "CloudChat",
+            processNames: ["CloudChat", "cloudchat"],
+            bundleIdentifiers: ["com.cloudchat.desktop"],
+            filePaths: [
+                "/Applications/CloudChat.app",
+                "~/Library/Application Support/CloudChat",
+            ],
+            launchAgentLabels: ["com.cloudchat.updater"]
+        ),
+        SpywareSignature(
+            name: "Astaroth (macOS variant)",
+            processNames: ["astaroth", "Astaroth", "AstarothAgent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.astaroth",
+                "~/Library/Application Support/.astaroth",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "Fickle Stealer (macOS)",
+            processNames: ["fickle", "Fickle", "fickle_stealer"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.fickle"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "TodoSwift (BlueNoroff)",
+            processNames: ["TodoSwift", "todoswift", "SwiftUpdate"],
+            bundleIdentifiers: ["com.apple.swiftupdate"],
+            filePaths: ["/private/tmp/.todoswift"],
+            launchAgentLabels: ["com.apple.swiftupdate"]
+        ),
+        SpywareSignature(
+            name: "RustyAttr (Lazarus)",
+            processNames: ["RustyAttr", "rustyattr", "TariCleaner"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustyattr",
+                "~/Library/LaunchAgents/com.taricleaner.plist",
+            ],
+            launchAgentLabels: ["com.taricleaner"]
+        ),
+        SpywareSignature(
+            name: "SwiftShadow (Lazarus)",
+            processNames: ["SwiftShadow", "swiftshadow"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.swiftshadow"],
+            launchAgentLabels: []
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +633,11 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Newer families (2024-2025) that impersonate Apple system services.
+        // Only include labels that Apple does NOT actually use — real Apple daemon labels
+        // must not appear here or they'll false-positive on legitimate system plists.
+        "com.apple.swiftupdate",
+        "com.apple.service.darkgate",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

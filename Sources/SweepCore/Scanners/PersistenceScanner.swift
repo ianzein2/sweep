@@ -78,6 +78,18 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking package manager configs")
+        scanPackageManagerConfigs(findings: &findings, errors: &errors)
+
+        progress?.update("checking Folder Actions scripts")
+        scanFolderActionScripts(findings: &findings, errors: &errors)
+
+        progress?.update("checking Spotlight importers")
+        scanSpotlightImporters(findings: &findings, errors: &errors)
+
+        progress?.update("checking PATH configuration")
+        scanPathConfiguration(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -675,6 +687,256 @@ public final class PersistenceScanner: Scanner {
                 path: path,
                 remediation: "Inspect contents, then remove: sudo rm \"\(path)\""
             ))
+        }
+    }
+
+    // MARK: - Package Manager Configuration Tampering
+
+    /// Detects registry/index overrides pointing installs at attacker-controlled mirrors.
+    /// A single line in ~/.npmrc that re-points `registry=` to a hostile URL turns every
+    /// future `npm install` into a delivery mechanism — the same shape works for pip, gem,
+    /// cargo, and yarn.
+    private func scanPackageManagerConfigs(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+
+        struct RegistryCheck {
+            let path: String
+            let manager: String
+            /// Regex-free substring markers that indicate a registry / mirror override.
+            let keys: [String]
+            /// Substrings that indicate the value belongs to the OFFICIAL registry.
+            let trustedHosts: [String]
+        }
+
+        let checks: [RegistryCheck] = [
+            RegistryCheck(
+                path: "/etc/npmrc", manager: "npm",
+                keys: ["registry="],
+                trustedHosts: ["registry.npmjs.org", "npm.pkg.github.com"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.npmrc", manager: "npm",
+                keys: ["registry="],
+                trustedHosts: ["registry.npmjs.org", "npm.pkg.github.com"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.yarnrc", manager: "yarn",
+                keys: ["registry ", "registry \""],
+                trustedHosts: ["registry.yarnpkg.com", "registry.npmjs.org"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.yarnrc.yml", manager: "yarn",
+                keys: ["npmRegistryServer:"],
+                trustedHosts: ["registry.yarnpkg.com", "registry.npmjs.org"]
+            ),
+            RegistryCheck(
+                path: "/etc/pip.conf", manager: "pip",
+                keys: ["index-url", "extra-index-url"],
+                trustedHosts: ["pypi.org", "pythonhosted.org"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.pip/pip.conf", manager: "pip",
+                keys: ["index-url", "extra-index-url"],
+                trustedHosts: ["pypi.org", "pythonhosted.org"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.config/pip/pip.conf", manager: "pip",
+                keys: ["index-url", "extra-index-url"],
+                trustedHosts: ["pypi.org", "pythonhosted.org"]
+            ),
+            RegistryCheck(
+                path: "/etc/gemrc", manager: "gem",
+                keys: [":sources:", "gem_source:"],
+                trustedHosts: ["rubygems.org"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.gemrc", manager: "gem",
+                keys: [":sources:", "gem_source:"],
+                trustedHosts: ["rubygems.org"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.cargo/config", manager: "cargo",
+                keys: ["replace-with", "[source."],
+                trustedHosts: ["crates.io", "index.crates.io"]
+            ),
+            RegistryCheck(
+                path: "\(home)/.cargo/config.toml", manager: "cargo",
+                keys: ["replace-with", "[source."],
+                trustedHosts: ["crates.io", "index.crates.io"]
+            ),
+        ]
+
+        for check in checks {
+            guard let content = try? String(contentsOfFile: check.path, encoding: .utf8) else { continue }
+
+            let lines = content.components(separatedBy: "\n")
+            for (idx, rawLine) in lines.enumerated() {
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") { continue }
+
+                let lowerLine = line.lowercased()
+                guard check.keys.contains(where: { lowerLine.contains($0.lowercased()) }) else { continue }
+
+                let pointsAtTrustedHost = check.trustedHosts.contains { lowerLine.contains($0) }
+                // A registry line pointing at nothing is unusual (empty = disables installs)
+                let hasURL = lowerLine.contains("http://") || lowerLine.contains("https://") ||
+                             lowerLine.contains("file://") || lowerLine.contains("git+")
+
+                if pointsAtTrustedHost { continue }
+
+                // Plain-HTTP registries are always dangerous — install traffic is a MITM's dream.
+                let isPlainHTTP = lowerLine.contains("http://")
+                let sev: Severity = isPlainHTTP ? .high : (hasURL ? .medium : .low)
+                let reason = isPlainHTTP
+                    ? "points install traffic at a plain-HTTP mirror — trivially man-in-the-middle-able"
+                    : "does not point at the official \(check.manager) registry"
+
+                findings.append(Finding(
+                    severity: sev, category: .persistence,
+                    title: "\(check.manager) config redirects installs",
+                    detail: "Line \(idx + 1): \(String(line.prefix(140))) — \(reason)",
+                    path: check.path,
+                    remediation: "Inspect and restore the default registry: nano \(check.path)"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Folder Actions Scripts
+
+    /// Folder Actions run an AppleScript / .scpt file every time a watched folder's contents
+    /// change — a persistence trigger that survives reboot and doesn't appear in LaunchAgents.
+    /// The stock macOS install leaves these directories empty; anything present is user- or
+    /// installer-added and worth surfacing.
+    private func scanFolderActionScripts(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            (path: "\(home)/Library/Scripts/Folder Action Scripts", scope: "user"),
+            (path: "/Library/Scripts/Folder Action Scripts",        scope: "system"),
+        ]
+        let fm = FileManager.default
+        for entry in dirs {
+            guard fm.fileExists(atPath: entry.path),
+                  let items = try? fm.contentsOfDirectory(atPath: entry.path) else { continue }
+
+            for item in items where !item.hasPrefix(".") {
+                let itemPath = "\(entry.path)/\(item)"
+                // Apple ships a few sample scripts under /Library/Scripts. We flag them all
+                // because Folder Actions must be explicitly attached to be dangerous, but a
+                // user should still confirm the file is theirs.
+                findings.append(Finding(
+                    severity: .medium, category: .persistence,
+                    title: "Folder Action script installed (\(entry.scope))",
+                    detail: "Script: \(item) — runs automatically when its attached folder changes",
+                    path: itemPath,
+                    remediation: "Confirm the script is yours and see what folder(s) it attaches to via the Folder Actions Setup app"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Spotlight Importers
+
+    /// Spotlight importer bundles (.mdimporter) load into `mdworker` whenever a file of the
+    /// matching type is indexed. A hostile importer runs as the user whose Spotlight indexed
+    /// the file — a stealthy persistence + code-execution path.
+    private func scanSpotlightImporters(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirs = [
+            (path: "\(home)/Library/Spotlight", scope: "user",
+             remediation: "Remove: rm -rf"),
+            (path: "/Library/Spotlight",        scope: "system",
+             remediation: "Remove: sudo rm -rf"),
+        ]
+        let fm = FileManager.default
+        for entry in dirs {
+            guard fm.fileExists(atPath: entry.path),
+                  let items = try? fm.contentsOfDirectory(atPath: entry.path) else { continue }
+
+            for item in items where item.hasSuffix(".mdimporter") {
+                let itemPath = "\(entry.path)/\(item)"
+                let isSigned = checkIsSigned(path: itemPath)
+                findings.append(Finding(
+                    severity: isSigned ? .low : .high,
+                    category: .persistence,
+                    title: isSigned
+                        ? "Third-party Spotlight importer installed"
+                        : "Unsigned Spotlight importer installed",
+                    detail: "\(entry.scope) importer: \(item) — loads into mdworker on file indexing",
+                    path: itemPath,
+                    remediation: "\(entry.remediation) \"\(itemPath)\" if you don't recognize the app that installed it"
+                ))
+            }
+        }
+    }
+
+    // MARK: - PATH Hijack
+
+    /// `/etc/paths` and `/etc/paths.d/*` populate the default shell PATH for every user.
+    /// A drop-in owned by a non-root user is a privilege-escalation grip: attacker writes a
+    /// binary named `ls` or `sudo` into a directory that appears BEFORE /bin in PATH, and
+    /// every future shell command runs their code first. A path.d file that adds a
+    /// world-writable directory is the same risk in slower motion.
+    private func scanPathConfiguration(findings: inout [Finding], errors: inout [String]) {
+        let fm = FileManager.default
+
+        var pathFiles: [String] = ["/etc/paths"]
+        if let entries = try? fm.contentsOfDirectory(atPath: "/etc/paths.d") {
+            for entry in entries where !entry.hasPrefix(".") {
+                pathFiles.append("/etc/paths.d/\(entry)")
+            }
+        }
+
+        for pathFile in pathFiles {
+            // 1) The file itself must be root-owned. A user-writable /etc/paths.d entry is
+            //    a straight backdoor.
+            if let attrs = try? fm.attributesOfItem(atPath: pathFile),
+               let ownerId = attrs[.ownerAccountID] as? Int, ownerId != 0 {
+                findings.append(Finding(
+                    severity: .high, category: .persistence,
+                    title: "PATH configuration file not owned by root",
+                    detail: "\(pathFile) is owned by UID \(ownerId) — a non-root writable PATH file lets any writer inject binaries into every shell's PATH",
+                    path: pathFile,
+                    remediation: "Inspect and reset ownership: sudo chown root:wheel \(pathFile)"
+                ))
+            }
+
+            // 2) Each directory listed inside must exist and not be world-writable. A world-
+            //    writable directory listed in PATH means ANY local user can plant a binary that
+            //    every user will pick up.
+            guard let content = try? String(contentsOfFile: pathFile, encoding: .utf8) else { continue }
+            for rawLine in content.split(separator: "\n") {
+                let dirPath = String(rawLine).trimmingCharacters(in: .whitespaces)
+                if dirPath.isEmpty || dirPath.hasPrefix("#") { continue }
+
+                guard let attrs = try? fm.attributesOfItem(atPath: dirPath),
+                      let perms = attrs[.posixPermissions] as? Int else { continue }
+
+                let isWorldWritable = (perms & 0o002) != 0
+                let ownerId = attrs[.ownerAccountID] as? Int ?? -1
+
+                if isWorldWritable {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "World-writable directory in system PATH",
+                        detail: "\(dirPath) is world-writable (mode \(String(perms, radix: 8))) and listed in \(pathFile) — any local user can drop a binary that all users execute",
+                        path: dirPath,
+                        remediation: "Restrict the directory: sudo chmod go-w \"\(dirPath)\""
+                    ))
+                } else if ownerId != 0 && dirPath.hasPrefix("/") &&
+                          !dirPath.hasPrefix("/opt/homebrew") &&
+                          !dirPath.hasPrefix("/usr/local") &&
+                          !dirPath.hasPrefix("/Users/") {
+                    // System-scope PATH entries that are owned by a regular user are unusual.
+                    findings.append(Finding(
+                        severity: .medium, category: .persistence,
+                        title: "PATH entry owned by non-root user",
+                        detail: "\(dirPath) is in \(pathFile) but owned by UID \(ownerId)",
+                        path: dirPath,
+                        remediation: "Confirm the directory's contents haven't been tampered with"
+                    ))
+                }
+            }
         }
     }
 

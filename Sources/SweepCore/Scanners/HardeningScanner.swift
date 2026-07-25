@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking iCloud Advanced Data Protection")
+        checkAdvancedDataProtection(findings: &findings, errors: &errors)
+
+        progress?.update("checking analytics sharing")
+        checkAnalyticsSharing(findings: &findings, errors: &errors)
+
+        progress?.update("checking wake-for-network-access")
+        checkWakeOnLAN(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +453,104 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - iCloud Advanced Data Protection (ADP)
+
+    /// Advanced Data Protection (iOS 16.2 / macOS 13.1+) is opt-in end-to-end encryption for
+    /// iCloud Backup, Photos, Notes, Reminders, Safari bookmarks, and more. Without it, an
+    /// Apple account subpoena or an attacker with an iCloud password can pull most of the
+    /// user's cloud data. This check is INFORMATIONAL — we don't penalize its absence (most
+    /// people don't want the recovery burden), but we surface the state so at-risk users know.
+    private func checkAdvancedDataProtection(findings: inout [Finding], errors: inout [String]) {
+        // ADP status is exposed via CloudDocs' MobileMe / iCloud config. Read the domain that
+        // captures the flag; absent key = ADP is off (default) so we say nothing.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "MobileMeAccounts", "Accounts"
+        ], timeout: 5)
+
+        // If the read succeeds and mentions ADP being enabled, that's a positive note. Absence
+        // is the norm and not worth surfacing as a finding.
+        if result.success {
+            let out = result.stdout
+            if out.contains("isAdvancedProtectionEnabled = 1") ||
+               out.contains("HSA2AndAdvancedProtection = 1") {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Advanced Data Protection is enabled",
+                    detail: "iCloud Backup, Photos, Notes, and other categories are end-to-end encrypted — even Apple can't read them",
+                    path: nil,
+                    remediation: "No action needed. Ensure your recovery contact / recovery key is stored somewhere safe."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Analytics & Improvements Sharing
+
+    /// The `Share Mac Analytics` and `Share with App Developers` toggles send diagnostic
+    /// data — including crash logs that can contain filenames, URLs, and other identifiers —
+    /// to Apple and app developers. Sensitive-context users typically want these off.
+    private func checkAnalyticsSharing(findings: inout [Finding], errors: inout [String]) {
+        // AutoSubmit governs "Share Mac Analytics"; ThirdPartyDataSubmit governs the developer share.
+        let submit = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist", "AutoSubmit"
+        ], timeout: 5)
+        if submit.success {
+            let value = submit.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Diagnostics are shared with Apple",
+                    detail: "'Share Mac Analytics' is on — crash logs and usage data are uploaded to Apple",
+                    path: nil,
+                    remediation: "Optional: System Settings > Privacy & Security > Analytics & Improvements > Share Mac Analytics"
+                ))
+            }
+        }
+
+        let thirdParty = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Application Support/CrashReporter/DiagnosticMessagesHistory.plist", "ThirdPartyDataSubmit"
+        ], timeout: 5)
+        if thirdParty.success {
+            let value = thirdParty.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Diagnostics are shared with app developers",
+                    detail: "'Share with App Developers' is on — Apple forwards crash logs from third-party apps back to those developers",
+                    path: nil,
+                    remediation: "Optional: System Settings > Privacy & Security > Analytics & Improvements > Share with App Developers"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Wake-for-Network-Access
+
+    /// Wake-on-LAN lets any local-network device wake this Mac. Convenient for shared
+    /// networks; risky on cafés and hotel Wi-Fi. Informational LOW.
+    private func checkWakeOnLAN(findings: inout [Finding], errors: inout [String]) {
+        // pmset -g returns lines like "  womp                 1" when Wake-on-LAN is on.
+        // (womp = "Wake on Magic Packet")
+        let result = ShellRunner.run("/usr/bin/pmset", arguments: ["-g"], timeout: 5)
+        guard result.success else { return }
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            // Match "womp 1" or "womp  1" — a "1" means enabled
+            guard line.hasPrefix("womp") else { continue }
+            let tokens = line.split(separator: " ", omittingEmptySubsequences: true)
+            if let last = tokens.last, last == "1" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "Wake for network access is enabled",
+                    detail: "Any device on the local network can wake this Mac via a magic packet",
+                    path: nil,
+                    remediation: "Disable on untrusted networks: sudo pmset -a womp 0"
                 ))
             }
         }
