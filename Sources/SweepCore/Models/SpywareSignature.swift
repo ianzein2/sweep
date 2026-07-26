@@ -434,6 +434,277 @@ public struct SpywareSignature {
             filePaths: ["~/Library/Application Support/.Spyzie"],
             launchAgentLabels: ["com.spyzie.service"]
         ),
+        // DPRK / Lazarus follow-on families (2024-2026)
+        SpywareSignature(
+            name: "BeaverTail (Contagious Interview)",
+            // BeaverTail runs inside `node`, so the strongest single-name IOCs are the
+            // second-stage drops; we keep process names distinctive to avoid false positives
+            // (generic names like "p" or "pay" would flag countless legitimate binaries).
+            processNames: ["beavertail", "BeaverTail", "beavertail_loader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/p.exe",
+                "/private/tmp/.n2/pay",
+                "/private/tmp/mainssz",
+                "~/Library/Application Support/.beaver",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "InvisibleFerret",
+            // Python-based second stage dropped by BeaverTail on infected developer laptops.
+            processNames: ["invisibleferret", "InvisibleFerret", "pyperclip_helper"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/ssdd",
+                "/private/tmp/mainssz",
+                "~/Library/Application Support/.invferret",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "NimDoor",
+            // Nim-compiled backdoor observed in 2025 campaigns against Web3 / crypto orgs.
+            // Installers masquerade as Google/Zoom updater components; we can't use the real
+            // "GoogleUpdater" / "ZoomUpdater" process names as IOCs since those are legitimate
+            // vendor binaries. The file-path indicators below (drops in /tmp and hidden dirs)
+            // are the actionable ones.
+            processNames: ["NimDoor", "nimdoor"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.nimdoor",
+                "/private/tmp/.GoogleUpdater",
+                "~/Library/Application Support/.GoogleUpdater",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "RustDoor / SimpleTea",
+            // Rust-compiled BlueNoroff backdoor first documented in 2024. Drops as generically-
+            // named binaries in /tmp and installs a fake system-update LaunchAgent. We keep the
+            // process names distinctive; the generic "test" name they sometimes use would false-
+            // positive on countless CI and developer binaries.
+            processNames: ["rustdoor", "RustDoor", "simpletea", "SimpleTea"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.rustdoor",
+                "~/Library/SystemUpdate/.simpletea",
+            ],
+            launchAgentLabels: [
+                "com.apple.systemupdate", "com.apple.rustupdate",
+            ]
+        ),
+        SpywareSignature(
+            name: "RokRAT (APT37)",
+            processNames: ["RokRAT", "rokrat", "coreui_agent"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.rokrat"],
+            launchAgentLabels: ["com.apple.coreui.agent"]
+        ),
+        // Chinese-language / APT41-linked
+        SpywareSignature(
+            name: "HZ RAT (macOS)",
+            processNames: ["HZRAT", "hzrat", "hzagent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/.hz",
+                "/private/tmp/.hzrat",
+            ],
+            launchAgentLabels: ["com.hz.agent"]
+        ),
+        SpywareSignature(
+            name: "MacMa / CDDS (APT41)",
+            // "UserAgent" as a process name is far too common (browsers, curl helpers, MDM tools);
+            // we anchor the signature on the fake launch label and the drop paths instead.
+            processNames: ["macma", "MacMa", "cdds_agent"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/UserAgent",
+                "/Library/Preferences/com.apple.softwareupdate.plist.bak",
+                "/private/tmp/.cdds",
+            ],
+            launchAgentLabels: ["com.apple.UserAgent"]
+        ),
+        SpywareSignature(
+            name: "JokerSpy",
+            // Python-based backdoor with a hidden helper installed under the QuickLook daemon
+            // directory to survive across sessions.
+            processNames: ["xcc", "jokerspy", "sh.py.py"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/QuickLookDaemon",
+                "~/Library/JokerSpy",
+                "/private/tmp/.joker",
+            ],
+            launchAgentLabels: ["com.apple.xccservice"]
+        ),
+        // 2025 stealer campaigns
+        SpywareSignature(
+            name: "FrigidStealer",
+            // AMOS-family variant delivered by fake browser update lures (Feb 2025).
+            processNames: ["FrigidStealer", "FrigidUpdate", "frigid"],
+            bundleIdentifiers: ["com.frigid.updater", "com.frigid.stealer"],
+            filePaths: [
+                "/private/tmp/FrigidUpdate",
+                "~/Library/Application Support/.FrigidUpdate",
+            ],
+            launchAgentLabels: ["com.frigid.updater"]
+        ),
+        SpywareSignature(
+            name: "ShadowVault",
+            processNames: ["ShadowVault", "shadowvault"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.shadowvault",
+                "~/Library/Application Support/.ShadowVault",
+            ],
+            launchAgentLabels: ["com.shadowvault.agent"]
+        ),
+        SpywareSignature(
+            name: "CherryPie (macOS)",
+            processNames: ["CherryPie", "cherrypie", "cpstealer"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.cherrypie"],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "JSCEAL",
+            // Late 2025 AMOS spin-off; the loader runs JavaScript from a compiled bundle.
+            processNames: ["jsceal", "JSCEAL", "jsceal_agent"],
+            bundleIdentifiers: ["com.jsceal.agent"],
+            filePaths: [
+                "/private/tmp/.jsceal",
+                "~/Library/Application Support/.jsceal",
+            ],
+            launchAgentLabels: ["com.jsceal.service"]
+        ),
+        SpywareSignature(
+            name: "PylotAgent",
+            processNames: ["PylotAgent", "pylotagent"],
+            bundleIdentifiers: ["com.pylot.agent"],
+            filePaths: ["~/Library/Application Support/.pylot"],
+            launchAgentLabels: ["com.pylot.agent"]
+        ),
+        SpywareSignature(
+            name: "XLoader (macOS)",
+            // FormBook family port to macOS, still delivered via fake DMGs. We anchor on the
+            // family name only; the "OfficeUpdate" label these drops sometimes use overlaps
+            // with legitimate Microsoft AutoUpdate infrastructure.
+            processNames: ["xloader", "XLoader"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/.xloader",
+            ],
+            launchAgentLabels: []
+        ),
+        SpywareSignature(
+            name: "MicroBackdoor (macOS)",
+            processNames: ["mbd", "microbackdoor", "MicroBackdoor"],
+            bundleIdentifiers: [],
+            filePaths: ["/private/tmp/.mbd"],
+            launchAgentLabels: ["com.mbd.helper"]
+        ),
+        // Long-standing adware families with fresh droppers seen through 2025
+        SpywareSignature(
+            name: "AdLoad",
+            // AdLoad droppers pick short generic names ("Player", "Extension", "Alerts"). Those
+            // would false-positive too easily, so we key the signature on the family's own
+            // distinctive bundle labels; the file paths under Application Support anchor it too.
+            processNames: [
+                "SafeFinder", "AdvancedSearch", "MacSaver",
+                "com.PlayerHelper.HelperTool",
+                "com.SearchDaemon.Daemon",
+            ],
+            bundleIdentifiers: [
+                "com.PlayerHelper.HelperTool",
+                "com.SearchDaemon.Daemon",
+                "com.AdvancedSearch.Extension",
+            ],
+            filePaths: [
+                "~/Library/Application Support/com.PlayerHelper.HelperTool",
+                "~/Library/Application Support/com.SearchDaemon.Daemon",
+                "~/Library/Application Support/com.AdvancedSearch.Extension",
+            ],
+            launchAgentLabels: [
+                "com.PlayerHelper.HelperTool",
+                "com.SearchDaemon.Daemon",
+                "com.AdvancedSearch.Extension",
+            ]
+        ),
+        SpywareSignature(
+            name: "Bundlore",
+            processNames: [
+                "Bundlore", "bundlore", "IronMules", "mm-install-macos",
+            ],
+            bundleIdentifiers: ["com.bundlore.installer"],
+            filePaths: [
+                "/private/tmp/mm-install-macos",
+                "~/Library/Application Support/.bundlore",
+            ],
+            launchAgentLabels: ["com.bundlore.installer"]
+        ),
+        SpywareSignature(
+            name: "Silver Sparrow",
+            // Anchored on the family's specific bundle IDs and drop-file names — "agent" alone
+            // would false-positive on countless legitimate helper processes.
+            processNames: ["silversparrow", "SilverSparrow", "agent_updater"],
+            bundleIdentifiers: ["com.updater.mssse", "com.updater.mchtsser"],
+            filePaths: [
+                "/tmp/agent.sh",
+                "/tmp/agent.plist",
+                "/tmp/verx.sh",
+                "/tmp/version.json",
+                "/tmp/version.plist",
+                "/Library/._insu",
+                "~/Library/Application Support/agent_updater",
+                "~/Library/._insu",
+            ],
+            launchAgentLabels: ["com.updater.mssse", "init_verx"]
+        ),
+        // Cryptojackers — dropped by other malware or bundled with cracked software.
+        // Any of these running on a personal Mac usually means the user did not install it.
+        SpywareSignature(
+            name: "XMRig cryptominer",
+            processNames: ["xmrig", "XMRig", "xmrig-mo", "xmrigMiner"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/xmrig",
+                "~/Library/Application Support/.miner/xmrig",
+                "/usr/local/bin/xmrig",
+            ],
+            launchAgentLabels: ["com.xmrig.miner", "com.system.miner"]
+        ),
+        SpywareSignature(
+            name: "LoudMiner / BirdMiner",
+            // LoudMiner shipped a QEMU-hosted Linux miner inside macOS Audio Unit packages.
+            // "loop" is too common as a process name to use standalone; anchor on the fake
+            // Application Support path (real Apple daemons never live under Application Support).
+            processNames: ["loudminer", "LoudMiner", "birdminer"],
+            bundleIdentifiers: [],
+            filePaths: [
+                "~/Library/Application Support/com.WindowServer",
+                "~/Library/Application Support/.loop",
+            ],
+            launchAgentLabels: ["com.WindowServer.plist", "com.LoudMiner.helper"]
+        ),
+        SpywareSignature(
+            name: "Generic cryptominer (cpuminer/minerd/T-Rex)",
+            // Trimmed to unambiguous miner binary names. Legitimate cryptocurrency users on
+            // macOS are rare, and even they typically wouldn't run these under a personal
+            // login session.
+            processNames: [
+                "minerd", "cpuminer", "t-rex", "ethminer",
+                "nicehash", "nicehashquickminer", "cgminer", "bfgminer",
+                "coinminer",
+            ],
+            bundleIdentifiers: [],
+            filePaths: [
+                "/private/tmp/minerd",
+                "/private/tmp/cpuminer",
+                "~/Library/Application Support/.coinminer",
+            ],
+            launchAgentLabels: ["com.coinminer.helper"]
+        ),
     ]
 
     // MARK: - Heuristic Detection Patterns
@@ -450,6 +721,13 @@ public struct SpywareSignature {
         "com.apple.security.agent",
         "com.apple.kernel.service",
         "com.apple.daemon.helper",
+        // Observed 2024-2026 masquerades
+        "com.apple.rustupdate",
+        "com.apple.UserAgent",
+        "com.apple.xccservice",
+        "com.apple.coreui.agent",
+        "com.apple.systempreferences.helper",
+        "com.apple.macshare.plist",
     ]
 
     /// Process names that look like system processes but aren't real Apple binaries.

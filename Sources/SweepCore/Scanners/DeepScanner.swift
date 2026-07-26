@@ -37,6 +37,13 @@ public final class DeepScanner: Scanner {
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
 
+        // 6. Supply-chain: unknown Homebrew taps and system extensions
+        progress?.update("checking Homebrew taps")
+        scanHomebrewTaps(findings: &findings, errors: &errors)
+
+        progress?.update("checking user-approved system extensions")
+        scanSystemExtensions(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -276,6 +283,120 @@ public final class DeepScanner: Scanner {
                 detail: "This file is owned by root in your user directory — unusual for user apps",
                 path: filePath,
                 remediation: "Investigate: ls -la \"\(filePath)\" — root-owned files in user dirs may indicate privilege escalation"
+            ))
+        }
+    }
+
+    // MARK: - Homebrew Taps (supply-chain surface)
+
+    /// Third-party Homebrew taps can install arbitrary formulae with pre/post-install hooks
+    /// that run as the user (or via `sudo` for casks). A tap from an unknown GitHub org that
+    /// the user does not remember adding is a plausible supply-chain vector, especially for
+    /// developer targets. We enumerate configured taps and flag anything outside the well-known
+    /// upstream namespaces.
+    private func scanHomebrewTaps(findings: inout [Finding], errors: inout [String]) {
+        // brew is not always on PATH under our environment; call it via a login shell if present.
+        let brewPaths = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        let brew = brewPaths.first(where: { FileManager.default.fileExists(atPath: $0) })
+        guard let brewBin = brew else { return }
+
+        let result = ShellRunner.run(brewBin, arguments: ["tap"], timeout: 10)
+        guard result.success else { return }
+
+        // Officially-blessed taps and common well-known third-party ones.
+        let trustedTaps: Set<String> = [
+            "homebrew/core", "homebrew/cask", "homebrew/services",
+            "homebrew/bundle", "homebrew/command-not-found",
+            "homebrew/cask-fonts", "homebrew/cask-versions",
+            "homebrew/cask-drivers", "homebrew/aliases", "homebrew/autoupdate",
+            "hashicorp/tap", "mongodb/brew", "aws/tap", "azure/functions",
+            "microsoft/git", "cloudflare/cloudflare",
+            "oven-sh/bun", "supabase/tap", "vercel/tap",
+            "cli/cli",  // gh
+        ]
+
+        // Only surface taps whose names match a suspicious keyword — third-party taps are
+        // routine for developers, so a low-severity finding on every one of them would be noise.
+        let suspiciousKeywords = ["mirror", "cracked", "warez", "loader", "keygen",
+                                   "spy", "hidden", "stealth"]
+        for rawLine in result.stdout.split(separator: "\n") {
+            let tap = String(rawLine).trimmingCharacters(in: .whitespaces)
+            if tap.isEmpty { continue }
+            if trustedTaps.contains(tap) { continue }
+            let lowerTap = tap.lowercased()
+            guard suspiciousKeywords.contains(where: { lowerTap.contains($0) }) else { continue }
+
+            findings.append(Finding(
+                severity: .high, category: .suspiciousFile,
+                title: "Suspicious Homebrew tap installed",
+                detail: "Tap '\(tap)' matches a suspicious naming pattern — third-party taps run pre/post-install scripts as your user",
+                path: nil,
+                remediation: "Remove if you don't recognize it: brew untap \(tap)"
+            ))
+        }
+    }
+
+    // MARK: - Approved System Extensions
+
+    /// System Extensions replaced kernel extensions for network filters, endpoint security, and
+    /// DriverKit devices. Because they run with high privilege and can capture traffic or
+    /// device I/O, an unauthorized one is a serious concern. `systemextensionsctl list` shows
+    /// what the user has approved.
+    private func scanSystemExtensions(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/systemextensionsctl", arguments: ["list"], timeout: 10)
+        guard result.success else { return }
+
+        // Reasonably common team IDs — pass-through so the user isn't warned about their own VPN
+        // or endpoint tools. Any team ID not in this set is surfaced for review.
+        let knownTeamIds: Set<String> = [
+            "PWA5E9TQ59",  // Objective Development (Little Snitch)
+            "VB5E2TV963",  // Lulu (Objective-See)
+            "K97H2NPKQC",  // 1Password
+            "DE8Y96K9QP",  // Docker
+            "9DLLWXU8ZQ",  // Parallels
+            "EG7KH642X6",  // VMware
+            "QED4VVPZWA",  // Microsoft
+            "UBF8T346G9",  // Microsoft AutoUpdate
+            "6HB5Y2QTA3",  // JamF
+            "GRP7GJQ5NF",  // CrowdStrike
+            "L28GYP5Y87",  // SentinelOne
+            "AY9DMEQTB6",  // Cisco Umbrella
+            "N57S25YS5A",  // Cloudflare
+            "78MK8UM2Q9",  // Tailscale
+        ]
+
+        // Sections look like "--- com.apple.system_extension.<type> ---" followed by TAB-
+        // separated rows: "*  *  TEAMID  com.example.bundle (1.0/1)  Extension Name  [activated enabled]".
+        // We do a coarse pass: any row that includes an activated ("[activated enabled]") state
+        // whose team id is unfamiliar gets surfaced.
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            let cols = line.split(separator: "\t").map { String($0).trimmingCharacters(in: .whitespaces) }
+            guard cols.count >= 4 else { continue }
+            guard line.contains("[activated enabled]") else { continue }
+
+            // Team IDs are 10-char alphanumerics; digits have no case so upper == self works.
+            let teamId = cols.first { field in
+                field.count == 10 && field.allSatisfy { $0.isLetter || $0.isNumber }
+                    && field.uppercased() == field
+            }
+            guard let team = teamId else { continue }
+            if knownTeamIds.contains(team) { continue }
+
+            // Bundle field may include a trailing " (version/build)" suffix — strip it.
+            let bundleField = cols.first(where: {
+                $0.hasPrefix("com.") || $0.hasPrefix("org.") ||
+                $0.hasPrefix("net.") || $0.hasPrefix("io.")
+            }) ?? "unknown"
+            let bundle = bundleField.split(separator: " ").first.map(String.init) ?? bundleField
+            if bundle.hasPrefix("com.apple.") { continue }
+
+            findings.append(Finding(
+                severity: .medium, category: .kernelExtension,
+                title: "System extension from unfamiliar developer active",
+                detail: "Bundle: \(bundle), Team ID: \(team) — system extensions can filter network traffic or intercept device I/O",
+                path: nil,
+                remediation: "Review in System Settings > General > Login Items & Extensions > Endpoint Security / Network. Remove if not intentional: systemextensionsctl uninstall \(team) \(bundle)"
             ))
         }
     }

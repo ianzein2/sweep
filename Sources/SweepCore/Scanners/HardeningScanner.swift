@@ -55,6 +55,15 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking Signed System Volume")
+        checkSignedSystemVolume(findings: &findings, errors: &errors)
+
+        progress?.update("checking legacy remote services")
+        checkLegacyRemoteServices(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud Advanced Data Protection")
+        checkAdvancedDataProtection(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -444,6 +453,95 @@ public final class HardeningScanner: Scanner {
                     detail: "Lockdown Mode restricts many features to defend against targeted attacks — expect some apps and websites to work differently",
                     path: nil,
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
+                ))
+            }
+        }
+    }
+
+    // MARK: - Signed System Volume
+
+    /// SSV is the cryptographic seal on the read-only system volume introduced with Big Sur.
+    /// A broken seal means the read-only system volume has been modified — a rootkit indicator.
+    /// We only alert on the unambiguous "Broken" / "Failed" states so we don't trip on macOS
+    /// versions that word the output differently, and we ignore volumes for which sealing is
+    /// not applicable ("Not appropriate for this volume").
+    private func checkSignedSystemVolume(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/sbin/diskutil",
+                                     arguments: ["apfs", "list"], timeout: 10)
+        guard result.success else { return }
+
+        for rawLine in result.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("Sealed:") else { continue }
+            let value = line.replacingOccurrences(of: "Sealed:", with: "")
+                .trimmingCharacters(in: .whitespaces)
+                .lowercased()
+            if value.hasPrefix("broken") || value.hasPrefix("failed") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Signed System Volume seal is broken",
+                    detail: "diskutil reports Sealed: \(value) — the read-only system volume has been modified (rootkit, kext bypass, or a failed OS update)",
+                    path: nil,
+                    remediation: "Reinstall macOS to restore the system volume seal. If you intentionally disabled SSV for research, ignore this."
+                ))
+                return
+            }
+        }
+    }
+
+    // MARK: - Legacy Remote Services
+
+    /// telnetd, rlogind, tftpd, and ftpd ship disabled in current macOS. If someone re-enabled
+    /// them via launchctl load they are almost never intended: each transmits credentials in
+    /// cleartext and is a documented backdoor vector.
+    private func checkLegacyRemoteServices(findings: inout [Finding], errors: inout [String]) {
+        let launchctl = ShellRunner.run("/bin/launchctl", arguments: ["list"], timeout: 5)
+        guard launchctl.success else { return }
+        let list = launchctl.stdout
+
+        let legacy: [(label: String, name: String, reason: String)] = [
+            ("com.apple.telnetd",  "telnetd",  "telnet transmits credentials in cleartext"),
+            ("com.apple.rlogind",  "rlogind",  "rlogin has no meaningful authentication"),
+            ("com.apple.rexecd",   "rexecd",   "rexecd runs arbitrary shell commands remotely"),
+            ("com.apple.rshd",     "rshd",     "rsh has no meaningful authentication"),
+            ("com.apple.tftpd",    "tftpd",    "tftpd allows unauthenticated file transfer"),
+            ("com.apple.ftpd",     "ftpd",     "ftpd transmits credentials in cleartext"),
+            ("com.apple.uucpd",    "uucpd",    "uucp is a legacy remote-copy service with weak auth"),
+        ]
+
+        for svc in legacy where list.contains(svc.label) {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Legacy remote service enabled: \(svc.name)",
+                detail: "\(svc.reason) — this service ships disabled and enabling it is often a backdoor",
+                path: nil,
+                remediation: "Disable: sudo launchctl bootout system \(svc.label); sudo launchctl disable system/\(svc.label)"
+            ))
+        }
+    }
+
+    // MARK: - iCloud Advanced Data Protection
+
+    /// Advanced Data Protection makes most iCloud data end-to-end encrypted so Apple cannot
+    /// decrypt it under legal demand. It is opt-in; we only surface its state as informational
+    /// so a user can decide whether to enable it. The bit is stored in the CloudSubscriptions
+    /// preferences; absence of the key means ADP is off.
+    private func checkAdvancedDataProtection(findings: inout [Finding], errors: inout [String]) {
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "com.apple.security.cloud", "AdvancedDataProtectionEnabled"
+        ], timeout: 5)
+
+        // Only emit a finding when we can positively determine ADP is off — otherwise we might
+        // annoy the user with a false negative just because the domain doesn't exist yet.
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "0" || value.lowercased() == "false" {
+                findings.append(Finding(
+                    severity: .low, category: .hardening,
+                    title: "iCloud Advanced Data Protection is off",
+                    detail: "Advanced Data Protection would end-to-end encrypt most iCloud categories (Photos, Notes, Backup, etc.) — with it off, Apple can decrypt them",
+                    path: nil,
+                    remediation: "Consider enabling: System Settings > (your name) > iCloud > Advanced Data Protection"
                 ))
             }
         }

@@ -70,21 +70,25 @@ sudo sweep --json
 
 | Scanner | What it does |
 |---------|-------------|
-| **Process** | Matches running processes against known spyware signatures, flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
+| **Process** | Matches running processes against known spyware signatures (incl. cryptojackers), flags unsigned binaries, enumerates loaded dylibs for injection, detects orphan processes |
 | **Permission** | Audits TCC grants (Accessibility, Screen Recording, Input Monitoring), detects stale/suspicious permissions |
-| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts |
-| **Evidence** | Looks for stored screenshots, keystroke logs, and recording artifacts on disk |
+| **Persistence** | Scans LaunchAgents, LaunchDaemons, login items, StartupItems, rc scripts, shell configs, cron jobs, login/logout hooks, periodic scripts, SSH keys, sudoers, PAM, emond, screensaver / QuickLook / Services / Preference-pane / Spotlight-importer plugin bundles, npm postinstall hooks, Xcode Run Script build phases (XCSSET vector) |
+| **Evidence** | Looks for stored screenshots, keystroke logs, screen recordings, and staged crypto-wallet / browser-credential exfil artifacts on disk |
 | **Event Tap** | Detects active keyboard/mouse event taps (how keyloggers capture input) |
 | **Device** | Checks for USB/Bluetooth monitoring hardware |
 | **Kernel** | Lists kernel extensions and system extensions, flags non-Apple entries |
 | **System Integrity** | Verifies SIP, Gatekeeper, XProtect health, Full Disk Access grants |
-| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering |
+| **Network** | Analyzes active connections, suspicious ports, /etc/hosts tampering, proxy / PAC-URL hijack |
 | **Profile** | Detects MDM enrollment and configuration profiles with surveillance payloads |
-| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions for dangerous permissions |
-| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse |
-| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates |
+| **Browser** | Audits Chrome/Brave/Edge/Firefox/Safari extensions plus VSCode/Cursor/Windsurf editor extensions for dangerous permissions and remote-exec IOCs |
+| **Deep Inspection** | Behavioral checks — root CA certificates, DNS hijacking, hidden files, ownership anomalies, DYLD environment abuse, unfamiliar Homebrew taps, unapproved System Extensions |
+| **Hardening** | CIS benchmark checks — firewall, FileVault, auto-login, screen lock, SSH, sharing services, software updates, Lockdown Mode, Rapid Security Response, Signed System Volume, legacy remote services (telnet/rsh/tftpd/ftpd), iCloud Advanced Data Protection |
 
 After all scanners run, the **Threat Correlator** cross-references findings to escalate patterns (e.g., unsigned process + persistence + network activity = HIGH threat).
+
+### Threats detected
+
+The signature database covers consumer stalkerware (Spyrix, mSpy, FlexiSpy, Hoverwatch, KidsGuard/ClevGuard, WebWatcher, TheTruthSpy, iKeyMonitor, EyeZy, Spyzie, Cocospy, pcTattletale, SpyBubble, Xnspy, and more), APT-linked macOS malware (Pegasus, DazzleSpy, CloudMensis, XCSSET, Predator, Chrysaor, Silver Sparrow, MacMa/CDDS, HZ RAT, JokerSpy, MicroBackdoor, RokRAT), the DPRK / Lazarus cluster (RustBucket, KandyKorn, ObjCShellz, SpectralBlur, SmoothOperator, NokNok, BeaverTail, InvisibleFerret, NimDoor, RustDoor/SimpleTea), 2023-2026 infostealers (AMOS, Banshee, Cthulhu, Poseidon, MetaStealer, Cuckoo, Realst, MacStealer, PureLand, Activator, FrigidStealer, ShadowVault, CherryPie, JSCEAL, PylotAgent, XLoader), long-running adware families (Bundlore, AdLoad), and cryptojackers (XMRig, LoudMiner/BirdMiner, cpuminer/T-Rex/CGMiner/ethminer).
 
 ## Security score
 

@@ -78,6 +78,15 @@ public final class PersistenceScanner: Scanner {
         progress?.update("checking emond rules")
         scanEmondRules(findings: &findings, errors: &errors)
 
+        progress?.update("checking Finder plugin bundles")
+        scanPluginBundles(findings: &findings, errors: &errors)
+
+        progress?.update("checking npm postinstall hooks")
+        scanNpmPostInstallHooks(findings: &findings, errors: &errors)
+
+        progress?.update("checking Xcode build phases")
+        scanXcodeBuildPhases(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -686,5 +695,258 @@ public final class PersistenceScanner: Scanner {
             return false
         }
         return SecStaticCodeCheckValidityWithErrors(code, SecCSFlags(rawValue: 0), nil, nil) == errSecSuccess
+    }
+
+    // MARK: - Finder / OS Plugin Bundles
+
+    /// macOS loads several classes of bundled plugin automatically on login — screensavers,
+    /// QuickLook generators, contextual menu items, System Preferences panes, and Spotlight
+    /// importers. Each of these is a documented persistence channel: dropping a signed-looking
+    /// bundle into ~/Library/<TYPE>/ makes the code run every session for that user. We list
+    /// bundles from user and system directories and flag anything that is not from Apple / a
+    /// trusted vendor path.
+    private func scanPluginBundles(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        struct PluginKind {
+            let category: String
+            let ext: String
+            let userDir: String
+            let sysDirs: [String]
+            /// Why this plugin type matters — shown in the finding detail.
+            let reason: String
+        }
+
+        let kinds: [PluginKind] = [
+            PluginKind(
+                category: "Screen Saver",
+                ext: ".saver",
+                userDir: "\(home)/Library/Screen Savers",
+                sysDirs: ["/Library/Screen Savers"],
+                reason: "screensavers run arbitrary code any time the screen locks"
+            ),
+            PluginKind(
+                category: "QuickLook plugin",
+                ext: ".qlgenerator",
+                userDir: "\(home)/Library/QuickLook",
+                sysDirs: ["/Library/QuickLook"],
+                reason: "QuickLook generators execute whenever a matching file type is previewed in Finder"
+            ),
+            PluginKind(
+                category: "Contextual menu / Automator action",
+                ext: ".workflow",
+                userDir: "\(home)/Library/Services",
+                sysDirs: ["/Library/Services"],
+                reason: "Services show up in the right-click menu and can run scripts on any selected item"
+            ),
+            PluginKind(
+                category: "Preference pane",
+                ext: ".prefPane",
+                userDir: "\(home)/Library/PreferencePanes",
+                sysDirs: ["/Library/PreferencePanes"],
+                reason: "Preference panes are bundle-loaded by System Settings and run their own code"
+            ),
+            PluginKind(
+                category: "Spotlight importer",
+                ext: ".mdimporter",
+                userDir: "\(home)/Library/Spotlight",
+                sysDirs: ["/Library/Spotlight"],
+                reason: "Spotlight importers run in-process whenever a file is indexed"
+            ),
+        ]
+
+        for kind in kinds {
+            var dirs = [kind.userDir]
+            dirs.append(contentsOf: kind.sysDirs)
+
+            for dir in dirs {
+                guard fm.fileExists(atPath: dir),
+                      let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+
+                for entry in entries where entry.hasSuffix(kind.ext) {
+                    let bundlePath = "\(dir)/\(entry)"
+
+                    // Read the plugin's Info.plist so we can attribute the bundle to a vendor.
+                    let plistPath = "\(bundlePath)/Contents/Info.plist"
+                    var bundleId = ""
+                    if let data = fm.contents(atPath: plistPath),
+                       let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                        bundleId = (plist["CFBundleIdentifier"] as? String) ?? ""
+                    }
+
+                    // Match known spyware families first — highest severity.
+                    if !bundleId.isEmpty, let sig = SpywareSignature.match(bundleId: bundleId) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Known spyware installed as \(kind.category): \(sig.name)",
+                            detail: "Bundle: \(entry), ID: \(bundleId)",
+                            path: bundlePath,
+                            remediation: "Remove: sudo rm -rf \"\(bundlePath)\""
+                        ))
+                        continue
+                    }
+
+                    // Bundle IDs impersonating Apple's namespace are a strong smell.
+                    if !bundleId.isEmpty && SpywareSignature.isFakeAppleBundleId(bundleId) {
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "\(kind.category) uses fake Apple bundle ID",
+                            detail: "Bundle: \(entry), ID: \(bundleId) — \(kind.reason)",
+                            path: bundlePath,
+                            remediation: "Remove: rm -rf \"\(bundlePath)\""
+                        ))
+                        continue
+                    }
+
+                    // Real Apple / vendor bundles ship with a valid signature. An unsigned
+                    // third-party plugin dropped into these directories is worth surfacing.
+                    // We do NOT report signed third-party plugins — legitimate ones (Aerial,
+                    // ColorSync utilities, etc.) would create too much noise.
+                    if bundleId.hasPrefix("com.apple.") { continue }
+                    let isSigned = checkIsSigned(path: bundlePath)
+                    if !isSigned {
+                        findings.append(Finding(
+                            severity: .medium, category: .persistence,
+                            title: "Unsigned \(kind.category) present",
+                            detail: "Bundle: \(entry)\(bundleId.isEmpty ? "" : ", ID: \(bundleId)") — \(kind.reason)",
+                            path: bundlePath,
+                            remediation: "Verify this is a plugin you intentionally installed"
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Node.js / npm postinstall hooks
+
+    /// Malicious npm packages (BeaverTail, contagious-interview, various supply-chain drops)
+    /// achieve execution via `postinstall` / `preinstall` / `install` scripts. We look at
+    /// package.json files under the user's global npm prefix and yarn cache for scripts that
+    /// exhibit remote-code-execution patterns.
+    private func scanNpmPostInstallHooks(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // The most common globally-installed roots on macOS.
+        let roots: [String] = [
+            "/usr/local/lib/node_modules",
+            "/opt/homebrew/lib/node_modules",
+            "\(home)/.npm-global/lib/node_modules",
+            "\(home)/.nvm/versions",     // one level deeper — we recurse
+            "\(home)/.volta/tools/image/node",
+        ]
+
+        // High-confidence patterns pulled from real supply-chain incident writeups. We
+        // deliberately skip broader patterns like `child_process` and `Buffer.from` —
+        // legitimate packages (node-gyp helpers, etc.) use those in install scripts too, and
+        // the noise would drown out the real signals.
+        let iocs: [(pattern: String, reason: String)] = [
+            ("curl ", "postinstall downloads a payload with curl"),
+            ("wget ", "postinstall downloads a payload with wget"),
+            ("| bash", "postinstall pipes fetched content into a shell"),
+            ("| sh", "postinstall pipes fetched content into a shell"),
+            ("api.telegram.org", "postinstall exfiltrates via Telegram bot API"),
+            ("discordapp.com/api/webhooks", "postinstall exfiltrates via Discord webhook"),
+            ("discord.com/api/webhooks", "postinstall exfiltrates via Discord webhook"),
+        ]
+
+        func inspect(packageJsonPath: String) {
+            guard let data = fm.contents(atPath: packageJsonPath),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            guard let scripts = json["scripts"] as? [String: Any] else { return }
+
+            let hookNames: Set<String> = ["preinstall", "install", "postinstall"]
+            for (hook, valueAny) in scripts where hookNames.contains(hook) {
+                guard let value = valueAny as? String else { continue }
+                let lower = value.lowercased()
+
+                for ioc in iocs {
+                    if lower.contains(ioc.pattern.lowercased()) {
+                        let pkgName = (json["name"] as? String) ?? URL(fileURLWithPath: packageJsonPath)
+                            .deletingLastPathComponent().lastPathComponent
+                        findings.append(Finding(
+                            severity: .high, category: .persistence,
+                            title: "Suspicious npm \(hook) script in '\(pkgName)'",
+                            detail: "\(ioc.reason) — script: \(String(value.prefix(160)))",
+                            path: packageJsonPath,
+                            remediation: "Inspect the package and uninstall if not intentional: npm uninstall -g \(pkgName)"
+                        ))
+                        return
+                    }
+                }
+            }
+        }
+
+        for root in roots {
+            guard fm.fileExists(atPath: root) else { continue }
+            // Only walk 3 levels deep — enough for @scope/pkg + nvm's version dir layout.
+            guard let enumerator = fm.enumerator(
+                at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 5 { enumerator.skipDescendants(); continue }
+                if url.lastPathComponent == "package.json" {
+                    inspect(packageJsonPath: url.path)
+                }
+            }
+        }
+    }
+
+    // MARK: - Xcode build phases (XCSSET vector)
+
+    /// XCSSET-family malware persists by injecting a custom Run Script build phase into every
+    /// Xcode project on the machine. The .pbxproj text file contains readable script bodies —
+    /// grepping for the classic curl-and-exec pattern catches unmodified variants.
+    private func scanXcodeBuildPhases(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let fm = FileManager.default
+
+        // Common project roots — recent Xcode users tend to keep projects in ~/Developer,
+        // ~/Documents, or ~/Projects. We cap traversal depth so this stays fast.
+        let searchRoots = [
+            "\(home)/Developer",
+            "\(home)/Documents",
+            "\(home)/Projects",
+            "\(home)/src",
+        ]
+
+        for root in searchRoots {
+            guard fm.fileExists(atPath: root),
+                  let enumerator = fm.enumerator(
+                    at: URL(fileURLWithPath: root),
+                    includingPropertiesForKeys: [.isRegularFileKey],
+                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
+                  ) else { continue }
+
+            for case let url as URL in enumerator {
+                if enumerator.level > 4 { enumerator.skipDescendants(); continue }
+                guard url.lastPathComponent == "project.pbxproj" else { continue }
+
+                // pbxproj files can be a few hundred KB — cheap enough to grep in memory.
+                guard let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                let lower = content.lowercased()
+
+                // The XCSSET dropper joins the Run Script phase with a curl-and-execute one-liner
+                // that fetches a stage-two AppleScript / Bash payload.
+                let hasRemoteFetch = (lower.contains("curl ") || lower.contains("wget ")) &&
+                                     (lower.contains("| bash") || lower.contains("| sh") ||
+                                      lower.contains("| osascript") || lower.contains("| python"))
+
+                if hasRemoteFetch {
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "Xcode project contains suspicious Run Script build phase",
+                        detail: "project.pbxproj executes remotely-fetched code at build time — the XCSSET malware family uses this exact vector",
+                        path: url.path,
+                        remediation: "Open the project in Xcode, inspect Build Phases → Run Script for a fetch-and-exec entry, and remove it"
+                    ))
+                }
+            }
+        }
     }
 }
