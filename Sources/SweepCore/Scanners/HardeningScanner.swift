@@ -55,6 +55,24 @@ public final class HardeningScanner: Scanner {
         progress?.update("checking Rapid Security Response")
         checkRapidSecurityResponse(findings: &findings, errors: &errors)
 
+        progress?.update("checking guest access to shared folders")
+        checkGuestSharedAccess(findings: &findings, errors: &errors)
+
+        progress?.update("checking Gatekeeper AssessmentsDisabled")
+        checkGatekeeperState(findings: &findings, errors: &errors)
+
+        progress?.update("checking Bluetooth on-battery state")
+        checkBluetoothPowerState(findings: &findings, errors: &errors)
+
+        progress?.update("checking iCloud two-factor authentication")
+        checkiCloudTwoFactor(findings: &findings, errors: &errors)
+
+        progress?.update("checking XProtect / MRT database currency")
+        checkAntimalwareDatabaseAge(findings: &findings, errors: &errors)
+
+        progress?.update("checking login keychain auto-unlock")
+        checkLoginKeychainAutoUnlock(findings: &findings, errors: &errors)
+
         return ScanResult(
             scannerName: name,
             findings: findings,
@@ -446,6 +464,220 @@ public final class HardeningScanner: Scanner {
                     remediation: "No action needed. Disable only if you no longer need maximum protection."
                 ))
             }
+        }
+    }
+
+    // MARK: - Guest access to shared folders
+
+    private func checkGuestSharedAccess(findings: inout [Finding], errors: inout [String]) {
+        // Even with the Guest login account disabled, guests can still mount shared folders
+        // over SMB/AFP if the "Allow guests to connect to shared folders" preference is on.
+        // The corresponding key is AllowGuestBrowsingForSharing in com.apple.smb.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.AppleFileServer", "guestAccess"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "Guest access to file sharing is enabled",
+                    detail: "Guests can mount your shared folders without credentials",
+                    path: nil,
+                    remediation: "Disable: sudo defaults write /Library/Preferences/com.apple.AppleFileServer guestAccess -bool false"
+                ))
+            }
+        }
+
+        // The SMB path — separately configured
+        let smbResult = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/SystemConfiguration/com.apple.smb.server", "AllowGuestAccess"
+        ], timeout: 5)
+        if smbResult.success {
+            let value = smbResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                findings.append(Finding(
+                    severity: .medium, category: .hardening,
+                    title: "SMB guest access is enabled",
+                    detail: "Unauthenticated users on the LAN can browse shared folders via SMB",
+                    path: nil,
+                    remediation: "Disable: sudo defaults write /Library/Preferences/SystemConfiguration/com.apple.smb.server AllowGuestAccess -bool false"
+                ))
+            }
+        }
+    }
+
+    // MARK: - Gatekeeper
+
+    private func checkGatekeeperState(findings: inout [Finding], errors: inout [String]) {
+        // Gatekeeper being fully disabled (spctl --status: assessments disabled) lets any unsigned
+        // app run without prompting the user. `spctl --master-disable` is a common step in stealer
+        // install scripts because it silences the warning that would otherwise expose the campaign.
+        let result = ShellRunner.run("/usr/sbin/spctl", arguments: ["--status"], timeout: 5)
+        if result.success {
+            let out = result.stdout.lowercased()
+            if out.contains("assessments disabled") {
+                findings.append(Finding(
+                    severity: .high, category: .hardening,
+                    title: "Gatekeeper assessments are disabled",
+                    detail: "spctl reports assessments disabled — the OS won't block or warn about unsigned apps at first launch",
+                    path: nil,
+                    remediation: "Re-enable: sudo spctl --master-enable"
+                ))
+            }
+        }
+
+        // Gatekeeper "Anywhere" is enabled if `GKAutoRearm` is off — same effect
+        let rearm = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.security", "GKAutoRearm"
+        ], timeout: 5)
+        if rearm.success && rearm.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "0" {
+            findings.append(Finding(
+                severity: .medium, category: .hardening,
+                title: "Gatekeeper auto-rearm is disabled",
+                detail: "A user-initiated Gatekeeper bypass will remain in effect until manually reset",
+                path: nil,
+                remediation: "Re-enable: sudo defaults write /Library/Preferences/com.apple.security GKAutoRearm -bool true"
+            ))
+        }
+    }
+
+    // MARK: - Bluetooth
+
+    private func checkBluetoothPowerState(findings: inout [Finding], errors: inout [String]) {
+        // Public 2024 disclosures on unauthenticated Bluetooth exploits (BLURtooth,
+        // BLESA, and various AirPlay/Bluetooth chip issues) mean Bluetooth-when-idle is
+        // an unnecessary attack surface. We report the state so the user can decide.
+        let result = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "/Library/Preferences/com.apple.Bluetooth", "ControllerPowerState"
+        ], timeout: 5)
+        if result.success {
+            let value = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value == "1" {
+                // We do NOT flag Bluetooth-on as a finding for most users — Mice, keyboards,
+                // AirPods all need it. Only note if paired-devices count is zero.
+                let devices = ShellRunner.run("/usr/sbin/system_profiler",
+                                              arguments: ["SPBluetoothDataType"], timeout: 8)
+                if devices.success && !devices.stdout.lowercased().contains("connected: yes") &&
+                   !devices.stdout.lowercased().contains("paired") {
+                    findings.append(Finding(
+                        severity: .low, category: .hardening,
+                        title: "Bluetooth is on but no paired devices",
+                        detail: "Bluetooth is powered on with no paired devices — leaves the radio open to nearby scans/exploits",
+                        path: nil,
+                        remediation: "Turn off Bluetooth from Control Center or System Settings when not in use"
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - iCloud Two-Factor Authentication (informational)
+
+    private func checkiCloudTwoFactor(findings: inout [Finding], errors: inout [String]) {
+        // We can't read the actual iCloud 2FA state without private APIs, but we can check
+        // that `MobileMeAccounts` in the user's home has an entry — and warn if the account
+        // exists without 2FA-related trust tokens visible on disk. This is a "please review"
+        // informational finding — not a hard error.
+        let home = ShellRunner.realUserHome
+        let mobileMePlist = "\(home)/Library/Preferences/MobileMeAccounts.plist"
+        guard FileManager.default.fileExists(atPath: mobileMePlist),
+              let data = FileManager.default.contents(atPath: mobileMePlist),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let accounts = plist["Accounts"] as? [[String: Any]], !accounts.isEmpty
+        else { return }
+
+        // Look for the "AuthKitVersion" / "trusted" markers that appear when 2FA is on
+        let has2FAMarker = accounts.contains { acct in
+            acct["AuthKitContext"] != nil || acct["AuthCredential"] != nil ||
+            (acct["AlternateDSID"] as? String) != nil
+        }
+        if !has2FAMarker {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "iCloud account may lack two-factor authentication",
+                detail: "MobileMeAccounts.plist contains an iCloud account but does not carry the two-factor trust markers usually present",
+                path: mobileMePlist,
+                remediation: "Verify 2FA is enabled: System Settings > [your name] > Password & Security > Two-Factor Authentication"
+            ))
+        }
+    }
+
+    // MARK: - XProtect / MRT freshness
+
+    private func checkAntimalwareDatabaseAge(findings: inout [Finding], errors: inout [String]) {
+        // Apple ships silent XProtect and MRT (Malware Removal Tool) updates as data bundles.
+        // A stale database means missed detections of active 2024-2025 families that Apple
+        // has already added signatures for. Flag if the newest known plist is more than 60 days old.
+        let candidates = [
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist",
+            "/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Info.plist",
+            "/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist",
+        ]
+        let fm = FileManager.default
+        var newestDate: Date?
+        var newestPath: String?
+        for path in candidates {
+            guard fm.fileExists(atPath: path),
+                  let attrs = try? fm.attributesOfItem(atPath: path),
+                  let mod = attrs[.modificationDate] as? Date
+            else { continue }
+            if newestDate == nil || mod > newestDate! {
+                newestDate = mod
+                newestPath = path
+            }
+        }
+        guard let modDate = newestDate else { return }
+        let ageDays = Int(Date().timeIntervalSince(modDate) / 86400)
+        if ageDays > 60 {
+            findings.append(Finding(
+                severity: ageDays > 180 ? .high : .medium,
+                category: .hardening,
+                title: "XProtect signatures appear stale (\(ageDays) days old)",
+                detail: "Newest XProtect plist last modified \(ageDays) days ago — Apple ships silent updates weekly, so a >60-day gap suggests the update pipeline is broken",
+                path: newestPath,
+                remediation: "Force update: sudo softwareupdate --background-critical, then reboot. Check System Settings > General > Software Update."
+            ))
+        }
+    }
+
+    // MARK: - Login keychain state
+
+    /// Ensures the login keychain is not configured to auto-unlock without a password:
+    /// LoginwindowPluginDetails / AutoUnlock=true would silently release credentials
+    /// to any process after login.
+    private func checkLoginKeychainAutoUnlock(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        // "security list-keychains" is the safest read here — no keychain contents leak.
+        let listResult = ShellRunner.run("/usr/bin/security", arguments: ["list-keychains"], timeout: 5)
+        guard listResult.success else { return }
+
+        let loginKeychain = listResult.stdout.contains("login.keychain")
+        let hasNoKeychain = listResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        // Check if the login keychain password is configured to auto-unlock via defaults.
+        // The key of interest is `AutoLogin` on com.apple.keychainaccess (unlocked-at-login).
+        let autoUnlock = ShellRunner.run("/usr/bin/defaults", arguments: [
+            "read", "\(home)/Library/Preferences/com.apple.keychainaccess", "AutoUnlock"
+        ], timeout: 5)
+        if autoUnlock.success && autoUnlock.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "1" {
+            findings.append(Finding(
+                severity: .high, category: .hardening,
+                title: "Login keychain is set to auto-unlock",
+                detail: "com.apple.keychainaccess AutoUnlock is enabled — credentials are released without a password prompt",
+                path: nil,
+                remediation: "Disable: defaults write com.apple.keychainaccess AutoUnlock -bool false, then re-lock the login keychain"
+            ))
+        }
+
+        if hasNoKeychain || !loginKeychain {
+            findings.append(Finding(
+                severity: .low, category: .hardening,
+                title: "Login keychain is missing from search list",
+                detail: "`security list-keychains` did not include login.keychain — a missing login keychain is a rare and confusing state, sometimes caused by keychain-clearing malware",
+                path: nil,
+                remediation: "Restore: /Applications/Utilities/Keychain Access.app > Keychain Access menu > Preferences > Reset Default Keychain"
+            ))
         }
     }
 

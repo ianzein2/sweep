@@ -11,10 +11,41 @@ public final class BrowserScanner: Scanner {
         "crypto-wallet-stealer", "solidity-debugger-plus", "prettier-vscode-plus",
         "ethers-vscode-helper", "web3-helpers", "solana-wallet-helper",
         "discord-token-grabber", "chrome-cookie-stealer", "browser-data-sync",
+        // Chainguard/Datadog/ReversingLabs reporting on 2024-2025 supply-chain trojans in VSCode
+        // and Cursor marketplaces (impersonating popular themes and formatters).
+        "material-theme-icons-pro", "prettier-vscode-official",
+        "solidity-language-support", "python-language-extended",
+        "typescript-language-pro", "eth-solidity-vscode",
+        "chatgpt-vscode-extension", "docker-vscode-tools",
+        "rust-analyzer-official", "prettier-plus-formatter",
     ]
 
     private let dangerousEditorExtPatterns: [String] = [
         "keylog", "stealer", "grabber", "exfil", "payload", "reverse-shell",
+        // Additional runtime indicators seen in 2024-2025 macOS-targeting extensions
+        "wallet-drain", "seed-phrase", "clipboard-hijack", "cookie-dump",
+    ]
+
+    /// Browser extension IDs known to have been compromised or malicious as of the Dec 2024
+    /// browser-extension mass-compromise wave (Cyberhaven and 30+ others) and follow-on
+    /// reporting through 2025. If any of these are still installed, the extension likely
+    /// pushed a stealer/credential-exfiltration update between Dec 24 2024 and Jan 2025.
+    private let knownCompromisedBrowserExtIds: [String: String] = [
+        // Cyberhaven — the anchor incident
+        "pajkjnmeojmbapicmbpliphjmcekeaac": "Cyberhaven (Dec 2024 compromise)",
+        // Additional extensions confirmed by Secure Annex / Sekoia as part of the same wave
+        "nnpnnpemnckcfdebeekibpiijlicmpom": "Reader Mode (Dec 2024 compromise wave)",
+        "obcbigljfpgjjjfnbfjdgnodapcgojef": "Rewards Search Automator (Dec 2024 compromise wave)",
+        "acmfnomgphggonodopogfbmkneepfgnh": "Search Copilot AI (Dec 2024 compromise wave)",
+        "bbdnohkpnbkdkmnkddobeafboooinpla": "VPNCity (Dec 2024 compromise wave)",
+        "mnhffkhmpnefgklngfmlndmkimimbphc": "Internxt VPN (Dec 2024 compromise wave)",
+        "hmiaoahjllhfgebflooeeefeiafpkfde": "Vindoz Flex Video Recorder (Dec 2024 compromise wave)",
+        "eanofdhdfbcalhflpbdipkjjkoimeeod": "Bookmark Favicon Changer (Dec 2024 compromise wave)",
+        "fbmlcbhdmilaggedifpihjbdbojceonn": "Uvoice (Dec 2024 compromise wave)",
+        "acbiaofoeebeinacmcknopaikmecdehl": "Wayin AI (Dec 2024 compromise wave)",
+        "oaikpkmjciadfpddlpjjdapglcihgdle": "AI Assistant - ChatGPT and Gemini for Chrome (2024 compromise wave)",
+        // The 2024 Screencastify / Loom-imposter families
+        "cifafogcmckphmnbeipgkpfbjphmajbc": "Malicious Screencastify clone (2024)",
     ]
 
     // Extensions that are well-known and safe
@@ -143,6 +174,19 @@ public final class BrowserScanner: Scanner {
 
                 for extId in extensions {
                     if trustedExtensionIds.contains(extId) { continue }
+
+                    // Known-compromised extension IDs — 2024/2025 mass-compromise wave.
+                    // Emit immediately so users can uninstall without waiting for the perms check.
+                    if let campaign = knownCompromisedBrowserExtIds[extId] {
+                        findings.append(Finding(
+                            severity: .high, category: .suspiciousFile,
+                            title: "\(browserName) extension is known-compromised",
+                            detail: "Extension ID \(extId) — matched \"\(campaign)\". The extension pushed a malicious update via a stolen developer account and may have exfiltrated cookies, session tokens, or credentials.",
+                            path: "\(extPath)/\(extId)",
+                            remediation: "Remove immediately at \(browserName == "Chrome" ? "chrome" : browserName.lowercased())://extensions. Then rotate passwords and revoke session tokens for any site you signed into recently."
+                        ))
+                        continue
+                    }
 
                     let dedupeKey = "\(browserName):\(extId)"
 

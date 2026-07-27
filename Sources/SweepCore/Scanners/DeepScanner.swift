@@ -29,13 +29,23 @@ public final class DeepScanner: Scanner {
         progress?.update("scanning for hidden files")
         scanHiddenAttributes(findings: &findings, errors: &errors)
 
-        // 4. Check for root-owned files in user home
+        // 4. Check for RustyAttr-style payloads (Lazarus 2024) hiding executable payloads
+        //    inside custom extended attributes on innocuous-looking bundles.
+        progress?.update("checking for xattr-embedded payloads")
+        scanXattrPayloads(findings: &findings, errors: &errors)
+
+        // 5. Check for root-owned files in user home
         progress?.update("checking file ownership anomalies")
         scanOwnershipAnomalies(findings: &findings, errors: &errors)
 
-        // 5. Check for suspicious environment variables in processes
+        // 6. Check for suspicious environment variables in processes
         progress?.update("checking process environments")
         scanProcessEnvironments(findings: &findings, errors: &errors)
+
+        // 7. Check for launchd-persistent scripts pointing at world-writable locations —
+        //    a technique used by post-2024 macOS stealers to survive on user-writable disks.
+        progress?.update("checking user-writable persistence targets")
+        scanWorldWritablePersistence(findings: &findings, errors: &errors)
 
         return ScanResult(
             scannerName: name,
@@ -233,6 +243,139 @@ public final class DeepScanner: Scanner {
                             ))
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: - RustyAttr-Style Xattr Payloads
+
+    /// Lazarus's RustyAttr (Group-IB, Nov 2024) planted the malicious payload into a custom
+    /// extended attribute — "test" — that a small dropper then read out and executed. The
+    /// technique is broadly copied by post-2024 dropper campaigns because xattrs are invisible
+    /// in Finder and survive many archive/copy operations.
+    ///
+    /// We flag any file that carries:
+    ///   * A large (>4KB) non-Apple xattr — legit non-Apple xattrs are almost always small.
+    ///   * A known-abused xattr name (`test`, `payload`, `stage2`, `data`, `com.rusty.attr`).
+    ///
+    /// We stay out of directories owned by well-known apps to avoid noise.
+    private func scanXattrPayloads(findings: inout [Finding], errors: inout [String]) {
+        let home = ShellRunner.realUserHome
+        let dirsToScan = [
+            "\(home)/Downloads",
+            "\(home)/Desktop",
+            "\(home)/Documents",
+            "/private/tmp",
+            "/private/var/tmp",
+            "/Users/Shared",
+        ]
+
+        let suspiciousNames: Set<String> = [
+            "test", "payload", "stage2", "data", "loader",
+            "com.rusty.attr", "com.stealth.data", "user.payload",
+        ]
+
+        // xattr -lx gives hex-dumped attributes with size info; we parse per-file with `xattr -l`
+        // and check size via `xattr -p <name> <file>` only when a hit occurs.
+        for dir in dirsToScan {
+            guard FileManager.default.fileExists(atPath: dir) else { continue }
+            let result = ShellRunner.run("/usr/bin/xattr", arguments: ["-lr", dir], timeout: 15)
+            guard result.success else { continue }
+
+            // Parse output: lines are formatted "<path>: <attr>:" followed by hex-dump lines.
+            // We only need lines starting with a path (they end in a colon-attr).
+            var currentFile = ""
+            var currentAttr = ""
+            var attrByteCount = 0
+
+            let flush = { (findings: inout [Finding]) in
+                guard !currentFile.isEmpty, !currentAttr.isEmpty else { return }
+                let isKnownName = suspiciousNames.contains(currentAttr.lowercased())
+                let isLarge = attrByteCount > 4096
+                let isApple = currentAttr.hasPrefix("com.apple.")
+                if isKnownName || (isLarge && !isApple) {
+                    findings.append(Finding(
+                        severity: .high, category: .suspiciousFile,
+                        title: "File carries payload-sized extended attribute",
+                        detail: "Attribute \"\(currentAttr)\"" +
+                            (attrByteCount > 0 ? " ~\(attrByteCount) bytes" : "") +
+                            " — used by RustyAttr and similar droppers to hide stage-2 payloads",
+                        path: currentFile,
+                        remediation: "Inspect: xattr -p \"\(currentAttr)\" \"\(currentFile)\" — remove if not expected: xattr -d \"\(currentAttr)\" \"\(currentFile)\""
+                    ))
+                }
+            }
+
+            for line in result.stdout.split(separator: "\n", omittingEmptySubsequences: false) {
+                let raw = String(line)
+
+                // Header line: "<path>: <attr>:"
+                if let range = raw.range(of: ": ", options: .backwards),
+                   raw.hasSuffix(":") {
+                    // flush previous
+                    flush(&findings)
+                    currentFile = String(raw[..<range.lowerBound])
+                    currentAttr = String(raw[range.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    attrByteCount = 0
+                    continue
+                }
+
+                // Hex dump line format: "00000000  ...16 hex bytes...  |ascii|"
+                // Each such line represents 16 bytes; count them.
+                let trimmed = raw.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty && trimmed.first?.isHexDigit == true {
+                    // Rough byte-count estimate: each line ≈ 16 bytes
+                    attrByteCount += 16
+                }
+            }
+            flush(&findings)
+        }
+    }
+
+    // MARK: - World-Writable Persistence Targets
+
+    /// Multiple 2024-2025 stealers persist via a plist that runs a shell script placed in a
+    /// world-writable location (`/tmp`, `/Users/Shared`, `/private/var/tmp`). Any launchd item
+    /// executing from such a location is high-risk: any other local process can trivially
+    /// overwrite it, and it survives on a per-user disk without root.
+    private func scanWorldWritablePersistence(findings: inout [Finding], errors: inout [String]) {
+        let launchDirs = [
+            "\(ShellRunner.realUserHome)/Library/LaunchAgents",
+            "/Library/LaunchAgents",
+            "/Library/LaunchDaemons",
+        ]
+        let worldWritablePrefixes = [
+            "/tmp/", "/private/tmp/", "/var/tmp/", "/private/var/tmp/",
+            "/Users/Shared/", "/private/var/db/", "/private/var/folders/",
+        ]
+
+        let fm = FileManager.default
+        for dir in launchDirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for name in contents where name.hasSuffix(".plist") {
+                let plistPath = "\(dir)/\(name)"
+                guard let data = fm.contents(atPath: plistPath),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+                else { continue }
+
+                var executable: String?
+                if let program = plist["Program"] as? String {
+                    executable = program
+                } else if let args = plist["ProgramArguments"] as? [String], let first = args.first {
+                    executable = first
+                }
+                guard let exec = executable else { continue }
+
+                if worldWritablePrefixes.contains(where: { exec.hasPrefix($0) }) {
+                    let label = (plist["Label"] as? String) ?? name
+                    findings.append(Finding(
+                        severity: .high, category: .persistence,
+                        title: "LaunchAgent runs from world-writable location",
+                        detail: "Label: \(label) → \(exec) — any local user can replace this binary between launches",
+                        path: plistPath,
+                        remediation: "Remove: sudo rm \"\(plistPath)\" — then investigate what installed it"
+                    ))
                 }
             }
         }

@@ -105,6 +105,63 @@ public final class PersistenceScanner: Scanner {
             executablePath = first
         }
 
+        // Inline shell-loader detection — 2024-2025 stealer campaigns commonly persist by
+        // registering `/bin/sh -c "curl ... | sh"` or `/usr/bin/osascript -e "do shell script ..."`.
+        // These require no on-disk binary and evade signature checks entirely.
+        if let args = plist["ProgramArguments"] as? [String], args.count >= 2 {
+            let joined = args.joined(separator: " ").lowercased()
+            let loaderPatterns: [(String, String)] = [
+                ("curl ", "downloads and executes remote code"),
+                ("wget ", "downloads and executes remote code"),
+                ("| sh", "pipes downloaded content into a shell"),
+                ("| bash", "pipes downloaded content into a shell"),
+                ("| /bin/sh", "pipes downloaded content into a shell"),
+                ("do shell script", "runs osascript-triggered shell command"),
+                ("base64 -d", "decodes a base64-encoded payload"),
+                ("base64 --decode", "decodes a base64-encoded payload"),
+                ("python -c", "runs an inline Python script"),
+                ("python3 -c", "runs an inline Python script"),
+                ("osascript -e", "runs an inline AppleScript"),
+                ("nohup ", "detaches a persistent background process"),
+            ]
+            for (pattern, why) in loaderPatterns {
+                if joined.contains(pattern) {
+                    findings.append(Finding(
+                        severity: .high,
+                        category: .persistence,
+                        title: "LaunchAgent runs inline shell loader",
+                        detail: "Label: \(label) — \(why): \(String(joined.prefix(140)))",
+                        path: path,
+                        remediation: "Inspect: cat \"\(path)\" — remove if not expected: sudo rm \"\(path)\""
+                    ))
+                    return
+                }
+            }
+        }
+
+        // WatchPaths / StartOnMount / QueueDirectories are event-driven persistence triggers.
+        // Malicious plists use these to run on Keychain access, browser writes, or USB mounts.
+        // We flag any non-Apple plist that uses them and points at a non-trusted binary — legitimate
+        // apps rarely need these, and when they do, they use system paths.
+        let hasWatchPaths = (plist["WatchPaths"] as? [String])?.isEmpty == false
+        let hasStartOnMount = (plist["StartOnMount"] as? Bool) == true
+        let hasQueueDirectories = (plist["QueueDirectories"] as? [String])?.isEmpty == false
+        if (hasWatchPaths || hasStartOnMount || hasQueueDirectories) && !label.hasPrefix("com.apple.") {
+            let trigger = hasWatchPaths ? "WatchPaths" :
+                          hasStartOnMount ? "StartOnMount" : "QueueDirectories"
+            let watchedList = (plist["WatchPaths"] as? [String]) ?? (plist["QueueDirectories"] as? [String]) ?? []
+            let watchedSummary = watchedList.prefix(3).joined(separator: ", ")
+            findings.append(Finding(
+                severity: .medium,
+                category: .persistence,
+                title: "Event-driven persistence trigger (\(trigger))",
+                detail: "Label: \(label)" + (watchedSummary.isEmpty ? "" : " watching \(watchedSummary)") +
+                    " — event-triggered persistence is uncommon in legitimate apps and used by stalkerware to react to Keychain/browser access",
+                path: path,
+                remediation: "Verify this plist belongs to a legitimate app: cat \"\(path)\""
+            ))
+        }
+
         // Check against known spyware labels
         if let sig = SpywareSignature.match(label: label) {
             findings.append(Finding(
